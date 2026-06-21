@@ -1,0 +1,45 @@
+# Seed configuration for Home Assistant.
+#
+# These files are copied into the ha-config PVC by an initContainer ONLY if they do
+# not already exist (see the Deployment). After first boot, HA owns these files on the
+# PVC and edits via the UI / file editor persist normally — re-applying this ConfigMap
+# will not clobber them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: home-assistant-seed
+data:
+  configuration.yaml: |
+    # Loads default integrations (frontend, history, config, etc.)
+    default_config:
+
+    http:
+      # Ready for a future reverse proxy / Tailscale Serve in front of HA.
+      # Harmless with the direct NodePort path used in V1.
+      use_x_forwarded_for: true
+      trusted_proxies:
+        - 127.0.0.1
+        - ::1
+        - 100.64.0.0/10   # Tailscale CGNAT range
+
+    # Recorder history stored in the in-cluster MariaDB (not SQLite-on-NFS).
+    # The db_url (with password) is injected via secrets.yaml by the initContainer.
+    recorder:
+      db_url: !secret recorder_db_url
+      purge_keep_days: 30
+      commit_interval: 5
+
+    # Modular config splits so automations/scripts/scenes can grow independently
+    # (WLED, Zigbee, Plex, presence/auto-lock all slot in here later).
+    automation: !include automations.yaml
+    script: !include scripts.yaml
+    scene: !include scenes.yaml
+
+  automations.yaml: |
+    []
+
+  scripts.yaml: |
+    {}
+
+  scenes.yaml: |
+    []

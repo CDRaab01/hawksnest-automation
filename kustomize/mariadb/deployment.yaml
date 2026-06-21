@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb
+  labels:
+    app: mariadb
+spec:
+  replicas: 1
+  # Recreate (not RollingUpdate): a single RWO datadir cannot be mounted by two pods.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mariadb
+  template:
+    metadata:
+      labels:
+        app: mariadb
+    spec:
+      containers:
+        - name: mariadb
+          image: mariadb:11
+          args:
+            - --transaction-isolation=READ-COMMITTED
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_unicode_ci
+          envFrom:
+            - secretRef:
+                name: mariadb-credentials
+          ports:
+            - name: mysql
+              containerPort: 3306
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "healthcheck.sh --connect --innodb_initialized"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "healthcheck.sh --connect --innodb_initialized"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mariadb-data

@@ -1,0 +1,60 @@
+# PersistentVolumeClaims.
+#
+# ha-config and zwavejs-config bind to the NFS PVs above (these are the TWO PVCs that
+# MUST be backed up). mosquitto-data also lives on NFS.
+#
+# mariadb-data deliberately uses K3s' node-local `local-path` StorageClass, NOT NFS:
+# a database server's datadir over NFS reintroduces the same file-locking risk we are
+# avoiding by moving off SQLite. Recorder history is regenerable and intentionally not
+# stored on the NAS.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ha-config
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs-manual
+  volumeName: ha-config
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zwavejs-config
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs-manual
+  volumeName: zwavejs-config
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mosquitto-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs-manual
+  volumeName: mosquitto-data
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mariadb-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi

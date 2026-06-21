@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: home-automation
+
+resources:
+  - namespace.yaml
+  - storage/nfs-pv.yaml
+  - storage/pvcs.yaml
+  - mariadb/deployment.yaml
+  - mariadb/service.yaml
+  - mosquitto/configmap.yaml
+  - mosquitto/deployment.yaml
+  - mosquitto/service.yaml
+  - zwave-js-ui/deployment.yaml
+  - zwave-js-ui/service.yaml
+  - home-assistant/configmap.yaml
+  - home-assistant/deployment.yaml
+  - home-assistant/service.yaml
+
+# Credentials are generated from local, untracked files (see secrets/*.example).
+# Copy the .example files, fill them in, then `kubectl apply -k kustomize/`.
+secretGenerator:
+  - name: mariadb-credentials
+    envs:
+      - ../secrets/mariadb.env
+  - name: mosquitto-credentials
+    files:
+      - passwd=../secrets/mosquitto.passwd
+
+# Stable Secret names so Deployments can reference them directly. The trade-off is
+# that editing a secret does NOT trigger an automatic rollout — restart the pod
+# (e.g. `kubectl rollout restart deploy/<name> -n home-automation`) after changes.
+generatorOptions:
+  disableNameSuffixHash: true

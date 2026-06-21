@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zwave-js-ui
+  labels:
+    app: zwave-js-ui
+spec:
+  replicas: 1
+  # Recreate: only one pod may own the serial device, and the store PVC is RWO.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: zwave-js-ui
+  template:
+    metadata:
+      labels:
+        app: zwave-js-ui
+    spec:
+      containers:
+        - name: zwave-js-ui
+          image: zwavejs/zwave-js-ui:latest
+          ports:
+            - name: ws
+              containerPort: 3000   # Z-Wave JS websocket — HA connects here
+            - name: ui
+              containerPort: 8091   # Control panel UI
+          securityContext:
+            # The ZWA-2 is a raw serial device; privileged is the simplest reliable
+            # way to give the container access to it inside K3s-in-WSL2. A narrower
+            # device cgroup rule is possible but more fragile across replug — we
+            # deliberately choose privileged and document it.
+            privileged: true
+          env:
+            - name: TZ
+              value: "America/New_York"   # adjust if needed
+          volumeMounts:
+            - name: store
+              mountPath: /usr/src/app/store
+            - name: zwave-device
+              # Point Z-Wave JS UI's serial port setting at this path: /dev/zwave
+              mountPath: /dev/zwave
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: store
+          persistentVolumeClaim:
+            claimName: zwavejs-config
+        - name: zwave-device
+          hostPath:
+            # REPLACE with the actual by-id path of the ZWA-2 inside WSL2.
+            # Find it with: ls -l /dev/serial/by-id/
+            # The ZWA-2 typically enumerates as a *-if00 ACM device.
+            # `type` is intentionally left unset so kubelet does not reject the
+            # by-id symlink. If the pod fails to see the device, substitute the
+            # resolved node (e.g. /dev/ttyACM0) here — but prefer by-id (stable).
+            path: /dev/serial/by-id/REPLACE-usb-Nabu_Casa_Home_Assistant_Connect_ZWA-2_XXXXXXXX-if00

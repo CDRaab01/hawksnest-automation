@@ -1,0 +1,74 @@
+# Static NFS PersistentVolumes backed by the Synology DS214.
+#
+# REPLACE the two placeholders in each PV before applying:
+#   spec.nfs.server  -> the NAS IP or hostname (e.g. 192.168.1.10)
+#   spec.nfs.path    -> the exported share path (e.g. /volume1/home-automation/<name>)
+#
+# These use a dedicated `nfs-manual` StorageClass that disables dynamic provisioning;
+# each PVC binds to its PV by `volumeName`. ReclaimPolicy is Retain so deleting a PVC
+# never deletes data on the NAS.
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nfs-manual
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: Immediate
+reclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ha-config
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-manual
+  mountOptions:
+    - nfsvers=4.1
+    - hard
+    - noatime
+  nfs:
+    server: REPLACE_NAS_IP           # e.g. 192.168.1.10
+    path: /volume1/REPLACE/ha-config # e.g. /volume1/home-automation/ha-config
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: zwavejs-config
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-manual
+  mountOptions:
+    - nfsvers=4.1
+    - hard
+    - noatime
+  nfs:
+    server: REPLACE_NAS_IP                # e.g. 192.168.1.10
+    path: /volume1/REPLACE/zwavejs-config # e.g. /volume1/home-automation/zwavejs-config
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mosquitto-data
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-manual
+  mountOptions:
+    - nfsvers=4.1
+    - hard
+    - noatime
+  nfs:
+    server: REPLACE_NAS_IP                # e.g. 192.168.1.10
+    path: /volume1/REPLACE/mosquitto-data # e.g. /volume1/home-automation/mosquitto-data
