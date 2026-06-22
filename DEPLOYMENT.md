@@ -212,3 +212,80 @@ See [`README.md`](./README.md) for the fuller post-deploy/pairing walkthrough an
 Pull-based GitOps (Argo CD or Flux) suits this NAT'd home cluster (GitHub can't reach in).
 Easiest secret strategy: keep the two secrets bootstrapped by hand (they rarely change) and
 let GitOps manage everything else; alternatives are Sealed Secrets or SOPS+age. Not yet set up.
+
+A lighter-weight middle ground is now in place — see §10 (deploy from GitHub via a
+self-hosted Actions runner). GitOps remains the longer-term option if continuous
+reconciliation is wanted.
+
+---
+
+## 10. Deploy from GitHub (self-hosted Actions runner)
+
+> **Why self-hosted:** the cluster is behind NAT (§9) — GitHub's hosted runners cannot
+> reach `kubectl`. So a runner is installed **inside Dragonfly**, where it reaches the
+> cluster locally via `~/.kube/config`. GitHub only ever hands it a job; nothing is exposed
+> to the internet. This is the same trust boundary as Tailscale-only access.
+
+**What's in the repo:**
+- `.github/workflows/deploy.yml` — runs on `[self-hosted, linux, dragonfly]`. Triggers on the
+  manual **Run workflow** button (`workflow_dispatch`, with an optional `unpark_zwave`
+  checkbox) **and** on push to `main` that touches `kustomize/**`, `scripts/deploy.sh`, or the
+  workflow itself.
+- `scripts/deploy.sh` — does the actual work and can also be run by hand on Dragonfly. It
+  encodes the door-lock safety rules so a deploy can't silently break them:
+  - **Secrets:** the real `mariadb.env` / `mosquitto.passwd` are gitignored, so a fresh
+    checkout has none. The script copies them in from a stable on-host dir
+    (`HAWKSNEST_SECRETS_DIR`, default `~/hawksnest-secrets`) before apply, and **fails loudly**
+    if they're absent. Secrets stay **off GitHub** (no repo/Actions secrets needed).
+  - **zwave-js-ui parking:** `apply -k` resets it to `replicas:1`, which crash-loops while the
+    ZWA-2 is absent (§6.9). The script **re-parks it at 0** after every apply unless you
+    explicitly pass `UNPARK_ZWAVE=true` — so the documented "re-scale to 0 after apply" footgun
+    is automatic now. Push-triggered deploys never unpark (no inputs → safe default).
+  - Validates the kustomize build first, then waits on the always-on rollouts and fails the job
+    if any don't settle.
+
+### One-time runner setup (on Dragonfly)
+
+Run as the same unix user that owns `~/.kube/config` (i.e. `sonic`):
+
+```bash
+# 1. Bootstrap the secrets once on the host (kept out of git AND off GitHub):
+mkdir -p ~/hawksnest-secrets && chmod 700 ~/hawksnest-secrets
+cp ~/hawksnest-automation/kustomize/secrets/mariadb.env   ~/hawksnest-secrets/   # if already created
+cp ~/hawksnest-automation/kustomize/secrets/mosquitto.passwd ~/hawksnest-secrets/
+chmod 600 ~/hawksnest-secrets/*
+#   (or create them fresh here per README §"Create the secrets")
+
+# 2. Install the runner (get the token from GitHub:
+#    repo → Settings → Actions → Runners → New self-hosted runner → Linux):
+mkdir -p ~/actions-runner && cd ~/actions-runner
+curl -o runner.tar.gz -L https://github.com/actions/runner/releases/latest/download/actions-runner-linux-x64.tar.gz
+tar xzf runner.tar.gz
+./config.sh --url https://github.com/CDRaab01/hawksnest-automation \
+            --token <RUNNER_TOKEN> \
+            --name dragonfly \
+            --labels self-hosted,linux,dragonfly \
+            --unattended
+
+# 3. Run it as a systemd service so it survives reboots (Dragonfly has systemd):
+sudo ./svc.sh install sonic
+sudo ./svc.sh start
+```
+
+> The runner needs `kubectl` on its `PATH` (already true for `sonic`) and a working
+> `~/.kube/config`. The workflow passes no kubeconfig — `deploy.sh` defaults to
+> `~/.kube/config`. Override with the `KUBECONFIG` env if yours lives elsewhere.
+
+### Using it
+
+- **Manual:** GitHub → **Actions → Deploy Hawksnest → Run workflow**. Leave `unpark_zwave`
+  unchecked normally; check it **only** after the ZWA-2 `by-id` path is filled into
+  `kustomize/zwave-js-ui/deployment.yaml` (§7.4).
+- **Automatic:** merge a manifest change to `main` and it deploys. (The active dev branch is
+  `claude/happy-babbage-07raqh`; the push trigger watches `main` — adjust `branches:` in the
+  workflow if you want a different deploy branch.)
+- **By hand (no GitHub):** `cd ~/hawksnest-automation && ./scripts/deploy.sh`
+  (add `UNPARK_ZWAVE=true` once the controller is attached).
+
+> ⚠️ This applies changes to **live door locks**. Keep the default trigger conservative; the
+> manual button is the safest path, and pushes only fire on `main` for manifest paths.

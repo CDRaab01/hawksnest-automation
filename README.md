@@ -85,6 +85,17 @@ kubectl apply -k kustomize/
 kubectl get pods -n home-automation -w
 ```
 
+Or use the wrapper that encodes the safety rules (re-parks `zwave-js-ui`, loads secrets,
+waits on rollouts): `./scripts/deploy.sh`.
+
+### Deploying from GitHub
+
+A GitHub Actions workflow (`.github/workflows/deploy.yml`) can deploy via a **self-hosted
+runner installed inside Dragonfly** — manually (Actions → *Deploy Hawksnest* → Run workflow)
+or automatically on push to `main`. The cluster is behind NAT, so the runner lives on the
+cluster side; nothing is exposed to the internet. Setup and usage:
+[`DEPLOYMENT.md` §10](./DEPLOYMENT.md#10-deploy-from-github-self-hosted-actions-runner).
+
 ## Bring-up order
 
 `kubectl apply -k` creates everything at once, but services settle in this order:

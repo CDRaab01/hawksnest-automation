@@ -1,0 +1,52 @@
+name: Deploy Hawksnest
+
+# Deploys the kustomize stack to the K3s cluster in Dragonfly.
+#
+# The cluster is behind NAT — GitHub cannot reach in (see DEPLOYMENT.md §9).
+# This therefore runs on a SELF-HOSTED runner installed inside the Dragonfly
+# WSL2 distro, which reaches the cluster locally over ~/.kube/config. GitHub
+# only ever hands the runner a job; nothing is exposed to the internet.
+#
+# Triggers:
+#   * workflow_dispatch — manual "Run workflow" button (optionally unpark zwave).
+#   * push to main (manifests/script/workflow only) — auto-deploy on merge.
+#
+# Runner setup + how this honors the door-lock safety rules: DEPLOYMENT.md §10.
+
+on:
+  workflow_dispatch:
+    inputs:
+      unpark_zwave:
+        description: "Run zwave-js-ui at replicas:1 (only after the ZWA-2 by-id path is filled in)"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - "kustomize/**"
+      - "scripts/deploy.sh"
+      - ".github/workflows/deploy.yml"
+
+# Never let two deploys touch the cluster at once; queue them instead.
+concurrency:
+  group: hawksnest-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Apply kustomize to K3s
+    # Matches the labels you give the runner during registration (see §10).
+    runs-on: [self-hosted, linux, dragonfly]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy
+        env:
+          # push events have no inputs → defaults to false (parked), which is
+          # the safe behavior. Only the manual button can unpark.
+          UNPARK_ZWAVE: ${{ github.event.inputs.unpark_zwave || 'false' }}
+        run: |
+          chmod +x scripts/deploy.sh
+          ./scripts/deploy.sh
