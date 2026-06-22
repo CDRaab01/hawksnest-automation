@@ -18,6 +18,20 @@ spec:
         app: home-assistant
     spec:
       initContainers:
+        # Gate HA on MariaDB being reachable. Without this, a boot-time race (HA up
+        # before MariaDB finishes first-boot DB init) makes the recorder setup fail
+        # permanently for that boot, taking history/logbook/energy down with it.
+        - name: wait-for-mariadb
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "waiting for mariadb:3306 ..."
+              until nc -w2 mariadb 3306 </dev/null >/dev/null 2>&1; do
+                sleep 2
+              done
+              echo "mariadb is up"
         # Seeds configuration files and assembles secrets.yaml (containing the
         # recorder DB URL with the MariaDB password) on first boot only. Existing
         # files on the PVC are never overwritten, so user edits survive restarts.
