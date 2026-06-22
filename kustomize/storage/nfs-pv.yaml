@@ -28,12 +28,12 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: nfs-manual
   mountOptions:
-    - nfsvers=4.1
+    - nfsvers=3
     - hard
     - noatime
   nfs:
-    server: REPLACE_NAS_IP           # e.g. 192.168.1.10
-    path: /volume1/REPLACE/ha-config # e.g. /volume1/home-automation/ha-config
+    server: 192.168.5.78           # e.g. 192.168.1.10
+    path: /volume3/home-automation/ha-config
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -47,12 +47,12 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: nfs-manual
   mountOptions:
-    - nfsvers=4.1
+    - nfsvers=3
     - hard
     - noatime
   nfs:
-    server: REPLACE_NAS_IP                # e.g. 192.168.1.10
-    path: /volume1/REPLACE/zwavejs-config # e.g. /volume1/home-automation/zwavejs-config
+    server: 192.168.5.78                # e.g. 192.168.1.10
+    path: /volume3/home-automation/zwavejs-config
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -66,9 +66,9 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: nfs-manual
   mountOptions:
-    - nfsvers=4.1
+    - nfsvers=3
     - hard
     - noatime
   nfs:
-    server: REPLACE_NAS_IP                # e.g. 192.168.1.10
-    path: /volume1/REPLACE/mosquitto-data # e.g. /volume1/home-automation/mosquitto-data
+    server: 192.168.5.78                # e.g. 192.168.1.10
+    path: /volume3/home-automation/mosquitto-data

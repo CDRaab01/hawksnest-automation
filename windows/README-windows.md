@@ -39,12 +39,15 @@ Copy the `usb-...-if00` path into `kustomize/zwave-js-ui/deployment.yaml`
 
 ## Make it survive reboots (scheduled task)
 
-Create a combined boot script, e.g. `C:\ha\boot.ps1`:
+Create a combined boot script, e.g. `C:\ha\boot.ps1`. Run each script in its **own**
+`powershell -File` process so that if one fails (e.g. `attach-zwa2.ps1` when the stick
+isn't plugged in yet, which exits non-zero), it does **not** abort the rest — the
+portproxy still gets set up:
 
 ```powershell
-& "C:\ha\attach-zwa2.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\ha\attach-zwa2.ps1"
 Start-Sleep -Seconds 5
-& "C:\ha\portproxy-ha.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\ha\portproxy-ha.ps1"
 ```
 
 Register it to run at logon with highest privileges:

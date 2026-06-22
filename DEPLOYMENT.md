@@ -1,0 +1,291 @@
+# DEPLOYMENT.md — As-Built State & Runbook
+
+> **Read this first if you are a fresh Claude Code session.** This is the *as-built*
+> record of the Hawksnest Home Assistant deployment — the real environment values and
+> the decisions/gotchas discovered during bring-up. [`CLAUDE.md`](./CLAUDE.md) is the
+> original *spec* (intent); this file is *reality*. Where they differ, reality wins —
+> but flag the difference rather than silently diverging. This controls physical door
+> locks: when unsure, stop and ask rather than guess.
+
+Last updated: **2026-06-22** (V1 bring-up, day 1 of 2 — Z-Wave deferred to the next day
+pending physical arrival of the controller).
+
+---
+
+## 1. Current status
+
+**Up and working:**
+- K3s single-node cluster in WSL2, healthy.
+- Synology NFS storage (v3), all PVCs bound, config persisting to the NAS.
+- `mariadb`, `mosquitto`, `home-assistant` pods Running.
+- HA recorder writing to MariaDB (not SQLite); gated on MariaDB readiness.
+- HA reachable on LAN + Tailscale via a Windows portproxy.
+- Ring (cloud) integration added.
+- Windows logon scheduled task re-establishes the network after reboot.
+
+**Deferred / pending (next session):**
+- `zwave-js-ui` is deployed but **parked at `replicas: 0`** — the ZWA-2 USB controller
+  had not physically arrived. No locks or dimmers paired yet.
+- ZEN72 dimmers: **none in V1** (owner deferred them; pair later via the same flow).
+- Garage interior-door deadbolt: **not yet installed** (lever-only). V1 pairs only the
+  **front + back** deadbolts; slot structure left ready for the third.
+
+---
+
+## 2. Concrete environment facts (discovered, not assumed)
+
+| Thing | Value |
+|---|---|
+| Windows host user | `Sonic` |
+| **PC LAN IP** | `192.168.4.34` — subnet **`192.168.4.0/24`** (DHCP; may drift) |
+| WSL2 distro for K3s | **`Dragonfly`** (dedicated; created this session), Ubuntu 26.04, systemd enabled, unix user `sonic` |
+| Other WSL distros (ignore) | `Ubuntu` (default, unrelated), `docker-desktop`, `Pi-hole` (WSL1) |
+| K3s | `v1.35.5+k3s1`, single node named `dragonfly`, containerd |
+| kubeconfig | `~/.kube/config` on Dragonfly (`export KUBECONFIG=~/.kube/config` in `~/.bashrc`) |
+| **NAS** | Synology DS214 at **`192.168.5.78`** (DSM web UI on `:5000`/`http`) |
+| **NFS** | **v3 only** — the DS214 does *not* support NFSv4.1 (mount returns "Protocol not supported") |
+| NFS export | **`/volume3/home-automation`** (chosen over the near-full Volume 1) |
+| NFS export rule | allow **`192.168.4.0/24`**, Read/Write, **Map all users to admin**, async, non-privileged ports allowed |
+| NFS subfolders (must exist) | `ha-config`, `zwavejs-config`, `mosquitto-data` under the export |
+| Repo location | `~/hawksnest-automation` on Dragonfly |
+| Active branch | `claude/happy-babbage-07raqh` |
+| Secrets | `kustomize/secrets/{mariadb.env,mosquitto.passwd}` (gitignored; **inside** the kustomize root on purpose — see §6) |
+
+> ⚠️ **Cross-subnet gotcha:** the PC (`192.168.4.x`) and the NAS (`192.168.5.x`) are on
+> **different /24s** that the router bridges. WSL2 NATs outbound traffic so the NAS sees
+> the *PC's* LAN IP (`192.168.4.34`), **not** the internal WSL IP (`172.20.x`). The NFS
+> rule therefore allows `192.168.4.0/24`. If NFS mounts start failing with
+> "access denied by server," first check whether the PC's LAN IP changed subnet.
+
+---
+
+## 3. Architecture as-built
+
+```
+Windows 11 (user Sonic, LAN 192.168.4.34)
+├─ Scheduled task "HomeAssistant-Boot" (at logon, highest priv) -> C:\ha\boot.ps1
+│    ├─ C:\ha\attach-zwa2.ps1   (USB passthrough; no-op until controller present)
+│    └─ C:\ha\portproxy-ha.ps1  (netsh portproxy 0.0.0.0:8123 -> <wsl-ip>:30123 + firewall)
+└─ WSL2 "Dragonfly"
+   └─ K3s (node: dragonfly)
+      └─ namespace: home-automation
+         ├─ Deployment home-assistant   -> Service NodePort 30123 (HA UI :8123)
+         │     initContainers: wait-for-mariadb, seed-config
+         ├─ Deployment zwave-js-ui       -> Service (ws :3000, ui :8091)  [PARKED replicas=0]
+         ├─ Deployment mariadb           -> Service mariadb:3306  (recorder DB)
+         └─ Deployment mosquitto         -> Service (MQTT :1883)  [idle; future Ratgdo]
+         PVCs:
+           ha-config       -> NFS  (MUST BACK UP)
+           zwavejs-config  -> NFS  (MUST BACK UP — losing it = re-pair every lock)
+           mosquitto-data  -> NFS
+           mariadb-data    -> local-path (node-local; recorder history; regenerable)
+```
+
+Manifests are kustomize: `kubectl apply -k kustomize/`. The `secretGenerator` in
+`kustomize/kustomization.yaml` builds `mariadb-credentials` and `mosquitto-credentials`
+from the gitignored files in `kustomize/secrets/`.
+
+**Networking decision:** HA is exposed via **NodePort 30123 + Windows portproxy**
+(not host-network), keeping cluster DNS intact so HA resolves `mariadb`/`zwave-js-ui`
+by service name. Remote access is **Tailscale only**; no public internet ports.
+
+---
+
+## 4. Bring-up from scratch (full recovery / new machine)
+
+1. **WSL2 distro:** `wsl --install -d Ubuntu --name Dragonfly`; create unix user.
+2. **systemd + DNS** in `/etc/wsl.conf`:
+   ```ini
+   [boot]
+   systemd=true
+   [network]
+   generateResolvConf=true
+   ```
+   then `wsl --shutdown`, reopen; verify `ps -p 1 -o comm=` -> `systemd`.
+3. **NFS client (before K3s):** `sudo apt-get update && sudo apt-get install -y nfs-common`.
+4. **K3s:** `curl -sfL https://get.k3s.io | sh -`; wait for node Ready.
+5. **kubeconfig:** copy `/etc/rancher/k3s/k3s.yaml` to `~/.kube/config`, `chown`, export `KUBECONFIG`.
+6. **Synology NFS:** enable NFS service; share on Volume 3 (`/volume3/home-automation`);
+   NFS rule `192.168.4.0/24` RW, map-all-to-admin, async, non-priv ports; create the
+   three subfolders. Verify from the node:
+   `sudo mount -t nfs -o vers=3 192.168.5.78:/volume3/home-automation /mnt/x`.
+7. **Repo + secrets:**
+   ```bash
+   git clone https://github.com/CDRaab01/hawksnest-automation.git ~/hawksnest-automation
+   cd ~/hawksnest-automation && git checkout claude/happy-babbage-07raqh
+   cp kustomize/secrets/mariadb.env.example kustomize/secrets/mariadb.env   # set strong pw (URL-safe; see §6)
+   mosquitto_passwd -c -b kustomize/secrets/mosquitto.passwd ratgdo '<pw>'  # needs the `mosquitto` apt pkg
+   chmod 0600 kustomize/secrets/mosquitto.passwd
+   ```
+8. **Deploy:**
+   ```bash
+   kubectl apply -k kustomize/
+   kubectl scale deploy/zwave-js-ui --replicas=0 -n home-automation   # until the USB stick exists
+   ```
+9. **Windows host:** install `usbipd` (`winget install usbipd`); copy the two `windows/*.ps1`
+   to `C:\ha\`; create `C:\ha\boot.ps1` (see `windows/README-windows.md`); register the
+   `HomeAssistant-Boot` logon scheduled task; run it once.
+
+---
+
+## 5. Day-2 operations
+
+- **Apply manifest changes:** `kubectl apply -k kustomize/`.
+  - ⚠️ **`apply -k` resets `zwave-js-ui` to `replicas: 1`** (the manifest says 1). Until the
+    controller is attached and its `by-id` path is filled in, **re-run**
+    `kubectl scale deploy/zwave-js-ui --replicas=0 -n home-automation` after every apply,
+    or it crash-loops on the missing device.
+- **Access HA:** `http://localhost:8123` (on the PC), `http://192.168.4.34:8123` (LAN),
+  `http://<PC-tailscale-ip>:8123` (Tailscale).
+- **Restart HA / others:** `kubectl rollout restart deploy/home-assistant -n home-automation`.
+- **Logs:** `kubectl logs deploy/home-assistant -n home-automation` (the `seed-config` /
+  `wait-for-mariadb` initContainers are separate: add `-c <name>`).
+- **After a host reboot:** logon triggers `C:\ha\boot.ps1` -> portproxy (and USB attach).
+  If HA is unreachable, check the portproxy table: `netsh interface portproxy show v4tov4`.
+
+---
+
+## 6. Decisions & gotchas discovered (do not re-learn these the hard way)
+
+1. **NFSv4.1 fails on the DS214** — it's a v3-only NAS. PVs use `nfsvers=3`
+   (`kustomize/storage/nfs-pv.yaml`). Don't "upgrade" to v4.1.
+2. **PC and NAS are on different subnets** (see §2 gotcha). NFS rule must allow the *PC's*
+   subnet because of WSL2 NAT.
+3. **`secrets/` must live inside `kustomize/`** — kustomize's default load restrictor
+   refuses files above the kustomization root (`"not in or below"` error). They are at
+   `kustomize/secrets/` and gitignored.
+4. **MariaDB readiness race** — HA's recorder fails *permanently for that boot* if it
+   starts before MariaDB finishes first-boot DB init. Fixed with a `wait-for-mariadb`
+   initContainer on the HA deployment. If recorder is ever down after a change, check that
+   initContainer ran; a plain `rollout restart` recovers it once MariaDB is up.
+5. **MariaDB password should be URL-safe.** It is embedded into the recorder
+   `mysql://user:PASSWORD@mariadb/...` URL via `secrets.yaml` *without* URL-encoding. Avoid
+   `/`, `@`, `+`, `=` etc. Prefer `openssl rand -hex 24`, not `-base64`. (Not yet hit, but
+   latent.)
+6. **`mosquitto_passwd` lives in the `mosquitto` apt package** (not `mosquitto-clients`),
+   and needs `-c` to create the file; appending to an empty/world-readable file silently
+   produces an empty file. `chmod 0600` after.
+7. **`usbipd attach` is not persistent** across reboot/replug — re-attached by the logon
+   task. This is the known fragile link (see `windows/README-windows.md`).
+8. **`boot.ps1` runs each sub-script in its own `powershell -File` process** so that
+   `attach-zwa2.ps1` failing (e.g. stick absent) doesn't abort the portproxy step.
+9. **ZWA-2 VID:PID is unconfirmed.** `attach-zwa2.ps1` defaults to `10c4:ea60` (a CP210x),
+   but the ZWA-2 enumerates as an ACM (`-if00`) device — likely a *different* VID:PID.
+   On first attach, run `usbipd list`, confirm the real VID:PID, and pass it via
+   `-HardwareId`; update the script default.
+
+---
+
+## 7. Remaining work: Z-Wave bring-up (next session, once the ZWA-2 is in hand)
+
+1. Install/confirm `usbipd` on Windows; `usbipd list` -> note the ZWA-2 **bus id + real VID:PID**.
+2. `usbipd bind` + `usbipd attach --wsl --distribution Dragonfly` (or run `attach-zwa2.ps1`
+   with the correct `-HardwareId`).
+3. In Dragonfly: `ls -l /dev/serial/by-id/` -> copy the `usb-...-if00` path.
+4. Put that path into `kustomize/zwave-js-ui/deployment.yaml` (`hostPath.path`, currently a
+   `REPLACE-...` placeholder), then `kubectl apply -k kustomize/` and **let zwave-js-ui run
+   at replicas 1** (it's no longer parked once the device exists).
+5. Z-Wave JS UI at `http://localhost:8091` (port-forward or temporary portproxy): set serial
+   port to **`/dev/zwave`**, **generate S2 security keys** (persist in `zwavejs-config`,
+   **also store in the password manager**), enable WS server :3000.
+6. In HA: add the **Z-Wave** integration pointed at `ws://zwave-js-ui:3000`.
+7. Pair the **front + back Schlage BE469ZP** deadbolts with **S2** (near the controller if it
+   fails at distance — battery locks don't repeat). Assign user code slots: **1=Christian,
+   2=Elizabeth**, 3+ reserved for guests.
+8. **Reboot drill:** reboot the host, let the logon task re-attach, confirm zwave-js-ui sees
+   the controller and locks report state with **no re-pairing**.
+
+See [`README.md`](./README.md) for the fuller post-deploy/pairing walkthrough and
+[`windows/README-windows.md`](./windows/README-windows.md) for the USB chain detail.
+
+---
+
+## 8. Backups (critical)
+
+- **`zwavejs-config`** and **`ha-config`** PVCs are the must-back-up volumes. Enable
+  **Synology snapshots** on the `home-automation` shared folder. The S2 keys also go in the
+  password manager.
+- `mariadb-data` is node-local and regenerable — not backed up by design.
+
+## 9. Possible follow-on: GitOps
+
+Pull-based GitOps (Argo CD or Flux) suits this NAT'd home cluster (GitHub can't reach in).
+Easiest secret strategy: keep the two secrets bootstrapped by hand (they rarely change) and
+let GitOps manage everything else; alternatives are Sealed Secrets or SOPS+age. Not yet set up.
+
+A lighter-weight middle ground is now in place — see §10 (deploy from GitHub via a
+self-hosted Actions runner). GitOps remains the longer-term option if continuous
+reconciliation is wanted.
+
+---
+
+## 10. Deploy from GitHub (self-hosted Actions runner)
+
+> **Why self-hosted:** the cluster is behind NAT (§9) — GitHub's hosted runners cannot
+> reach `kubectl`. So a runner is installed **inside Dragonfly**, where it reaches the
+> cluster locally via `~/.kube/config`. GitHub only ever hands it a job; nothing is exposed
+> to the internet. This is the same trust boundary as Tailscale-only access.
+
+**What's in the repo:**
+- `.github/workflows/deploy.yml` — runs on `[self-hosted, linux, dragonfly]`. Triggers on the
+  manual **Run workflow** button (`workflow_dispatch`, with an optional `unpark_zwave`
+  checkbox) **and** on push to `main` that touches `kustomize/**`, `scripts/deploy.sh`, or the
+  workflow itself.
+- `scripts/deploy.sh` — does the actual work and can also be run by hand on Dragonfly. It
+  encodes the door-lock safety rules so a deploy can't silently break them:
+  - **Secrets:** the real `mariadb.env` / `mosquitto.passwd` are gitignored, so a fresh
+    checkout has none. The script copies them in from a stable on-host dir
+    (`HAWKSNEST_SECRETS_DIR`, default `~/hawksnest-secrets`) before apply, and **fails loudly**
+    if they're absent. Secrets stay **off GitHub** (no repo/Actions secrets needed).
+  - **zwave-js-ui parking:** `apply -k` resets it to `replicas:1`, which crash-loops while the
+    ZWA-2 is absent (§6.9). The script **re-parks it at 0** after every apply unless you
+    explicitly pass `UNPARK_ZWAVE=true` — so the documented "re-scale to 0 after apply" footgun
+    is automatic now. Push-triggered deploys never unpark (no inputs → safe default).
+  - Validates the kustomize build first, then waits on the always-on rollouts and fails the job
+    if any don't settle.
+
+### One-time runner setup (on Dragonfly)
+
+Run as the same unix user that owns `~/.kube/config` (i.e. `sonic`):
+
+```bash
+# 1. Bootstrap the secrets once on the host (kept out of git AND off GitHub):
+mkdir -p ~/hawksnest-secrets && chmod 700 ~/hawksnest-secrets
+cp ~/hawksnest-automation/kustomize/secrets/mariadb.env   ~/hawksnest-secrets/   # if already created
+cp ~/hawksnest-automation/kustomize/secrets/mosquitto.passwd ~/hawksnest-secrets/
+chmod 600 ~/hawksnest-secrets/*
+#   (or create them fresh here per README §"Create the secrets")
+
+# 2. Install the runner (get the token from GitHub:
+#    repo → Settings → Actions → Runners → New self-hosted runner → Linux):
+mkdir -p ~/actions-runner && cd ~/actions-runner
+curl -o runner.tar.gz -L https://github.com/actions/runner/releases/latest/download/actions-runner-linux-x64.tar.gz
+tar xzf runner.tar.gz
+./config.sh --url https://github.com/CDRaab01/hawksnest-automation \
+            --token <RUNNER_TOKEN> \
+            --name dragonfly \
+            --labels self-hosted,linux,dragonfly \
+            --unattended
+
+# 3. Run it as a systemd service so it survives reboots (Dragonfly has systemd):
+sudo ./svc.sh install sonic
+sudo ./svc.sh start
+```
+
+> The runner needs `kubectl` on its `PATH` (already true for `sonic`) and a working
+> `~/.kube/config`. The workflow passes no kubeconfig — `deploy.sh` defaults to
+> `~/.kube/config`. Override with the `KUBECONFIG` env if yours lives elsewhere.
+
+### Using it
+
+- **Manual:** GitHub → **Actions → Deploy Hawksnest → Run workflow**. Leave `unpark_zwave`
+  unchecked normally; check it **only** after the ZWA-2 `by-id` path is filled into
+  `kustomize/zwave-js-ui/deployment.yaml` (§7.4).
+- **Automatic:** merge a manifest change to `main` and it deploys. (The active dev branch is
+  `claude/happy-babbage-07raqh`; the push trigger watches `main` — adjust `branches:` in the
+  workflow if you want a different deploy branch.)
+- **By hand (no GitHub):** `cd ~/hawksnest-automation && ./scripts/deploy.sh`
+  (add `UNPARK_ZWAVE=true` once the controller is attached).
+
+> ⚠️ This applies changes to **live door locks**. Keep the default trigger conservative; the
+> manual button is the safest path, and pushes only fire on `main` for manifest paths.

@@ -23,10 +23,10 @@ resources:
 secretGenerator:
   - name: mariadb-credentials
     envs:
-      - ../secrets/mariadb.env
+      - secrets/mariadb.env
   - name: mosquitto-credentials
     files:
-      - passwd=../secrets/mosquitto.passwd
+      - passwd=secrets/mosquitto.passwd
 
 # Stable Secret names so Deployments can reference them directly. The trade-off is
 # that editing a secret does NOT trigger an automatic rollout — restart the pod

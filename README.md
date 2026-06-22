@@ -4,7 +4,9 @@ Home Assistant + Z-Wave JS UI and supporting services deployed into an existing 
 cluster (running in WSL2 / `Dragonfly` on a Windows 11 host). This system controls
 physical door locks, so the design prioritizes **recoverability** over speed.
 
-Full requirements live in [`CLAUDE.md`](./CLAUDE.md).
+Full requirements (intent) live in [`CLAUDE.md`](./CLAUDE.md). The **as-built state,
+real environment values, and runbook** live in [`DEPLOYMENT.md`](./DEPLOYMENT.md) —
+start there if you're picking this up fresh.
 
 ## What's deployed
 
@@ -33,7 +35,7 @@ kustomize/                # all Kubernetes manifests (apply with kustomize)
   kustomization.yaml      # wires components + secretGenerator
   storage/                # NFS PVs + PVCs (+ mariadb local-path PVC)
   mariadb/  mosquitto/  zwave-js-ui/  home-assistant/
-secrets/                  # *.example templates only; real secrets are gitignored
+  secrets/                # *.example templates only; real secrets are gitignored
 windows/                  # usbipd attach + portproxy PowerShell + host README
 ```
 
@@ -58,15 +60,18 @@ windows/                  # usbipd attach + portproxy PowerShell + host README
 ### 2. Create the secrets (never committed)
 
 ```bash
-cp secrets/mariadb.env.example secrets/mariadb.env
-# edit secrets/mariadb.env: set strong MYSQL_ROOT_PASSWORD and MYSQL_PASSWORD
+cp kustomize/secrets/mariadb.env.example kustomize/secrets/mariadb.env
+# edit kustomize/secrets/mariadb.env: set strong MYSQL_ROOT_PASSWORD and MYSQL_PASSWORD
 #   openssl rand -base64 24
 
-# create the mosquitto password file (hashed):
-docker run --rm eclipse-mosquitto:2 \
-  sh -c 'touch /tmp/p && mosquitto_passwd -b /tmp/p ratgdo "SOME_PASSWORD" && cat /tmp/p' \
-  > secrets/mosquitto.passwd
+# create the mosquitto password file (hashed). Either install the tool
+# (apt-get install -y mosquitto) and run mosquitto_passwd directly, or via docker:
+mosquitto_passwd -c -b kustomize/secrets/mosquitto.passwd ratgdo "SOME_PASSWORD"
+chmod 0600 kustomize/secrets/mosquitto.passwd
 ```
+
+> The `secrets/` dir lives **inside** `kustomize/` on purpose: kustomize refuses to
+> read files above its root, so a top-level `secrets/` would break `kubectl apply -k`.
 
 ### 3. Attach the USB stick and expose the network (Windows host)
 
@@ -79,6 +84,17 @@ Run the scripts in [`windows/`](./windows/README-windows.md) (`attach-zwa2.ps1`,
 kubectl apply -k kustomize/
 kubectl get pods -n home-automation -w
 ```
+
+Or use the wrapper that encodes the safety rules (re-parks `zwave-js-ui`, loads secrets,
+waits on rollouts): `./scripts/deploy.sh`.
+
+### Deploying from GitHub
+
+A GitHub Actions workflow (`.github/workflows/deploy.yml`) can deploy via a **self-hosted
+runner installed inside Dragonfly** — manually (Actions → *Deploy Hawksnest* → Run workflow)
+or automatically on push to `main`. The cluster is behind NAT, so the runner lives on the
+cluster side; nothing is exposed to the internet. Setup and usage:
+[`DEPLOYMENT.md` §10](./DEPLOYMENT.md#10-deploy-from-github-self-hosted-actions-runner).
 
 ## Bring-up order
 
