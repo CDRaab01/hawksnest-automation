@@ -169,22 +169,25 @@ by service name. Remote access is **Tailscale only**; no public internet ports.
    task. This is the known fragile link (see `windows/README-windows.md`).
 8. **`boot.ps1` runs each sub-script in its own `powershell -File` process** so that
    `attach-zwa2.ps1` failing (e.g. stick absent) doesn't abort the portproxy step.
-9. **ZWA-2 VID:PID is unconfirmed.** `attach-zwa2.ps1` defaults to `10c4:ea60` (a CP210x),
-   but the ZWA-2 enumerates as an ACM (`-if00`) device — likely a *different* VID:PID.
-   On first attach, run `usbipd list`, confirm the real VID:PID, and pass it via
-   `-HardwareId`; update the script default.
+9. **ZWA-2 VID:PID confirmed: `303a:4001`** (Espressif-based USB; enumerates as
+   `/dev/ttyACM0`). `attach-zwa2.ps1` now defaults to this. Caveat: `303a` is Espressif's
+   vendor ID, shared by bare ESP32 dev boards — if an ESP32 is plugged in at the same time,
+   select by bus id instead. Stable device:
+   `/dev/serial/by-id/usb-Nabu_Casa_ZWA-2_9070690E14E4-if00` (filled into the manifest).
 
 ---
 
 ## 7. Remaining work: Z-Wave bring-up (next session, once the ZWA-2 is in hand)
 
-1. Install/confirm `usbipd` on Windows; `usbipd list` -> note the ZWA-2 **bus id + real VID:PID**.
-2. `usbipd bind` + `usbipd attach --wsl --distribution Dragonfly` (or run `attach-zwa2.ps1`
-   with the correct `-HardwareId`).
-3. In Dragonfly: `ls -l /dev/serial/by-id/` -> copy the `usb-...-if00` path.
-4. Put that path into `kustomize/zwave-js-ui/deployment.yaml` (`hostPath.path`, currently a
-   `REPLACE-...` placeholder), then `kubectl apply -k kustomize/` and **let zwave-js-ui run
-   at replicas 1** (it's no longer parked once the device exists).
+1. ~~Install/confirm `usbipd`; confirm the ZWA-2 bus id + VID:PID.~~ ✅ Done: `303a:4001`,
+   bus `6-4`, serial `9070690E14E4`.
+2. ~~`usbipd bind` + `usbipd attach`.~~ ✅ Attached. (usbipd 5.x syntax: `usbipd attach
+   --busid 6-4 --wsl Dragonfly`, or just run `attach-zwa2.ps1`.)
+3. ~~`ls -l /dev/serial/by-id/` -> copy the `usb-...-if00` path.~~ ✅
+   `usb-Nabu_Casa_ZWA-2_9070690E14E4-if00`.
+4. ~~Put that path into `kustomize/zwave-js-ui/deployment.yaml`.~~ ✅ Filled in. Now
+   `kubectl apply -k kustomize/` and **let zwave-js-ui run at replicas 1** (the deploy script
+   no longer parks it, since the `REPLACE-` placeholder is gone).
 5. Z-Wave JS UI at `http://localhost:8091` (port-forward or temporary portproxy): set serial
    port to **`/dev/zwave`**, **generate S2 security keys** (persist in `zwavejs-config`,
    **also store in the password manager**), enable WS server :3000.

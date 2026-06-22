@@ -52,10 +52,9 @@ spec:
             claimName: zwavejs-config
         - name: zwave-device
           hostPath:
-            # REPLACE with the actual by-id path of the ZWA-2 inside WSL2.
-            # Find it with: ls -l /dev/serial/by-id/
-            # The ZWA-2 typically enumerates as a *-if00 ACM device.
+            # Stable by-id path of the ZWA-2 inside WSL2 (Dragonfly), confirmed via
+            # `ls -l /dev/serial/by-id/` -> resolves to ../../ttyACM0.
             # `type` is intentionally left unset so kubelet does not reject the
             # by-id symlink. If the pod fails to see the device, substitute the
             # resolved node (e.g. /dev/ttyACM0) here — but prefer by-id (stable).
-            path: /dev/serial/by-id/REPLACE-usb-Nabu_Casa_Home_Assistant_Connect_ZWA-2_XXXXXXXX-if00
+            path: /dev/serial/by-id/usb-Nabu_Casa_ZWA-2_9070690E14E4-if00
