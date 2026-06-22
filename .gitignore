@@ -1,3 +1,3 @@
 # Real secrets — never commit. Only the *.example templates are tracked.
-secrets/*
-!secrets/*.example
+kustomize/secrets/*
+!kustomize/secrets/*.example

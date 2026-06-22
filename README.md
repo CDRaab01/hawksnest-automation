@@ -33,7 +33,7 @@ kustomize/                # all Kubernetes manifests (apply with kustomize)
   kustomization.yaml      # wires components + secretGenerator
   storage/                # NFS PVs + PVCs (+ mariadb local-path PVC)
   mariadb/  mosquitto/  zwave-js-ui/  home-assistant/
-secrets/                  # *.example templates only; real secrets are gitignored
+  secrets/                # *.example templates only; real secrets are gitignored
 windows/                  # usbipd attach + portproxy PowerShell + host README
 ```
 
@@ -58,15 +58,18 @@ windows/                  # usbipd attach + portproxy PowerShell + host README
 ### 2. Create the secrets (never committed)
 
 ```bash
-cp secrets/mariadb.env.example secrets/mariadb.env
-# edit secrets/mariadb.env: set strong MYSQL_ROOT_PASSWORD and MYSQL_PASSWORD
+cp kustomize/secrets/mariadb.env.example kustomize/secrets/mariadb.env
+# edit kustomize/secrets/mariadb.env: set strong MYSQL_ROOT_PASSWORD and MYSQL_PASSWORD
 #   openssl rand -base64 24
 
-# create the mosquitto password file (hashed):
-docker run --rm eclipse-mosquitto:2 \
-  sh -c 'touch /tmp/p && mosquitto_passwd -b /tmp/p ratgdo "SOME_PASSWORD" && cat /tmp/p' \
-  > secrets/mosquitto.passwd
+# create the mosquitto password file (hashed). Either install the tool
+# (apt-get install -y mosquitto) and run mosquitto_passwd directly, or via docker:
+mosquitto_passwd -c -b kustomize/secrets/mosquitto.passwd ratgdo "SOME_PASSWORD"
+chmod 0600 kustomize/secrets/mosquitto.passwd
 ```
+
+> The `secrets/` dir lives **inside** `kustomize/` on purpose: kustomize refuses to
+> read files above its root, so a top-level `secrets/` would break `kubectl apply -k`.
 
 ### 3. Attach the USB stick and expose the network (Windows host)
 
