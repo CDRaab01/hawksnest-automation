@@ -4,7 +4,9 @@ Home Assistant + Z-Wave JS UI and supporting services deployed into an existing 
 cluster (running in WSL2 / `Dragonfly` on a Windows 11 host). This system controls
 physical door locks, so the design prioritizes **recoverability** over speed.
 
-Full requirements live in [`CLAUDE.md`](./CLAUDE.md).
+Full requirements (intent) live in [`CLAUDE.md`](./CLAUDE.md). The **as-built state,
+real environment values, and runbook** live in [`DEPLOYMENT.md`](./DEPLOYMENT.md) —
+start there if you're picking this up fresh.
 
 ## What's deployed
 
