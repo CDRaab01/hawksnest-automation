@@ -28,7 +28,7 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: nfs-manual
   mountOptions:
-    - nfsvers=4.1
+    - nfsvers=3
     - hard
     - noatime
   nfs:
@@ -47,7 +47,7 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: nfs-manual
   mountOptions:
-    - nfsvers=4.1
+    - nfsvers=3
     - hard
     - noatime
   nfs:
@@ -66,7 +66,7 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   storageClassName: nfs-manual
   mountOptions:
-    - nfsvers=4.1
+    - nfsvers=3
     - hard
     - noatime
   nfs:
