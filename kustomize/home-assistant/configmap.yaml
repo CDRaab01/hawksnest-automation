@@ -21,6 +21,7 @@ data:
         - 127.0.0.1
         - ::1
         - 100.64.0.0/10   # Tailscale CGNAT range
+        - 10.42.0.0/16    # K3s flannel pod CIDR (Hawksnest reverse-proxy pod)
 
     # Recorder history stored in the in-cluster MariaDB (not SQLite-on-NFS).
     # The db_url (with password) is injected via secrets.yaml by the initContainer.
