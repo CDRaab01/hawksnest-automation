@@ -3,7 +3,7 @@
 Living status doc for the HA + Z-Wave deployment. Update at the end of each working
 session so the next one can pick up without re-deriving the fiddly bits.
 
-_Last updated: 2026-06-23_
+_Last updated: 2026-06-23 (front + back door locks live; garage + user codes pending)_
 
 ## TL;DR — where we are
 
@@ -29,15 +29,16 @@ Windows host → usbipd (303a:4001) → WSL2 /dev/ttyACM0 → by-id symlink
 - **Front door lock — DONE.** Node 002, Schlage/Allegion BE469ZP, included with
   **S2 Access Control**, interview Complete, battery 100%, lock/unlock + state
   verified in both zwave-js-ui and HA. Named `Lock` / Location `Front Door`.
+- **Back door lock — DONE.** Smart Start. The lock broadcast its inclusion request
+  fine (distance was NOT an issue — controller heard it clearly), but kept getting
+  `NWI Home ID not found in provisioning list, ignoring request` until the DSK was
+  added to the Smart Start provisioning list; then it auto-included with S2. Named
+  `Lock` / Location `Back Door`.
 - **Home Assistant reachable** on LAN at `http://192.168.4.34:8123` and connected to
   Z-Wave via the integration pointed at `ws://zwave-js-ui:3000`.
 
 ## Pending ⏳
 
-- **Back door lock** — NOT paired. No QR/DSK card came with it; the S2 DSK label is
-  *inside* the lock (interior assembly, near the battery compartment). Must disassemble
-  to read it. Once we have the DSK: Smart Start (if QR) or classic Include + first 5
-  digits of the DSK.
 - **Garage interior lock** — not started (deadbolt may still need installing per spec).
 - **User code slots** — not set yet. Plan: slot 1 = Christian, slot 2 = Elizabeth.
   Do once all locks are in (one pass via the User Code CC / Users tab).
@@ -64,6 +65,13 @@ Windows host → usbipd (303a:4001) → WSL2 /dev/ttyACM0 → by-id symlink
   `REPLACE-` placeholder still deployed (needed `git pull` + `kubectl apply -k`).
 - **Stuck "starting inclusion":** was a stale zwave-js-ui frontend socket — a full page
   reload fixed it (the `AddNodeToNetwork` request then reached the driver).
+- **Pushing to `main` auto-deploys.** `.github/workflows/deploy.yml` runs on push to
+  `main` touching `kustomize/**`, `scripts/deploy.sh`, or the workflow. The first such
+  push parked `zwave-js-ui` to `replicas:0` (old `deploy.sh` default), taking the locks
+  offline. Recover with `kubectl -n home-automation scale deploy/zwave-js-ui --replicas=1`.
+  Root cause fixed on branch `claude/exciting-cori-4ah3rt` (deploy.sh now parks ONLY when
+  the device path is a `REPLACE-` placeholder) — **merge that branch to `main`** to apply
+  it; until then, avoid pushing manifest/script changes to `main`.
 
 ## How to resume the Z-Wave UI from a phone (temporary, for pairing)
 
