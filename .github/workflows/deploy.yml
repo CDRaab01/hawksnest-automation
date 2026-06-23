@@ -44,8 +44,11 @@ jobs:
 
       - name: Deploy
         env:
-          # push events have no inputs → defaults to false (parked), which is
-          # the safe behavior. Only the manual button can unpark.
+          # push events have no inputs → false. deploy.sh treats false as
+          # "park ONLY if the device path is still a REPLACE- placeholder"; once
+          # the real by-id path is committed, zwave-js-ui keeps running, so an
+          # auto-deploy never knocks the locks offline. The manual button's
+          # unpark=true is just an escape hatch to force-run with a placeholder.
           UNPARK_ZWAVE: ${{ github.event.inputs.unpark_zwave || 'false' }}
         run: |
           chmod +x scripts/deploy.sh
