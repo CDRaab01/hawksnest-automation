@@ -241,9 +241,11 @@ reconciliation is wanted.
     (`HAWKSNEST_SECRETS_DIR`, default `~/hawksnest-secrets`) before apply, and **fails loudly**
     if they're absent. Secrets stay **off GitHub** (no repo/Actions secrets needed).
   - **zwave-js-ui parking:** `apply -k` resets it to `replicas:1`, which crash-loops while the
-    ZWA-2 is absent (§6.9). The script **re-parks it at 0** after every apply unless you
-    explicitly pass `UNPARK_ZWAVE=true` — so the documented "re-scale to 0 after apply" footgun
-    is automatic now. Push-triggered deploys never unpark (no inputs → safe default).
+    ZWA-2 is absent (§6.9). The script parks it at `0` **only while the device path is still a
+    `REPLACE-` placeholder**. Once the real `by-id` path is committed (controller wired, locks
+    paired), every deploy — push-triggered or manual — **leaves zwave-js-ui running**, so a
+    routine deploy never scales the controller down and takes the door locks offline.
+    `UNPARK_ZWAVE=true` is just an escape hatch to force-run while the path is still a placeholder.
   - Validates the kustomize build first, then waits on the always-on rollouts and fails the job
     if any don't settle.
 
@@ -282,8 +284,9 @@ sudo ./svc.sh start
 ### Using it
 
 - **Manual:** GitHub → **Actions → Deploy Hawksnest → Run workflow**. Leave `unpark_zwave`
-  unchecked normally; check it **only** after the ZWA-2 `by-id` path is filled into
-  `kustomize/zwave-js-ui/deployment.yaml` (§7.4).
+  unchecked normally — now that the real `by-id` path is committed, zwave-js-ui runs on every
+  deploy anyway. The checkbox is only an escape hatch to force-run while the path is still a
+  `REPLACE-` placeholder.
 - **Automatic:** merge a manifest change to `main` and it deploys. (The active dev branch is
   `claude/happy-babbage-07raqh`; the push trigger watches `main` — adjust `branches:` in the
   workflow if you want a different deploy branch.)

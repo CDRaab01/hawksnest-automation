@@ -11,16 +11,19 @@
 #   * Secrets are gitignored, so a fresh checkout has none. They are copied in
 #     from a stable on-host directory (HAWKSNEST_SECRETS_DIR) before apply.
 #   * `apply -k` resets zwave-js-ui to replicas:1, which crash-loops while the
-#     ZWA-2 USB controller is absent. We re-park it at 0 unless explicitly
-#     unparked (and the by-id device path has actually been filled in).
+#     ZWA-2 USB controller is absent. We park it at 0 ONLY while the device path
+#     is still a REPLACE- placeholder; once the real by-id path is filled in we
+#     leave it running, so a routine deploy never takes the door locks offline.
 #
 # Environment knobs (all optional):
 #   KUBECONFIG              kubeconfig path        (default: ~/.kube/config)
 #   HAWKSNEST_SECRETS_DIR  where the real secrets live on the runner host
 #                          (default: ~/hawksnest-secrets) — must contain
 #                          mariadb.env and mosquitto.passwd
-#   UNPARK_ZWAVE           "true" to let zwave-js-ui run at replicas:1
-#                          (default: false → parked at 0)
+#   UNPARK_ZWAVE           "true" forces zwave-js-ui to run even while the device
+#                          path is still a REPLACE- placeholder (escape hatch).
+#                          Default false: park ONLY if the path is a placeholder;
+#                          a real by-id path always runs.
 #   ROLLOUT_TIMEOUT        per-deployment rollout wait (default: 180s)
 #
 set -euo pipefail
@@ -86,28 +89,36 @@ log "Applying ${KUSTOMIZE_DIR}/ to namespace ${NS}"
 kubectl apply -k "${KUSTOMIZE_DIR}"
 
 # --- zwave-js-ui parking guard ------------------------------------------------
-# `apply -k` sets zwave-js-ui to replicas:1. While the ZWA-2 by-id path is still
-# a REPLACE- placeholder the pod crash-loops on the missing device, so we park it
-# at 0 unless the operator explicitly unparks AND the path looks real.
+# `apply -k` sets zwave-js-ui to replicas:1. The pod can only run when the ZWA-2
+# device path is real; while it is still a REPLACE- placeholder the pod crash-loops
+# on the missing device.
+#
+# Rule: PARK ONLY WHEN THE PATH IS A PLACEHOLDER. Once the by-id path is filled in
+# (controller wired, devices paired), the deploy must LEAVE zwave-js-ui RUNNING —
+# otherwise every push-triggered deploy would scale the controller to 0 and take
+# the door locks offline. UNPARK_ZWAVE=true is an escape hatch to force it on even
+# while the path is still a placeholder.
 zwave_placeholder="false"
 grep -q 'REPLACE-' "${ZWAVE_MANIFEST}" && zwave_placeholder="true"
 
-if [ "${UNPARK_ZWAVE}" = "true" ]; then
+if [ "${zwave_placeholder}" = "false" ] || [ "${UNPARK_ZWAVE}" = "true" ]; then
   if [ "${zwave_placeholder}" = "true" ]; then
     warn "UNPARK_ZWAVE=true but ${ZWAVE_MANIFEST} still has a REPLACE- device path.
        Leaving zwave-js-ui running at replicas:1 as requested, but it will
        crash-loop until the real /dev/serial/by-id/... path is filled in."
+  else
+    log "Device path is real — leaving zwave-js-ui RUNNING (replicas per manifest)."
   fi
-  log "zwave-js-ui left UNPARKED (replicas per manifest)."
+  zwave_should_run="true"
 else
-  log "Parking zwave-js-ui at replicas:0 (no controller / safety default)."
+  log "Parking zwave-js-ui at replicas:0 (device path is still a REPLACE- placeholder)."
   kubectl scale deploy/zwave-js-ui --replicas=0 -n "${NS}"
+  zwave_should_run="false"
 fi
 
 # --- wait for the always-on workloads to settle -------------------------------
 WORKLOADS=(mariadb mosquitto home-assistant)
-[ "${UNPARK_ZWAVE}" = "true" ] && [ "${zwave_placeholder}" = "false" ] \
-  && WORKLOADS+=(zwave-js-ui)
+[ "${zwave_should_run}" = "true" ] && WORKLOADS+=(zwave-js-ui)
 
 log "Waiting for rollouts (timeout ${ROLLOUT_TIMEOUT} each): ${WORKLOADS[*]}"
 rollout_failed="false"
