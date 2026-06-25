@@ -195,6 +195,14 @@ def main() -> int:
     if zwave_svc:
         zports = {p["port"] for p in zwave_svc["spec"]["ports"]}
         check(3000 in zports, "zwave-js-ui must expose port 3000 (HA connects to the WS here)")
+    hawksnest_svc = next((s for s in services if name(s) == "hawksnest"), None)
+    if hawksnest_svc:
+        check(hawksnest_svc["spec"].get("type") == "NodePort", "hawksnest Service must be NodePort")
+        hports = hawksnest_svc["spec"]["ports"]
+        check(
+            any(p.get("nodePort") == 30080 for p in hports),
+            "hawksnest NodePort must stay 30080 (the Windows portproxy target)",
+        )
 
     # 10. Every Service selects a Deployment that exists (no dangling selectors).
     dep_apps = {name(d): pod_spec(d) for d in deployments}

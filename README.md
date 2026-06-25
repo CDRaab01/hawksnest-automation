@@ -16,6 +16,7 @@ start there if you're picking this up fresh.
 | `zwave-js-ui`    | Owns the ZWA-2 serial stick; manages the Z-Wave mesh.         | `zwavejs-config` (NFS) ⭐ |
 | `mariadb`        | HA recorder database (replaces SQLite-on-NFS).                | `mariadb-data` (local-path) |
 | `mosquitto`      | MQTT broker — installed now for future Ratgdo; harmless idle. | `mosquitto-data` (NFS)   |
+| `hawksnest`      | The dashboard SPA (nginx serves it + reverse-proxies HA's API). | none (stateless)       |
 
 ⭐ = **must be backed up** (see [Backups](#backups)).
 
@@ -25,6 +26,11 @@ start there if you're picking this up fresh.
 > **MariaDB datadir is node-local, not on NFS** — a DB datadir over NFS reintroduces the
 > file-locking risk we're avoiding. Recorder history is regenerable and intentionally
 > not stored on the NAS.
+>
+> **The `hawksnest` image is built in the [Hawksnest repo](https://github.com/CDRaab01/Hawksnest),
+> not here.** This repo only carries its Deployment + Service. Build `hawksnest:local` from
+> that repo's `Dockerfile` and import it into K3s containerd (no registry) before the pod can
+> start — see [Build & import the dashboard image](#build--import-the-dashboard-image).
 
 ## Repository layout
 
@@ -35,6 +41,7 @@ kustomize/                # all Kubernetes manifests (apply with kustomize)
   kustomization.yaml      # wires components + secretGenerator
   storage/                # NFS PVs + PVCs (+ mariadb local-path PVC)
   mariadb/  mosquitto/  zwave-js-ui/  home-assistant/
+  hawksnest/              # the dashboard Deployment + Service (image built in the Hawksnest repo)
   secrets/                # *.example templates only; real secrets are gitignored
 windows/                  # usbipd attach + portproxy PowerShell + host README
 ```
@@ -88,6 +95,25 @@ kubectl get pods -n home-automation -w
 Or use the wrapper that encodes the safety rules (re-parks `zwave-js-ui`, loads secrets,
 waits on rollouts): `./scripts/deploy.sh`.
 
+### Build & import the dashboard image
+
+The `hawksnest` Deployment runs `hawksnest:local`, built from the **Hawksnest** repo and
+imported straight into K3s containerd — there is no registry. Until the image is present the
+`hawksnest` pod stays `ImagePullBackOff` (the rest of the stack is unaffected). On the
+Dragonfly host, with the Hawksnest repo checked out:
+
+```bash
+cd ~/Hawksnest                                   # the dashboard repo
+docker build -t hawksnest:local .
+docker save hawksnest:local | sudo k3s ctr -n k8s.io images import -
+kubectl -n home-automation rollout restart deployment/hawksnest
+kubectl -n home-automation rollout status  deployment/hawksnest
+```
+
+> The Hawksnest repo's own `Deploy` GitHub Action does exactly this on push to `main`. Both
+> paths apply the **same** `hawksnest` Deployment to `home-automation`; that's fine while the
+> specs match (they're kept identical on purpose).
+
 ### Deploying from GitHub
 
 A GitHub Actions workflow (`.github/workflows/deploy.yml`) can deploy via a **self-hosted
@@ -110,8 +136,8 @@ kubectl kustomize kustomize/ | kubeconform -strict -ignore-missing-schemas -   #
 ConfigMap a workload references exists, NFS PVs stay on **v3** (the DS214 is v3-only) with no
 `REPLACE` placeholders, the Z-Wave controller `hostPath` is the real committed by-id path (not a
 stub that would crash-loop zwave-js-ui and drop the locks), the must-back-up PVCs are present,
-and the documented NodePort/websocket ports (`30123`, `3000`) don't drift. CI also runs
-`kustomize build | kubeconform` for Kubernetes schema validation.
+and the documented NodePort/websocket ports (`30123`, `3000`, hawksnest `30080`) don't drift.
+CI also runs `kustomize build | kubeconform` for Kubernetes schema validation.
 
 ## Bring-up order
 
@@ -132,6 +158,26 @@ If HA starts before MariaDB is ready it will retry the recorder connection; no a
 - **Tailscale:** `http://<PC-tailscale-ip>:8123`. No public internet ports are opened.
 
 Complete onboarding (create the owner account, set name/timezone).
+
+## Accessing the Hawksnest dashboard
+
+The dashboard is on **NodePort `30080`**. nginx in the pod reverse-proxies `/api` +
+`/api/websocket` to the HA Service, so the browser only ever talks to one origin (no CORS).
+
+- **Local testing (no Tailscale needed)** — easiest is a port-forward from the Dragonfly host:
+  ```bash
+  kubectl -n home-automation port-forward svc/hawksnest 8080:80
+  # then open http://localhost:8080
+  ```
+  Or reach the NodePort directly at `http://<dragonfly-wsl-ip>:30080`.
+- **LAN:** `http://<PC-LAN-IP>:8080` once the Windows portproxy maps `0.0.0.0:8080 → wsl:30080`
+  (mirrors `portproxy-ha.ps1`; see the Hawksnest repo's `deploy/windows/portproxy-hawksnest.ps1`).
+- **Tailscale:** the same `:8080` over the host's Tailscale IP, when Tailscale is back online.
+
+First run: open **Settings** in the dashboard (the HA URL already defaults to this same origin /
+proxy), paste a Home Assistant **long-lived access token** (HA → profile → Long-lived access
+tokens), and **Connect**. The header pill should read **Connected**. Editing automations
+additionally requires the token to belong to an **admin** user.
 
 ## Post-deploy configuration (UI-driven)
 

@@ -73,7 +73,10 @@ Windows 11 (user Sonic, LAN 192.168.4.34)
          │     initContainers: wait-for-mariadb, seed-config
          ├─ Deployment zwave-js-ui       -> Service (ws :3000, ui :8091)  [PARKED replicas=0]
          ├─ Deployment mariadb           -> Service mariadb:3306  (recorder DB)
-         └─ Deployment mosquitto         -> Service (MQTT :1883)  [idle; future Ratgdo]
+         ├─ Deployment mosquitto         -> Service (MQTT :1883)  [idle; future Ratgdo]
+         └─ Deployment hawksnest         -> Service NodePort 30080 (dashboard SPA;
+         │                                   nginx proxies /api + /api/websocket -> HA)
+         │                                   image hawksnest:local (built in Hawksnest repo)
          PVCs:
            ha-config       -> NFS  (MUST BACK UP)
            zwavejs-config  -> NFS  (MUST BACK UP — losing it = re-pair every lock)

@@ -17,6 +17,8 @@ resources:
   - home-assistant/configmap.yaml
   - home-assistant/deployment.yaml
   - home-assistant/service.yaml
+  - hawksnest/deployment.yaml
+  - hawksnest/service.yaml
 
 # Credentials are generated from local, untracked files (see secrets/*.example).
 # Copy the .example files, fill them in, then `kubectl apply -k kustomize/`.

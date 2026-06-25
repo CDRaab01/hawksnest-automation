@@ -1,0 +1,53 @@
+# Hawksnest dashboard — the React SPA that fronts Home Assistant. Its nginx serves
+# the built app AND reverse-proxies /api + /api/websocket to the in-cluster HA
+# Service, so the browser only ever talks to one origin (no CORS).
+#
+# Vendored from the Hawksnest repo's deploy/k8s/ so the whole stack comes up from
+# this one umbrella kustomize. The image (hawksnest:local) is built from the
+# Hawksnest repo's Dockerfile and imported into K3s containerd — there is no
+# registry (see DEPLOYMENT.md "Deploy the Hawksnest dashboard").
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hawksnest
+  labels:
+    app: hawksnest
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: hawksnest
+  template:
+    metadata:
+      labels:
+        app: hawksnest
+    spec:
+      containers:
+        - name: hawksnest
+          # Built + imported into K3s containerd on the Dragonfly host; no registry.
+          image: hawksnest:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
