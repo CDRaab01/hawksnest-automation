@@ -39,15 +39,28 @@ Copy the `usb-...-if00` path into `kustomize/zwave-js-ui/deployment.yaml`
 
 ## Make it survive reboots (scheduled task)
 
-Create a combined boot script, e.g. `C:\ha\boot.ps1`. Run each script in its **own**
-`powershell -File` process so that if one fails (e.g. `attach-zwa2.ps1` when the stick
-isn't plugged in yet, which exits non-zero), it does **not** abort the rest — the
-portproxy still gets set up:
+Use the committed **`boot.ps1`** — it orchestrates all three recovery steps in order,
+each PowerShell step in its own process so one failure can't abort the rest:
+
+1. `attach-zwa2.ps1` — re-attach the ZWA-2 (usbipd).
+2. `portproxy-ha.ps1` — re-expose HA on the LAN/Tailscale.
+3. `scripts/zwave-usb-recover.sh` (inside Dragonfly, as root) — wait for the stick +
+   k3s, **clear any stale by-id directory squat**, recreate the udev symlink, and
+   (re)start `zwave-js-ui` so it mounts the real device. This step is what stops the
+   `is a directory, cannot open /dev/zwave (ZW0100)` failure after an unclean restart.
+
+Copy the three `.ps1` files into a stable folder (e.g. `C:\ha\`) so `boot.ps1`'s
+relative calls resolve; the bash recovery script stays in the repo checkout inside WSL:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\ha\attach-zwa2.ps1"
-Start-Sleep -Seconds 5
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\ha\portproxy-ha.ps1"
+mkdir C:\ha -Force
+copy <repo>\windows\attach-zwa2.ps1  C:\ha\
+copy <repo>\windows\portproxy-ha.ps1 C:\ha\
+copy <repo>\windows\boot.ps1         C:\ha\
+# Sanity check it end-to-end once (elevated):
+C:\ha\boot.ps1
+# If your WSL username/repo path differ from the defaults:
+#   C:\ha\boot.ps1 -Distribution Dragonfly -RepoPathWsl /home/<you>/hawksnest-automation
 ```
 
 Register it to run at logon with highest privileges:
@@ -65,7 +78,11 @@ Register-ScheduledTask -TaskName "HomeAssistant-Boot" `
 
 1. Reboot the Windows host.
 2. Let the scheduled task run (or run `boot.ps1` manually).
-3. In WSL: `ls -l /dev/serial/by-id/` shows the ZWA-2.
-4. In Z-Wave JS UI, the controller is online and all locks report state — **no
+3. In WSL: `ls -l /dev/serial/by-id/` shows the ZWA-2 as a **symlink** → `../../ttyACM0`
+   (a *directory* there means the squat happened — `boot.ps1` step 3 should have cleaned
+   it; re-run `scripts/zwave-usb-recover.sh` if you ran the steps out of order).
+4. The pod sees the real device:
+   `kubectl -n home-automation exec deploy/zwave-js-ui -- ls -l /dev/zwave` → `crw-…166, 0`.
+5. In Z-Wave JS UI, the controller is online and all locks report state — **no
    re-pairing required**.
-5. HA is reachable at `http://<PC-LAN-IP>:8123` and over Tailscale.
+6. HA is reachable at `http://<PC-LAN-IP>:8123` and over Tailscale.
