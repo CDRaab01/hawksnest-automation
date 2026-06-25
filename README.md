@@ -96,6 +96,23 @@ or automatically on push to `main`. The cluster is behind NAT, so the runner liv
 cluster side; nothing is exposed to the internet. Setup and usage:
 [`DEPLOYMENT.md` §10](./DEPLOYMENT.md#10-deploy-from-github-self-hosted-actions-runner).
 
+## Validation / tests
+
+Static checks run in CI (`.github/workflows/ci.yml`, GitHub-hosted — no cluster needed)
+and can be run by hand:
+
+```bash
+python3 tests/validate_manifests.py   # cross-resource invariants (PyYAML only)
+kubectl kustomize kustomize/ | kubeconform -strict -ignore-missing-schemas -   # schema
+```
+
+`validate_manifests.py` asserts the wiring schema validation can't see: every PVC / Secret /
+ConfigMap a workload references exists, NFS PVs stay on **v3** (the DS214 is v3-only) with no
+`REPLACE` placeholders, the Z-Wave controller `hostPath` is the real committed by-id path (not a
+stub that would crash-loop zwave-js-ui and drop the locks), the must-back-up PVCs are present,
+and the documented NodePort/websocket ports (`30123`, `3000`) don't drift. CI also runs
+`kustomize build | kubeconform` for Kubernetes schema validation.
+
 ## Bring-up order
 
 `kubectl apply -k` creates everything at once, but services settle in this order:
