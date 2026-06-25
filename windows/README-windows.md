@@ -50,16 +50,67 @@ Start-Sleep -Seconds 5
 powershell -NoProfile -ExecutionPolicy Bypass -File "C:\ha\portproxy-ha.ps1"
 ```
 
-Register it to run at logon with highest privileges:
+Register it to run **at startup** with highest privileges. Use `-AtStartup`, **not**
+`-AtLogOn`: if the PC reboots and nobody interactively logs in, an `-AtLogOn` task never
+fires, so the portproxy/USB attach are never re-created and HA looks dead even though the
+pods are healthy. Running at startup requires a principal that can run whether or not a user
+is logged on (`SYSTEM`), so the task can re-create the portproxy and re-attach the stick on
+a headless reboot:
 
 ```powershell
 $action  = New-ScheduledTaskAction -Execute "powershell.exe" `
   -Argument "-NoProfile -ExecutionPolicy Bypass -File C:\ha\boot.ps1"
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -RunLevel Highest
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
 Register-ScheduledTask -TaskName "HomeAssistant-Boot" `
   -Action $action -Trigger $trigger -Principal $principal
 ```
+
+> Note: `usbipd attach` from a `SYSTEM`-context task can be finicky depending on your
+> usbipd-win version. If the Z-Wave stick doesn't attach on a headless boot, keep an
+> additional `-AtLogOn` task (run as your user, `-RunLevel Highest`) for `attach-zwa2.ps1`
+> specifically, and leave `portproxy-ha.ps1` on the `-AtStartup`/`SYSTEM` task — the
+> network bridge is the part that must come up without a logon.
+
+## "HA unreachable after a reboot" — troubleshooting
+
+This is the single most common failure. Symptom: `http://<PC-LAN-IP>:8123` doesn't load
+from the phone **or** the PC, but `kubectl get pods -n home-automation` shows everything
+`Running`. That means the cluster is fine and the **Windows→WSL2 bridge is stale** — WSL2
+got a new IP on reboot and the `netsh portproxy` still points at the old one.
+
+Two tell-tale fingerprints of a recent reboot:
+- Pods show recent `RESTARTS ... (Nh ago)`.
+- The HA log spams `DNS server returned general failure` (e.g. for `api.ring.com`) —
+  WSL2 regenerated its networking and CoreDNS's upstream resolver is stale.
+
+Fix, in an **elevated** PowerShell:
+
+```powershell
+# 1. Re-create the portproxy against the live WSL2 IP (or just run heal-ha.ps1):
+.\portproxy-ha.ps1
+
+# 2. Verify the mapping now matches the live WSL2 IP:
+wsl -d Dragonfly -- hostname -I          # current WSL2 IP
+netsh interface portproxy show v4tov4    # connectaddress should equal the IP above
+
+# 3. Re-attach the Z-Wave stick (the same reboot usually drops it):
+.\attach-zwa2.ps1                        # then in WSL: ls -l /dev/serial/by-id/
+
+# 4. Clear the stale in-pod DNS (fixes the Ring "DNS server returned general failure"):
+wsl --shutdown                           # then let WSL/K3s/the boot task come back
+#   …or, without bouncing WSL:
+#   kubectl -n kube-system rollout restart deploy coredns
+#   kubectl -n home-automation rollout restart deploy home-assistant
+```
+
+`heal-ha.ps1` automates steps 1–2: it compares the live WSL2 IP to the current portproxy
+target and re-creates the mapping only if they differ. Safe to run anytime, and a good
+candidate for a periodic scheduled task.
+
+If the portproxy already matches the live IP but HA is still unreachable, check the firewall
+rule (`HomeAssistant-8123`) and confirm the NodePort answers from inside WSL:
+`curl -sI http://localhost:30123`.
 
 ## Reboot drill (acceptance check)
 
