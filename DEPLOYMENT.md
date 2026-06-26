@@ -179,6 +179,35 @@ by service name. Remote access is **Tailscale only**; no public internet ports.
    vendor ID, shared by bare ESP32 dev boards — if an ESP32 is plugged in at the same time,
    select by bus id instead. Stable device:
    `/dev/serial/by-id/usb-Nabu_Casa_ZWA-2_9070690E14E4-if00` (filled into the manifest).
+   - ⚠️ **Keep `C:\ha\attach-zwa2.ps1` in sync with the repo.** A stale copy that hunts for
+     the old `10c4:ea60` will error (`not found in 'usbipd list'`) and the logon task won't
+     attach the stick. Refresh it with
+     `cp ~/hawksnest-automation/windows/attach-zwa2.ps1 /mnt/c/ha/attach-zwa2.ps1`.
+10. **zwave-js-ui empty-dir boot race (USB ordering).** On boot the pod can start *before*
+   `attach-zwa2.ps1` passes the ZWA-2 into WSL2. With the device path absent, kubelet
+   (hostPath `type` unset) bind-creates an **empty directory** at
+   `/dev/serial/by-id/usb-Nabu_Casa_ZWA-2_...-if00` and mounts it at `/dev/zwave`. The pod
+   then runs **1/1 but the WS server never starts**, so HA shows *"Cannot connect to host
+   zwave-js-ui:3000"* even though the Service endpoints are present. Worse, that squatting
+   directory **blocks udev** from creating the real by-id symlink when the stick attaches a
+   moment later.
+   - **Symptoms:** `kubectl exec deploy/zwave-js-ui -- ls -l /dev/zwave` shows `total 0`
+     (a directory) instead of a `crw-` char device; `ls -l /dev/serial/by-id/` shows the
+     `...-if00` name as a **directory** while `/dev/ttyACM0` exists as a real char device
+     (compare timestamps — the dir predates the device by a minute or two).
+   - **Recovery:**
+     ```bash
+     kubectl scale deploy/zwave-js-ui --replicas=0 -n home-automation
+     sudo rm -rf /dev/serial/by-id/usb-Nabu_Casa_ZWA-2_9070690E14E4-if00   # the bogus dir
+     sudo udevadm trigger --action=add /dev/ttyACM0                         # recreate symlink
+     ls -l /dev/serial/by-id/                                               # expect ...-if00 -> ../../ttyACM0
+     kubectl scale deploy/zwave-js-ui --replicas=1 -n home-automation
+     ```
+     If the symlink doesn't reappear, force a fresh enumeration from Windows
+     (`usbipd detach --busid <id>` then `usbipd attach --busid <id> --wsl Dragonfly`).
+   - **Prevent:** make sure the logon task attaches the stick *before* K3s starts pods, and
+     keep `attach-zwa2.ps1` current (gotcha #9). After any host reboot, verify
+     `ls -l /dev/zwave` in the pod is a `crw-` device, not `total 0`.
 
 ---
 
