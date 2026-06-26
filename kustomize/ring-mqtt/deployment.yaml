@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ring-mqtt
+  labels:
+    app: ring-mqtt
+spec:
+  replicas: 1
+  # Recreate: ring-mqtt-data is RWO and ring-mqtt is a singleton (it owns the Ring
+  # refresh token / session state).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ring-mqtt
+  template:
+    metadata:
+      labels:
+        app: ring-mqtt
+    spec:
+      initContainers:
+        # Don't start ring-mqtt until the broker is reachable, so first-boot logs
+        # aren't full of MQTT connection retries. Mirrors HA's wait-for-mariadb.
+        - name: wait-for-mqtt
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "waiting for mosquitto:1883 ..."
+              until nc -w2 mosquitto 1883 </dev/null >/dev/null 2>&1; do
+                sleep 2
+              done
+              echo "mosquitto is up"
+        # Seeds /data/config.json on first boot only, injecting the broker URL with the
+        # MQTT password (from the ring-mqtt-credentials Secret). ring-mqtt rewrites this
+        # file at runtime, so we never clobber an existing one — user/runtime edits and
+        # the generated ring-state.json (refresh token) survive restarts.
+        #
+        # The password is embedded in a URL, so it MUST be URL-safe (no '/', '@', ':',
+        # '#'); '#' is the sed delimiter below. See secrets/ring-mqtt.env.example.
+        - name: seed-config
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              if [ ! -f /data/config.json ]; then
+                echo "seeding config.json"
+                url="mqtt://ring:${RING_MQTT_PASSWORD}@mosquitto.home-automation.svc.cluster.local:1883"
+                sed "s#MQTT_URL_PLACEHOLDER#${url}#" /seed/config.json > /data/config.json
+              fi
+          envFrom:
+            - secretRef:
+                name: ring-mqtt-credentials
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: seed
+              mountPath: /seed
+      containers:
+        - name: ring-mqtt
+          image: tsightler/ring-mqtt:latest
+          ports:
+            - name: rtsp
+              containerPort: 8554
+            - name: webrtc-tcp
+              containerPort: 8555
+              protocol: TCP
+            - name: webrtc-udp
+              containerPort: 8555
+              protocol: UDP
+            - name: go2rtc-api
+              containerPort: 1984
+            - name: web-ui
+              containerPort: 55123
+          env:
+            - name: TZ
+              value: "America/New_York"   # adjust if needed
+          envFrom:
+            - secretRef:
+                name: ring-mqtt-credentials
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          # The web UI on 55123 comes up even before the Ring token is generated (it's
+          # where you generate the token), so the rollout succeeds; generating the token
+          # is a one-time post-deploy step (see README / DEPLOYMENT). Generous thresholds
+          # for the slow npm boot.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: web-ui
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /
+              port: web-ui
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ring-mqtt-data
+        - name: seed
+          configMap:
+            name: ring-mqtt-seed

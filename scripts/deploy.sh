@@ -19,7 +19,7 @@
 #   KUBECONFIG              kubeconfig path        (default: ~/.kube/config)
 #   HAWKSNEST_SECRETS_DIR  where the real secrets live on the runner host
 #                          (default: ~/hawksnest-secrets) — must contain
-#                          mariadb.env and mosquitto.passwd
+#                          mariadb.env, mosquitto.passwd and ring-mqtt.env
 #   UNPARK_ZWAVE           "true" forces zwave-js-ui to run even while the device
 #                          path is still a REPLACE- placeholder (escape hatch).
 #                          Default false: park ONLY if the path is a placeholder;
@@ -78,6 +78,7 @@ need_secret() {
 mkdir -p "${SECRETS_DST}"
 need_secret "mariadb.env"
 need_secret "mosquitto.passwd"
+need_secret "ring-mqtt.env"
 
 # --- validate the build before touching the cluster ---------------------------
 log "Validating kustomize build"
@@ -117,7 +118,7 @@ else
 fi
 
 # --- wait for the always-on workloads to settle -------------------------------
-WORKLOADS=(mariadb mosquitto home-assistant)
+WORKLOADS=(mariadb mosquitto home-assistant ring-mqtt)
 [ "${zwave_should_run}" = "true" ] && WORKLOADS+=(zwave-js-ui)
 
 log "Waiting for rollouts (timeout ${ROLLOUT_TIMEOUT} each): ${WORKLOADS[*]}"

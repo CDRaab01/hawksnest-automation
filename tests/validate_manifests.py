@@ -152,8 +152,15 @@ def main() -> int:
         check("REPLACE" not in path and bool(path),
               f"PV '{pv_name}' nfs.path is unset/placeholder: '{path}'")
 
-    # 7. The two must-back-up PVCs exist (losing zwavejs-config = re-pair everything).
-    for required in ("ha-config", "zwavejs-config", "mosquitto-data", "mariadb-data"):
+    # 7. The must-back-up PVCs exist (losing zwavejs-config = re-pair everything;
+    #    losing ring-mqtt-data = re-authenticate the Ring account with 2FA).
+    for required in (
+        "ha-config",
+        "zwavejs-config",
+        "mosquitto-data",
+        "mariadb-data",
+        "ring-mqtt-data",
+    ):
         check(required in pvcs, f"required PVC '{required}' is missing")
     # mariadb datadir must stay node-local, never NFS (file-locking risk).
     if "mariadb-data" in pvcs:
@@ -195,6 +202,10 @@ def main() -> int:
     if zwave_svc:
         zports = {p["port"] for p in zwave_svc["spec"]["ports"]}
         check(3000 in zports, "zwave-js-ui must expose port 3000 (HA connects to the WS here)")
+    ring_svc = next((s for s in services if name(s) == "ring-mqtt"), None)
+    if ring_svc:
+        rports = {p["port"] for p in ring_svc["spec"]["ports"]}
+        check(8554 in rports, "ring-mqtt must expose port 8554 (HA pulls the camera RTSP stream here)")
 
     # 10. Every Service selects a Deployment that exists (no dangling selectors).
     dep_apps = {name(d): pod_spec(d) for d in deployments}

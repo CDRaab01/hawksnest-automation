@@ -3,7 +3,7 @@
 Living status doc for the HA + Z-Wave deployment. Update at the end of each working
 session so the next one can pick up without re-deriving the fiddly bits.
 
-_Last updated: 2026-06-23 (front + back door locks live; garage + user codes pending)_
+_Last updated: 2026-06-26 (ring-mqtt manifests added; front + back door locks live; garage + user codes pending)_
 
 ## TL;DR — where we are
 
@@ -44,7 +44,12 @@ Windows host → usbipd (303a:4001) → WSL2 /dev/ttyACM0 → by-id symlink
   Do once all locks are in (one pass via the User Code CC / Users tab).
 - **ZEN72 dimmer(s)** — not added. Worth doing one *between* the PC and the doors to
   build mesh; lock RSSI is ~-87 dBm (workable but middling, no repeaters yet).
-- **Ring integration** — not started.
+- **ring-mqtt** — manifests added this session (`kustomize/ring-mqtt/`), not yet deployed.
+  To finish: create the `ring` mosquitto user + `ring-mqtt.env`, `apply -k`, then generate
+  the Ring token (`kubectl exec -it deploy/ring-mqtt -- /app/ring-mqtt/init-ring-mqtt.js`,
+  one-time 2FA) and add the HA MQTT integration. See DEPLOYMENT.md §7b.
+- **Frigate** — intentionally **parked**. Ring has no continuous local RTSP stream, so it
+  can't be a Frigate/NVR source; revisit Frigate only when an RTSP-capable camera exists.
 - **Tailscale** — not installed yet on the PC. Remote HA access (V1 item) still open.
   Once installed, `portproxy-ha.ps1` already exposes HA at `http://<tailscale-ip>:8123`.
 

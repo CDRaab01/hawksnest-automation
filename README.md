@@ -15,7 +15,8 @@ start there if you're picking this up fresh.
 | `home-assistant` | HA Core; UI on a NodePort. Talks to Z-Wave JS over websocket. | `ha-config` (NFS) ⭐      |
 | `zwave-js-ui`    | Owns the ZWA-2 serial stick; manages the Z-Wave mesh.         | `zwavejs-config` (NFS) ⭐ |
 | `mariadb`        | HA recorder database (replaces SQLite-on-NFS).                | `mariadb-data` (local-path) |
-| `mosquitto`      | MQTT broker — installed now for future Ratgdo; harmless idle. | `mosquitto-data` (NFS)   |
+| `mosquitto`      | MQTT broker — used by `ring-mqtt`; also seam for future Ratgdo. | `mosquitto-data` (NFS)   |
+| `ring-mqtt`      | Bridges Ring cameras/doorbell/sensors to MQTT; on-demand live video via RTSP. | `ring-mqtt-data` (NFS) ⭐ |
 
 ⭐ = **must be backed up** (see [Backups](#backups)).
 
@@ -34,7 +35,7 @@ kustomize/                # all Kubernetes manifests (apply with kustomize)
   namespace.yaml
   kustomization.yaml      # wires components + secretGenerator
   storage/                # NFS PVs + PVCs (+ mariadb local-path PVC)
-  mariadb/  mosquitto/  zwave-js-ui/  home-assistant/
+  mariadb/  mosquitto/  zwave-js-ui/  home-assistant/  ring-mqtt/
   secrets/                # *.example templates only; real secrets are gitignored
 windows/                  # usbipd attach + portproxy PowerShell + host README
 ```
@@ -65,9 +66,17 @@ cp kustomize/secrets/mariadb.env.example kustomize/secrets/mariadb.env
 #   openssl rand -base64 24
 
 # create the mosquitto password file (hashed). Either install the tool
-# (apt-get install -y mosquitto) and run mosquitto_passwd directly, or via docker:
-mosquitto_passwd -c -b kustomize/secrets/mosquitto.passwd ratgdo "SOME_PASSWORD"
+# (apt-get install -y mosquitto) and run mosquitto_passwd directly, or via docker.
+# Create the 'ring' user (used by ring-mqtt); -c only on the FIRST user. Use a
+# URL-safe password (letters/digits/-/_) — it is embedded in the ring-mqtt MQTT URL.
+mosquitto_passwd -c -b kustomize/secrets/mosquitto.passwd ring "URL_SAFE_PASSWORD"
+# optional extra user for future Ratgdo (no -c, so it appends):
+# mosquitto_passwd -b kustomize/secrets/mosquitto.passwd ratgdo "SOME_PASSWORD"
 chmod 0600 kustomize/secrets/mosquitto.passwd
+
+# ring-mqtt MQTT password — must match the 'ring' user password above.
+cp kustomize/secrets/ring-mqtt.env.example kustomize/secrets/ring-mqtt.env
+# edit kustomize/secrets/ring-mqtt.env: set RING_MQTT_PASSWORD=URL_SAFE_PASSWORD
 ```
 
 > The `secrets/` dir lives **inside** `kustomize/` on purpose: kustomize refuses to
@@ -110,7 +119,8 @@ kubectl kustomize kustomize/ | kubeconform -strict -ignore-missing-schemas -   #
 ConfigMap a workload references exists, NFS PVs stay on **v3** (the DS214 is v3-only) with no
 `REPLACE` placeholders, the Z-Wave controller `hostPath` is the real committed by-id path (not a
 stub that would crash-loop zwave-js-ui and drop the locks), the must-back-up PVCs are present,
-and the documented NodePort/websocket ports (`30123`, `3000`) don't drift. CI also runs
+and the documented ports (HA NodePort `30123`, zwave-js-ui WS `3000`, ring-mqtt RTSP
+`8554`) don't drift. CI also runs
 `kustomize build | kubeconform` for Kubernetes schema validation.
 
 ## Bring-up order
@@ -119,10 +129,12 @@ and the documented NodePort/websocket ports (`30123`, `3000`) don't drift. CI al
 
 1. **Storage** — PVs/PVCs bind (NFS reachable; `local-path` provisions `mariadb-data`).
 2. **MariaDB** — becomes Ready (initializes the `homeassistant` DB on first boot).
-3. **Mosquitto** — Ready (idle until a device connects).
+3. **Mosquitto** — Ready (the `ring` user must exist in the password file).
 4. **Z-Wave JS UI** — requires the USB stick already attached into WSL2.
 5. **Home Assistant** — initContainer seeds config + `secrets.yaml`, then HA starts and
    connects to MariaDB.
+6. **ring-mqtt** — waits for Mosquitto, seeds `config.json`, then serves its web UI
+   on `:55123` (the Ring token is generated once there, post-deploy — see below).
 
 If HA starts before MariaDB is ready it will retry the recorder connection; no action needed.
 
@@ -164,21 +176,46 @@ Set code slots on each lock (via the lock entity / Z-Wave JS UI user-code panel)
 slot **1 = Christian**, slot **2 = Elizabeth**, slots **3+** reserved for guests.
 Guest-code expiry automation is deferred, but the slot structure is in place.
 
-### Ring (cloud)
+### Ring via ring-mqtt (live video + events)
 
-**Settings → Devices & Services → Add Integration → Ring**, sign in (expect periodic
-re-auth). Doorbell/motion/snapshot entities appear for future automations. Nothing about
-lock control depends on Ring.
+`ring-mqtt` bridges Ring devices into HA over MQTT and exposes **on-demand** live video
+via an RTSP/go2rtc gateway. (Ring has no continuous local stream, so this is *not* a
+Frigate/NVR source — see [DEPLOYMENT.md](./DEPLOYMENT.md). Frigate is parked until an
+RTSP-capable camera exists.)
+
+1. **Add the MQTT integration in HA** (if not already): **Settings → Devices & Services →
+   Add Integration → MQTT**, broker `mosquitto`, port `1883`, with a broker user.
+2. **Generate the Ring token (one-time, interactive 2FA) via the ring-mqtt web UI:**
+   ```bash
+   kubectl port-forward deploy/ring-mqtt 55123:55123 -n home-automation
+   ```
+   Open `http://localhost:55123` (WSL2 forwards localhost to Windows), sign in with your
+   Ring email/password + 2FA code. The refresh token is written to `ring-state.json` on
+   the `ring-mqtt-data` PVC.
+3. ring-mqtt connects to Ring and publishes MQTT discovery — **Ring cameras, doorbell
+   ding, motion, and battery entities appear in HA automatically.** Open a camera to
+   confirm on-demand live view.
+
+> The token grants full access to the Ring account — it lives only on the backed-up
+> `ring-mqtt-data` PVC, never in git.
+
+### Ring (official cloud integration — optional)
+
+The built-in HA Ring integration (**Add Integration → Ring**) can be used instead of, or
+alongside, ring-mqtt for doorbell/motion/snapshot entities. Nothing about lock control
+depends on Ring either way.
 
 ## Backups
 
-The two PVCs that **must** be backed up:
+The PVCs that **must** be backed up:
 
 - **`zwavejs-config`** — the Z-Wave network + S2 security keys. Losing it means
   **re-pairing every device** (and re-entering each lock's programming code).
 - **`ha-config`** — HA configuration, automations, dashboards.
+- **`ring-mqtt-data`** — the Ring account refresh token. Losing it means
+  **re-authenticating with 2FA** (a quick re-run of the token step, but back it up).
 
-Both live on the Synology NFS export. Recommended: enable **Synology snapshots** on that
+All live on the Synology NFS export. Recommended: enable **Synology snapshots** on that
 shared folder (cheapest, off-host). The S2 keys are additionally stored in the password
 manager as a belt-and-suspenders copy.
 
