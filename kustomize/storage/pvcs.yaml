@@ -1,7 +1,9 @@
 # PersistentVolumeClaims.
 #
-# ha-config and zwavejs-config bind to the NFS PVs above (these are the TWO PVCs that
-# MUST be backed up). mosquitto-data also lives on NFS.
+# ha-config, zwavejs-config and ring-mqtt-data bind to the NFS PVs above. ha-config and
+# zwavejs-config MUST be backed up; ring-mqtt-data also MUST be backed up because it
+# holds the Ring account refresh token (losing it means re-authenticating with 2FA).
+# mosquitto-data also lives on NFS.
 #
 # mariadb-data deliberately uses K3s' node-local `local-path` StorageClass, NOT NFS:
 # a database server's datadir over NFS reintroduces the same file-locking risk we are
@@ -58,3 +60,16 @@ spec:
   resources:
     requests:
       storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ring-mqtt-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs-manual
+  volumeName: ring-mqtt-data
+  resources:
+    requests:
+      storage: 1Gi

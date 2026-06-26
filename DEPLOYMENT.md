@@ -46,10 +46,10 @@ pending physical arrival of the controller).
 | **NFS** | **v3 only** — the DS214 does *not* support NFSv4.1 (mount returns "Protocol not supported") |
 | NFS export | **`/volume3/home-automation`** (chosen over the near-full Volume 1) |
 | NFS export rule | allow **`192.168.4.0/24`**, Read/Write, **Map all users to admin**, async, non-privileged ports allowed |
-| NFS subfolders (must exist) | `ha-config`, `zwavejs-config`, `mosquitto-data` under the export |
+| NFS subfolders (must exist) | `ha-config`, `zwavejs-config`, `mosquitto-data`, `ring-mqtt-data` under the export |
 | Repo location | `~/hawksnest-automation` on Dragonfly |
 | Active branch | `claude/happy-babbage-07raqh` |
-| Secrets | `kustomize/secrets/{mariadb.env,mosquitto.passwd}` (gitignored; **inside** the kustomize root on purpose — see §6) |
+| Secrets | `kustomize/secrets/{mariadb.env,mosquitto.passwd,ring-mqtt.env}` (gitignored; **inside** the kustomize root on purpose — see §6) |
 
 > ⚠️ **Cross-subnet gotcha:** the PC (`192.168.4.x`) and the NAS (`192.168.5.x`) are on
 > **different /24s** that the router bridges. WSL2 NATs outbound traffic so the NAS sees
@@ -73,17 +73,19 @@ Windows 11 (user Sonic, LAN 192.168.4.34)
          │     initContainers: wait-for-mariadb, seed-config
          ├─ Deployment zwave-js-ui       -> Service (ws :3000, ui :8091)  [PARKED replicas=0]
          ├─ Deployment mariadb           -> Service mariadb:3306  (recorder DB)
-         └─ Deployment mosquitto         -> Service (MQTT :1883)  [idle; future Ratgdo]
+         ├─ Deployment mosquitto         -> Service (MQTT :1883)  (broker; used by ring-mqtt)
+         └─ Deployment ring-mqtt         -> Service (rtsp :8554, webrtc :8555, api :1984, web :8080)
          PVCs:
            ha-config       -> NFS  (MUST BACK UP)
            zwavejs-config  -> NFS  (MUST BACK UP — losing it = re-pair every lock)
+           ring-mqtt-data  -> NFS  (MUST BACK UP — holds the Ring refresh token)
            mosquitto-data  -> NFS
            mariadb-data    -> local-path (node-local; recorder history; regenerable)
 ```
 
 Manifests are kustomize: `kubectl apply -k kustomize/`. The `secretGenerator` in
-`kustomize/kustomization.yaml` builds `mariadb-credentials` and `mosquitto-credentials`
-from the gitignored files in `kustomize/secrets/`.
+`kustomize/kustomization.yaml` builds `mariadb-credentials`, `mosquitto-credentials`, and
+`ring-mqtt-credentials` from the gitignored files in `kustomize/secrets/`.
 
 **Networking decision:** HA is exposed via **NodePort 30123 + Windows portproxy**
 (not host-network), keeping cluster DNS intact so HA resolves `mariadb`/`zwave-js-ui`
@@ -107,15 +109,18 @@ by service name. Remote access is **Tailscale only**; no public internet ports.
 5. **kubeconfig:** copy `/etc/rancher/k3s/k3s.yaml` to `~/.kube/config`, `chown`, export `KUBECONFIG`.
 6. **Synology NFS:** enable NFS service; share on Volume 3 (`/volume3/home-automation`);
    NFS rule `192.168.4.0/24` RW, map-all-to-admin, async, non-priv ports; create the
-   three subfolders. Verify from the node:
+   four subfolders (`ha-config`, `zwavejs-config`, `mosquitto-data`, `ring-mqtt-data`).
+   Verify from the node:
    `sudo mount -t nfs -o vers=3 192.168.5.78:/volume3/home-automation /mnt/x`.
 7. **Repo + secrets:**
    ```bash
    git clone https://github.com/CDRaab01/hawksnest-automation.git ~/hawksnest-automation
    cd ~/hawksnest-automation && git checkout claude/happy-babbage-07raqh
    cp kustomize/secrets/mariadb.env.example kustomize/secrets/mariadb.env   # set strong pw (URL-safe; see §6)
-   mosquitto_passwd -c -b kustomize/secrets/mosquitto.passwd ratgdo '<pw>'  # needs the `mosquitto` apt pkg
+   mosquitto_passwd -c -b kustomize/secrets/mosquitto.passwd ring '<url-safe-pw>'  # needs the `mosquitto` apt pkg
+   # mosquitto_passwd -b kustomize/secrets/mosquitto.passwd ratgdo '<pw>'  # optional, appends (no -c)
    chmod 0600 kustomize/secrets/mosquitto.passwd
+   cp kustomize/secrets/ring-mqtt.env.example kustomize/secrets/ring-mqtt.env  # set RING_MQTT_PASSWORD=<url-safe-pw>
    ```
 8. **Deploy:**
    ```bash
@@ -203,11 +208,44 @@ See [`README.md`](./README.md) for the fuller post-deploy/pairing walkthrough an
 
 ---
 
+## 7b. ring-mqtt bring-up (Ring cameras/doorbell into HA)
+
+`ring-mqtt` bridges Ring devices to MQTT and exposes **on-demand** live video over RTSP.
+It is **not** a Frigate/NVR source — Ring has no continuous local stream, and streaming
+continuously would suppress Ring's own motion/ding events. **Frigate is parked** until an
+RTSP-capable camera (Reolink/Amcrest/etc.) exists.
+
+1. Ensure the **`ring` user** is in `kustomize/secrets/mosquitto.passwd` and
+   `RING_MQTT_PASSWORD` in `kustomize/secrets/ring-mqtt.env` **matches** it. The password
+   is embedded in the broker URL, so keep it **URL-safe** (letters/digits/`-`/`_`).
+   (Mosquitto must be restarted after adding the user: `kubectl rollout restart
+   deploy/mosquitto -n home-automation`.)
+2. `kubectl apply -k kustomize/`. ring-mqtt waits for Mosquitto, seeds `/data/config.json`
+   (broker URL injected from the Secret), then serves its status web UI on `:8080`.
+3. **Generate the Ring refresh token (one-time, interactive 2FA):**
+   ```bash
+   kubectl exec -it deploy/ring-mqtt -n home-automation -- /app/ring-mqtt/init-ring-mqtt.js
+   ```
+   Enter the Ring email/password + 2FA code. The token is stored in `ring-state.json` on
+   the `ring-mqtt-data` PVC (NFS, backed up). Alternative: `kubectl port-forward
+   deploy/ring-mqtt 8080:8080 -n home-automation` and use the web UI.
+4. In HA, add the **MQTT** integration (broker `mosquitto`, port `1883`) if not already.
+   Ring devices then appear automatically via MQTT discovery (camera live view, doorbell
+   ding, motion, battery).
+5. **Reboot drill:** reboot the host → ring-mqtt reconnects and the token persists on NFS;
+   no re-auth needed.
+
+> The refresh token grants full access to the Ring account. It lives only on the
+> backed-up `ring-mqtt-data` PVC, never in git.
+
+---
+
 ## 8. Backups (critical)
 
-- **`zwavejs-config`** and **`ha-config`** PVCs are the must-back-up volumes. Enable
-  **Synology snapshots** on the `home-automation` shared folder. The S2 keys also go in the
-  password manager.
+- **`zwavejs-config`**, **`ha-config`**, and **`ring-mqtt-data`** PVCs are the must-back-up
+  volumes (`ring-mqtt-data` holds the Ring account refresh token; losing it means
+  re-authenticating with 2FA). Enable **Synology snapshots** on the `home-automation`
+  shared folder. The S2 keys also go in the password manager.
 - `mariadb-data` is node-local and regenerable — not backed up by design.
 
 ## 9. Possible follow-on: GitOps
@@ -258,6 +296,7 @@ Run as the same unix user that owns `~/.kube/config` (i.e. `sonic`):
 mkdir -p ~/hawksnest-secrets && chmod 700 ~/hawksnest-secrets
 cp ~/hawksnest-automation/kustomize/secrets/mariadb.env   ~/hawksnest-secrets/   # if already created
 cp ~/hawksnest-automation/kustomize/secrets/mosquitto.passwd ~/hawksnest-secrets/
+cp ~/hawksnest-automation/kustomize/secrets/ring-mqtt.env ~/hawksnest-secrets/
 chmod 600 ~/hawksnest-secrets/*
 #   (or create them fresh here per README §"Create the secrets")
 
