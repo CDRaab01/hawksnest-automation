@@ -74,7 +74,7 @@ Windows 11 (user Sonic, LAN 192.168.4.34)
          ├─ Deployment zwave-js-ui       -> Service (ws :3000, ui :8091)  [PARKED replicas=0]
          ├─ Deployment mariadb           -> Service mariadb:3306  (recorder DB)
          ├─ Deployment mosquitto         -> Service (MQTT :1883)  (broker; used by ring-mqtt)
-         └─ Deployment ring-mqtt         -> Service (rtsp :8554, webrtc :8555, api :1984, web :8080)
+         └─ Deployment ring-mqtt         -> Service (rtsp :8554, webrtc :8555, api :1984, web :55123)
          PVCs:
            ha-config       -> NFS  (MUST BACK UP)
            zwavejs-config  -> NFS  (MUST BACK UP — losing it = re-pair every lock)
@@ -221,14 +221,15 @@ RTSP-capable camera (Reolink/Amcrest/etc.) exists.
    (Mosquitto must be restarted after adding the user: `kubectl rollout restart
    deploy/mosquitto -n home-automation`.)
 2. `kubectl apply -k kustomize/`. ring-mqtt waits for Mosquitto, seeds `/data/config.json`
-   (broker URL injected from the Secret), then serves its status web UI on `:8080`.
-3. **Generate the Ring refresh token (one-time, interactive 2FA):**
+   (broker URL injected from the Secret), then serves its web UI on `:55123`.
+3. **Generate the Ring refresh token (one-time, interactive 2FA) via the web UI:**
    ```bash
-   kubectl exec -it deploy/ring-mqtt -n home-automation -- /app/ring-mqtt/init-ring-mqtt.js
+   kubectl port-forward deploy/ring-mqtt 55123:55123 -n home-automation
    ```
-   Enter the Ring email/password + 2FA code. The token is stored in `ring-state.json` on
-   the `ring-mqtt-data` PVC (NFS, backed up). Alternative: `kubectl port-forward
-   deploy/ring-mqtt 8080:8080 -n home-automation` and use the web UI.
+   Open `http://localhost:55123` (WSL2 forwards localhost to Windows), sign in with the
+   Ring email/password + 2FA code. The token is stored in `ring-state.json` on the
+   `ring-mqtt-data` PVC (NFS, backed up). (ring-mqtt v5.x generates the token through this
+   web UI; the older `init-ring-mqtt.js` CLI no longer exists.)
 4. In HA, add the **MQTT** integration (broker `mosquitto`, port `1883`) if not already.
    Ring devices then appear automatically via MQTT discovery (camera live view, doorbell
    ding, motion, battery).

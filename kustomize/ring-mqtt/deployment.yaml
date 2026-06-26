@@ -74,7 +74,7 @@ spec:
             - name: go2rtc-api
               containerPort: 1984
             - name: web-ui
-              containerPort: 8080
+              containerPort: 55123
           env:
             - name: TZ
               value: "America/New_York"   # adjust if needed
@@ -84,9 +84,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-          # The status web UI on 8080 comes up even before the Ring token is generated,
-          # so the rollout succeeds; generating the token is a one-time post-deploy step
-          # (see README / DEPLOYMENT). Generous thresholds for the slow npm boot.
+          # The web UI on 55123 comes up even before the Ring token is generated (it's
+          # where you generate the token), so the rollout succeeds; generating the token
+          # is a one-time post-deploy step (see README / DEPLOYMENT). Generous thresholds
+          # for the slow npm boot.
           readinessProbe:
             httpGet:
               path: /

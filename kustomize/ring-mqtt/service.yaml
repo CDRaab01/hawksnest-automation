@@ -7,8 +7,8 @@ metadata:
 spec:
   # ClusterIP is enough: HA consumes the camera stream in-cluster at
   # rtsp://ring-mqtt.home-automation.svc:8554/... and discovers devices over MQTT.
-  # For the status web UI / one-time token generation, port-forward 8080:
-  #   kubectl port-forward deploy/ring-mqtt 8080:8080 -n home-automation
+  # For the web UI / one-time Ring token generation, port-forward 55123:
+  #   kubectl port-forward deploy/ring-mqtt 55123:55123 -n home-automation
   selector:
     app: ring-mqtt
   ports:
@@ -27,5 +27,5 @@ spec:
       port: 1984
       targetPort: go2rtc-api
     - name: web-ui
-      port: 8080
+      port: 55123
       targetPort: web-ui

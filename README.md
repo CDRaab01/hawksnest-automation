@@ -133,8 +133,8 @@ and the documented ports (HA NodePort `30123`, zwave-js-ui WS `3000`, ring-mqtt 
 4. **Z-Wave JS UI** — requires the USB stick already attached into WSL2.
 5. **Home Assistant** — initContainer seeds config + `secrets.yaml`, then HA starts and
    connects to MariaDB.
-6. **ring-mqtt** — waits for Mosquitto, seeds `config.json`, then serves its status web UI
-   on `:8080` (the Ring token is generated once, post-deploy — see below).
+6. **ring-mqtt** — waits for Mosquitto, seeds `config.json`, then serves its web UI
+   on `:55123` (the Ring token is generated once there, post-deploy — see below).
 
 If HA starts before MariaDB is ready it will retry the recorder connection; no action needed.
 
@@ -185,13 +185,13 @@ RTSP-capable camera exists.)
 
 1. **Add the MQTT integration in HA** (if not already): **Settings → Devices & Services →
    Add Integration → MQTT**, broker `mosquitto`, port `1883`, with a broker user.
-2. **Generate the Ring token (one-time, interactive 2FA):**
+2. **Generate the Ring token (one-time, interactive 2FA) via the ring-mqtt web UI:**
    ```bash
-   kubectl exec -it deploy/ring-mqtt -n home-automation -- /app/ring-mqtt/init-ring-mqtt.js
+   kubectl port-forward deploy/ring-mqtt 55123:55123 -n home-automation
    ```
-   Enter your Ring email/password and the 2FA code. The refresh token is written to
-   `ring-state.json` on the `ring-mqtt-data` PVC. (Alternative: `kubectl port-forward
-   deploy/ring-mqtt 8080:8080 -n home-automation` and use the web UI.)
+   Open `http://localhost:55123` (WSL2 forwards localhost to Windows), sign in with your
+   Ring email/password + 2FA code. The refresh token is written to `ring-state.json` on
+   the `ring-mqtt-data` PVC.
 3. ring-mqtt connects to Ring and publishes MQTT discovery — **Ring cameras, doorbell
    ding, motion, and battery entities appear in HA automatically.** Open a camera to
    confirm on-demand live view.
