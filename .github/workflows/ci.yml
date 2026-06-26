@@ -24,12 +24,24 @@ jobs:
           python3 tests/validate_manifests.py
 
       - name: Install kustomize + kubeconform
+        # Pinned, direct release tarballs. The old `install_kustomize.sh | bash` from
+        # kustomize master and the kubeconform `/latest/` URL were brittle and started
+        # failing the `curl -f` outright (the install step died in <1s), which skipped
+        # the build/schema steps below. Pinning is reproducible and avoids that.
+        env:
+          KUSTOMIZE_VERSION: v5.4.3
+          KUBECONFORM_VERSION: v0.6.7
         run: |
-          curl -sSfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
-          sudo mv kustomize /usr/local/bin/
-          curl -sSfL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
-            | tar xz kubeconform
-          sudo mv kubeconform /usr/local/bin/
+          # Extract into a temp dir: the repo root already contains a `kustomize/`
+          # directory, so extracting a binary named `kustomize` here collides
+          # ("tar: kustomize: Cannot open: File exists").
+          tmp="$(mktemp -d)"
+          curl -sSfL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
+            | tar xz -C "$tmp" kustomize
+          sudo mv "$tmp/kustomize" /usr/local/bin/
+          curl -sSfL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz -C "$tmp" kubeconform
+          sudo mv "$tmp/kubeconform" /usr/local/bin/
 
       - name: Stage placeholder secrets so kustomize can build
         # secretGenerator reads gitignored files that never exist in CI. The
