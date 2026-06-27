@@ -23,7 +23,7 @@ spec:
         # (an MQTT reconnect alone wouldn't re-run a startup that stalled on the
         # publish errors). The wait-for-mqtt initContainer ensures it starts after
         # mosquitto is back up.
-        restart-revision: "2026-06-27-topic-alias-fix"
+        restart-revision: "2026-06-27-oom-fix-mem-1gi-no-modes"
     spec:
       initContainers:
         # Don't start ring-mqtt until the broker is reachable, so first-boot logs
@@ -92,15 +92,12 @@ spec:
           env:
             - name: TZ
               value: "America/New_York"   # adjust if needed
-            # Publish the Ring Location Modes panel (Disarmed/Home/Away) so HA gets an
-            # alarm_control_panel entity even on camera/doorbell-only accounts with no
-            # Ring Alarm base station — this is the "ring alarm" Hawksnest's security
-            # panel arms/disarms. Set as an env var (not just config.json) because
-            # seed-config only writes config.json on FIRST boot; ring-mqtt env vars
-            # override the already-seeded PVC config on every boot. Matches
-            # configmap.yaml's enable_modes:true so fresh deploys agree.
-            - name: ENABLEMODES
-              value: "true"
+            # NOTE: ENABLEMODES (Ring Location Modes) intentionally NOT set. This account
+            # has a real Ring Alarm (security-panel device "MFA Alarm" + keypads + sensors),
+            # so ring-mqtt publishes a real alarm_control_panel automatically — that's the
+            # panel Hawksnest arms/disarms. Location Modes is only for camera/doorbell-only
+            # accounts with no Ring Alarm; enabling it here would add a redundant second
+            # alarm panel and could mask the real one in the dashboard.
           envFrom:
             - secretRef:
                 name: ring-mqtt-credentials
@@ -127,9 +124,13 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 128Mi
+              memory: 256Mi
+            # 512Mi OOMKilled this pod (exit 137) during startup — discovering the full
+            # device set (Ring Alarm panel + 2 keypads + motion/contact sensors + 11
+            # cameras + go2rtc) exceeds it, so the pod was killed before binding :55123
+            # and never went Ready. 1Gi gives headroom for discovery + on-demand streams.
             limits:
-              memory: 512Mi
+              memory: 1Gi
       volumes:
         - name: data
           persistentVolumeClaim:
