@@ -3,7 +3,7 @@
 Living status doc for the HA + Z-Wave deployment. Update at the end of each working
 session so the next one can pick up without re-deriving the fiddly bits.
 
-_Last updated: 2026-06-27 (ring-mqtt: enabled Ring Location Modes alarm panel via ENABLEMODES; front + back door locks live; garage + user codes pending)_
+_Last updated: 2026-06-27 (added base+overlays refactor, a staging smoke-test overlay, and HA config-validation gates so a deploy can be tested before it touches the live locks; ring-mqtt Location Modes alarm panel live; front + back door locks live; garage + user codes pending)_
 
 ## TL;DR — where we are
 
@@ -17,9 +17,19 @@ Windows host → usbipd (303a:4001) → WSL2 /dev/ttyACM0 → by-id symlink
 
 ## Done ✅
 
+- **Deploy testing + config gates (this session).** Refactored `kustomize/` into
+  `base/` + `overlays/{prod,staging}` (prod renders byte-equivalent to the old flat tree).
+  A `staging` overlay deploys the whole stack to an isolated `home-automation-staging`
+  namespace on the same K3s — Z-Wave parked, all storage on `local-path` (never touches the
+  Synology), HA ClusterIP — via `OVERLAY=staging ./scripts/deploy.sh`, so a change can be
+  proven to come up Ready before promotion. Added HA `check_config` gates: CI validates the
+  seed config; `deploy.sh` validates the **live** `ha-config` PVC config and aborts *before*
+  apply if invalid (so a bad config can't crash-loop HA and drop the locks). `validate_manifests.py`
+  now validates both rendered overlays; CI builds + kubeconforms both. See DEPLOYMENT.md §11.
+  Motivated by the earlier "deploy knocked out a service that didn't relaunch" incident.
 - **USB passthrough working.** ZWA-2 confirmed as VID:PID `303a:4001`, serial
   `9070690E14E4`, enumerates as `/dev/ttyACM0`. Stable mount path in
-  `kustomize/zwave-js-ui/deployment.yaml`:
+  `kustomize/base/zwave-js-ui/deployment.yaml`:
   `/dev/serial/by-id/usb-Nabu_Casa_ZWA-2_9070690E14E4-if00`.
   - usbipd is **5.x** — attach syntax is `usbipd attach --busid <id> --wsl Dragonfly`
     (the older `--distribution` flag is gone). `attach-zwa2.ps1` was fixed for this.

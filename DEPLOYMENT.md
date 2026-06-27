@@ -7,8 +7,8 @@
 > but flag the difference rather than silently diverging. This controls physical door
 > locks: when unsure, stop and ask rather than guess.
 
-Last updated: **2026-06-22** (V1 bring-up, day 1 of 2 — Z-Wave deferred to the next day
-pending physical arrival of the controller).
+Last updated: **2026-06-27** (added base+overlays, a staging smoke-test overlay, and HA
+config-validation gates — see §11). Original V1 bring-up was 2026-06-22.
 
 ---
 
@@ -49,7 +49,7 @@ pending physical arrival of the controller).
 | NFS subfolders (must exist) | `ha-config`, `zwavejs-config`, `mosquitto-data`, `ring-mqtt-data` under the export |
 | Repo location | `~/hawksnest-automation` on Dragonfly |
 | Active branch | `claude/happy-babbage-07raqh` |
-| Secrets | `kustomize/secrets/{mariadb.env,mosquitto.passwd,ring-mqtt.env}` (gitignored; **inside** the kustomize root on purpose — see §6) |
+| Secrets | `kustomize/overlays/prod/secrets/{mariadb.env,mosquitto.passwd,ring-mqtt.env}` (gitignored; **inside** the kustomize root on purpose — see §6) |
 
 > ⚠️ **Cross-subnet gotcha:** the PC (`192.168.4.x`) and the NAS (`192.168.5.x`) are on
 > **different /24s** that the router bridges. WSL2 NATs outbound traffic so the NAS sees
@@ -83,9 +83,13 @@ Windows 11 (user Sonic, LAN 192.168.4.34)
            mariadb-data    -> local-path (node-local; recorder history; regenerable)
 ```
 
-Manifests are kustomize: `kubectl apply -k kustomize/`. The `secretGenerator` in
-`kustomize/kustomization.yaml` builds `mariadb-credentials`, `mosquitto-credentials`, and
-`ring-mqtt-credentials` from the gitignored files in `kustomize/secrets/`.
+Manifests are kustomize, split into a shared `kustomize/base/` and per-environment
+`kustomize/overlays/{prod,staging}/`. Deploy prod with `kubectl apply -k kustomize/overlays/prod/`
+(or `./scripts/deploy.sh`). The `secretGenerator` in `kustomize/overlays/prod/kustomization.yaml`
+builds `mariadb-credentials`, `mosquitto-credentials`, and `ring-mqtt-credentials` from the
+gitignored files in `kustomize/overlays/prod/secrets/`. The prod overlay renders byte-equivalent
+to the old flat tree (CI/scripts verify this with a normalized diff). See §11 for the staging
+overlay and the Home Assistant config-validation gates.
 
 **Networking decision:** HA is exposed via **NodePort 30123 + Windows portproxy**
 (not host-network), keeping cluster DNS intact so HA resolves `mariadb`/`zwave-js-ui`
@@ -116,15 +120,15 @@ by service name. Remote access is **Tailscale only**; no public internet ports.
    ```bash
    git clone https://github.com/CDRaab01/hawksnest-automation.git ~/hawksnest-automation
    cd ~/hawksnest-automation && git checkout claude/happy-babbage-07raqh
-   cp kustomize/secrets/mariadb.env.example kustomize/secrets/mariadb.env   # set strong pw (URL-safe; see §6)
-   mosquitto_passwd -c -b kustomize/secrets/mosquitto.passwd ring '<url-safe-pw>'  # needs the `mosquitto` apt pkg
-   # mosquitto_passwd -b kustomize/secrets/mosquitto.passwd ratgdo '<pw>'  # optional, appends (no -c)
-   chmod 0600 kustomize/secrets/mosquitto.passwd
-   cp kustomize/secrets/ring-mqtt.env.example kustomize/secrets/ring-mqtt.env  # set RING_MQTT_PASSWORD=<url-safe-pw>
+   cp kustomize/overlays/prod/secrets/mariadb.env.example kustomize/overlays/prod/secrets/mariadb.env   # set strong pw (URL-safe; see §6)
+   mosquitto_passwd -c -b kustomize/overlays/prod/secrets/mosquitto.passwd ring '<url-safe-pw>'  # needs the `mosquitto` apt pkg
+   # mosquitto_passwd -b kustomize/overlays/prod/secrets/mosquitto.passwd ratgdo '<pw>'  # optional, appends (no -c)
+   chmod 0600 kustomize/overlays/prod/secrets/mosquitto.passwd
+   cp kustomize/overlays/prod/secrets/ring-mqtt.env.example kustomize/overlays/prod/secrets/ring-mqtt.env  # set RING_MQTT_PASSWORD=<url-safe-pw>
    ```
 8. **Deploy:**
    ```bash
-   kubectl apply -k kustomize/
+   kubectl apply -k kustomize/overlays/prod/
    kubectl scale deploy/zwave-js-ui --replicas=0 -n home-automation   # until the USB stick exists
    ```
 9. **Windows host:** install `usbipd` (`winget install usbipd`); copy the two `windows/*.ps1`
@@ -135,11 +139,16 @@ by service name. Remote access is **Tailscale only**; no public internet ports.
 
 ## 5. Day-2 operations
 
-- **Apply manifest changes:** `kubectl apply -k kustomize/`.
+- **Apply manifest changes:** `./scripts/deploy.sh` (preferred — validates the live HA config
+  first, see §11) or `kubectl apply -k kustomize/overlays/prod/`.
   - ⚠️ **`apply -k` resets `zwave-js-ui` to `replicas: 1`** (the manifest says 1). Until the
     controller is attached and its `by-id` path is filled in, **re-run**
     `kubectl scale deploy/zwave-js-ui --replicas=0 -n home-automation` after every apply,
-    or it crash-loops on the missing device.
+    or it crash-loops on the missing device. (`deploy.sh` handles this automatically.)
+- **Test a change before prod:** `OVERLAY=staging ./scripts/deploy.sh` deploys the whole stack
+  to an isolated `home-automation-staging` namespace (Z-Wave parked, storage on `local-path`,
+  HA ClusterIP) so you can prove all pods reach Ready without touching the locks or the NAS.
+  Tear down with `kubectl delete ns home-automation-staging`. See §11.
 - **Access HA:** `http://localhost:8123` (on the PC), `http://192.168.4.34:8123` (LAN),
   `http://<PC-tailscale-ip>:8123` (Tailscale).
 - **Restart HA / others:** `kubectl rollout restart deploy/home-assistant -n home-automation`.
@@ -153,12 +162,13 @@ by service name. Remote access is **Tailscale only**; no public internet ports.
 ## 6. Decisions & gotchas discovered (do not re-learn these the hard way)
 
 1. **NFSv4.1 fails on the DS214** — it's a v3-only NAS. PVs use `nfsvers=3`
-   (`kustomize/storage/nfs-pv.yaml`). Don't "upgrade" to v4.1.
+   (`kustomize/base/storage/nfs-pv.yaml`). Don't "upgrade" to v4.1.
 2. **PC and NAS are on different subnets** (see §2 gotcha). NFS rule must allow the *PC's*
    subnet because of WSL2 NAT.
-3. **`secrets/` must live inside `kustomize/`** — kustomize's default load restrictor
-   refuses files above the kustomization root (`"not in or below"` error). They are at
-   `kustomize/secrets/` and gitignored.
+3. **`secrets/` must live inside each overlay** — kustomize's default load restrictor
+   refuses files above the kustomization root (`"not in or below"` error). Prod's are at
+   `kustomize/overlays/prod/secrets/` and gitignored; staging's dummies are at
+   `kustomize/overlays/staging/secrets/` (the `*.example` files are tracked).
 4. **MariaDB readiness race** — HA's recorder fails *permanently for that boot* if it
    starts before MariaDB finishes first-boot DB init. Fixed with a `wait-for-mariadb`
    initContainer on the HA deployment. If recorder is ever down after a change, check that
@@ -219,8 +229,8 @@ by service name. Remote access is **Tailscale only**; no public internet ports.
    --busid 6-4 --wsl Dragonfly`, or just run `attach-zwa2.ps1`.)
 3. ~~`ls -l /dev/serial/by-id/` -> copy the `usb-...-if00` path.~~ ✅
    `usb-Nabu_Casa_ZWA-2_9070690E14E4-if00`.
-4. ~~Put that path into `kustomize/zwave-js-ui/deployment.yaml`.~~ ✅ Filled in. Now
-   `kubectl apply -k kustomize/` and **let zwave-js-ui run at replicas 1** (the deploy script
+4. ~~Put that path into `kustomize/base/zwave-js-ui/deployment.yaml`.~~ ✅ Filled in. Now
+   `kubectl apply -k kustomize/overlays/prod/` and **let zwave-js-ui run at replicas 1** (the deploy script
    no longer parks it, since the `REPLACE-` placeholder is gone).
 5. Z-Wave JS UI at `http://localhost:8091` (port-forward or temporary portproxy): set serial
    port to **`/dev/zwave`**, **generate S2 security keys** (persist in `zwavejs-config`,
@@ -244,12 +254,12 @@ It is **not** a Frigate/NVR source — Ring has no continuous local stream, and 
 continuously would suppress Ring's own motion/ding events. **Frigate is parked** until an
 RTSP-capable camera (Reolink/Amcrest/etc.) exists.
 
-1. Ensure the **`ring` user** is in `kustomize/secrets/mosquitto.passwd` and
-   `RING_MQTT_PASSWORD` in `kustomize/secrets/ring-mqtt.env` **matches** it. The password
+1. Ensure the **`ring` user** is in `kustomize/overlays/prod/secrets/mosquitto.passwd` and
+   `RING_MQTT_PASSWORD` in `kustomize/overlays/prod/secrets/ring-mqtt.env` **matches** it. The password
    is embedded in the broker URL, so keep it **URL-safe** (letters/digits/`-`/`_`).
    (Mosquitto must be restarted after adding the user: `kubectl rollout restart
    deploy/mosquitto -n home-automation`.)
-2. `kubectl apply -k kustomize/`. ring-mqtt waits for Mosquitto, seeds `/data/config.json`
+2. `kubectl apply -k kustomize/overlays/prod/`. ring-mqtt waits for Mosquitto, seeds `/data/config.json`
    (broker URL injected from the Secret), then serves its web UI on `:55123`.
 3. **Generate the Ring refresh token (one-time, interactive 2FA) via the web UI:**
    ```bash
@@ -325,8 +335,10 @@ reconciliation is wanted.
     paired), every deploy — push-triggered or manual — **leaves zwave-js-ui running**, so a
     routine deploy never scales the controller down and takes the door locks offline.
     `UNPARK_ZWAVE=true` is just an escape hatch to force-run while the path is still a placeholder.
-  - Validates the kustomize build first, then waits on the always-on rollouts and fails the job
-    if any don't settle.
+  - Validates the kustomize build first, then runs the **live HA config check** (§11) before
+    apply, then waits on the always-on rollouts and fails the job if any don't settle.
+  - **Overlay:** defaults to `prod`. The workflow's `overlay` dropdown (or `OVERLAY=staging`
+    by hand) targets the staging namespace instead; a push to `main` always deploys prod.
 
 ### One-time runner setup (on Dragonfly)
 
@@ -335,9 +347,9 @@ Run as the same unix user that owns `~/.kube/config` (i.e. `sonic`):
 ```bash
 # 1. Bootstrap the secrets once on the host (kept out of git AND off GitHub):
 mkdir -p ~/hawksnest-secrets && chmod 700 ~/hawksnest-secrets
-cp ~/hawksnest-automation/kustomize/secrets/mariadb.env   ~/hawksnest-secrets/   # if already created
-cp ~/hawksnest-automation/kustomize/secrets/mosquitto.passwd ~/hawksnest-secrets/
-cp ~/hawksnest-automation/kustomize/secrets/ring-mqtt.env ~/hawksnest-secrets/
+cp ~/hawksnest-automation/kustomize/overlays/prod/secrets/mariadb.env   ~/hawksnest-secrets/   # if already created
+cp ~/hawksnest-automation/kustomize/overlays/prod/secrets/mosquitto.passwd ~/hawksnest-secrets/
+cp ~/hawksnest-automation/kustomize/overlays/prod/secrets/ring-mqtt.env ~/hawksnest-secrets/
 chmod 600 ~/hawksnest-secrets/*
 #   (or create them fresh here per README §"Create the secrets")
 
@@ -375,3 +387,55 @@ sudo ./svc.sh start
 
 > ⚠️ This applies changes to **live door locks**. Keep the default trigger conservative; the
 > manual button is the safest path, and pushes only fire on `main` for manifest paths.
+
+---
+
+## 11. Pre-prod testing & Home Assistant config validation
+
+Added after an incident where a deploy left a service down because the new pod never came up
+on the live cluster. Two layers now sit in front of that failure class.
+
+### Base + overlays
+
+`kustomize/` is `base/` (shared workloads + storage) plus `overlays/prod/` and
+`overlays/staging/`. **prod** pins the real namespace + secrets and renders byte-equivalent to
+the old flat tree (verify: `kustomize build kustomize/overlays/prod` vs a baseline — CI checks
+both overlays build + schema-validate). **staging** is the same stack made safe to run beside
+prod on the one K3s node:
+
+| Concern | Staging divergence (patch) | Why |
+|---|---|---|
+| Namespace | `home-automation-staging` | no resource collision with prod |
+| Z-Wave | `replicas: 0` | only one ZWA-2 stick exists; prod owns it |
+| HA Service | `ClusterIP` (no NodePort) | NodePort `30123` is unique per **cluster**, not namespace |
+| Storage | all PVCs → `local-path`, NFS PVs deleted | never touches the Synology / prod data |
+| Secrets | dummy `*.example` files | no real credentials needed |
+
+Smoke-test then promote:
+```bash
+OVERLAY=staging ./scripts/deploy.sh                 # all pods must reach Ready; prod untouched
+kubectl port-forward -n home-automation-staging deploy/home-assistant 8124:8123   # optional peek
+kubectl delete ns home-automation-staging           # teardown (local-path PVCs go with it)
+# promote: merge to main (auto-deploys prod) or run OVERLAY=prod ./scripts/deploy.sh
+```
+
+### HA config-validation gates
+
+A malformed `configuration.yaml` used to surface only as a failed HA boot on the live cluster.
+Now Home Assistant's own `check_config` runs in two places (same image tag as the Deployment,
+`:stable`):
+
+- **Gate A — CI (`ha-config-check` job):** validates the committed **seed** config in
+  `kustomize/base/home-assistant/configmap.yaml`. Catches a bad seed before it reaches a fresh
+  cluster's first boot. CI can't see live edits, so:
+- **Gate B — `deploy.sh`, before apply:** runs `check_config` against the **live** config on the
+  `ha-config` PVC via a one-shot Job. If it's invalid, the deploy **aborts before `kubectl apply`**
+  — the running HA keeps its good config, so a bad edit can't roll out a crash-looping HA and drop
+  the locks. A mount/scheduling stall (e.g. the RWO PVC is held by the running HA pod) only warns
+  and continues; only a genuine `check_config` failure aborts. Skip with `SKIP_HA_CONFIG_CHECK=true`
+  (not recommended on prod); on a fresh cluster with no `ha-config` PVC yet it's skipped automatically.
+
+### Validate locally
+```bash
+python3 tests/validate_manifests.py            # builds & checks BOTH overlays (needs kustomize/kubectl)
+```
