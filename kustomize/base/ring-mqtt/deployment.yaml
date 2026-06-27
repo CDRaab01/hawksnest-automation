@@ -23,7 +23,7 @@ spec:
         # (an MQTT reconnect alone wouldn't re-run a startup that stalled on the
         # publish errors). The wait-for-mqtt initContainer ensures it starts after
         # mosquitto is back up.
-        restart-revision: "2026-06-27-oom-fix-mem-1gi-no-modes"
+        restart-revision: "2026-06-27-location-ids-mfa-only"
     spec:
       initContainers:
         # Don't start ring-mqtt until the broker is reachable, so first-boot logs
@@ -66,6 +66,34 @@ spec:
               mountPath: /data
             - name: seed
               mountPath: /seed
+        # Pin discovery to the MFA Ring location (the live home: Ring Alarm + keypads +
+        # sensors + 11 cameras). Without this, ring-mqtt also tries the old "fort wayne"
+        # location whose Alarm Base Station is OFFLINE; ring-mqtt then HANGS device
+        # discovery waiting for that hub to come ONLINE and never publishes anything or
+        # binds its web UI on :55123 (pod never goes Ready). location_ids has no env-var
+        # override and the seed only writes config.json on first boot, so we set it here
+        # idempotently on every boot using the image's own node runtime (preserves all
+        # other config; never blocks startup on error). Remove fort wayne from Ring to
+        # retire it fully; add its id back here if it ever returns online.
+        - name: set-location-ids
+          image: tsightler/ring-mqtt:5.9.2
+          command:
+            - node
+            - -e
+            - |
+              try {
+                const fs = require('fs');
+                const p = '/data/config.json';
+                const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+                c.location_ids = ['7c2f48e0-c7e9-4d46-84ad-15f8f80fe063'];
+                fs.writeFileSync(p, JSON.stringify(c, null, 2));
+                console.log('location_ids pinned to MFA (fort wayne excluded)');
+              } catch (e) {
+                console.error('set-location-ids: skipping -', e.message);
+              }
+          volumeMounts:
+            - name: data
+              mountPath: /data
       containers:
         - name: ring-mqtt
           # Pinned (NOT :latest). v5.9.3 bumped bundled mqtt.js to 5.15.0, which throws
