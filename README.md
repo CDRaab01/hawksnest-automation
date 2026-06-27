@@ -115,8 +115,12 @@ come up before it reaches the live locks:
 ```bash
 OVERLAY=staging ./scripts/deploy.sh          # smoke-deploy; waits for all pods Ready
 kubectl port-forward -n home-automation-staging deploy/home-assistant 8124:8123  # peek
-kubectl delete ns home-automation-staging    # tear down (local-path PVCs go with it)
+./scripts/teardown-staging.sh                # tear down (local-path PVCs go with it)
+# or: kubectl delete ns home-automation-staging
 ```
+
+Teardown is also a one-click button: GitHub → Actions → *Teardown Staging* → Run workflow
+(runs on the Dragonfly runner; hard-scoped so it can only ever delete the staging namespace).
 
 Promote by merging to `main` (auto-deploys the prod overlay) or running the deploy with
 `OVERLAY=prod`. From GitHub, the *Deploy Hawksnest* workflow has an `overlay` dropdown.

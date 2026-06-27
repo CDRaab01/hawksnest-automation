@@ -1,0 +1,35 @@
+name: Teardown Staging
+
+# One-click removal of the throwaway `home-automation-staging` namespace from the
+# Actions tab. Manual only — there is no automatic trigger, deletion is never
+# implicit. Runs on the same self-hosted Dragonfly runner as the deploy, and is
+# hard-scoped by scripts/teardown-staging.sh so it can only ever delete the staging
+# namespace, never prod.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Optional typo-guard: leave blank to proceed, or type 'home-automation-staging' to confirm"
+        type: string
+        default: ""
+
+# Share the deploy concurrency group so a teardown can't race a deploy.
+concurrency:
+  group: hawksnest-deploy
+  cancel-in-progress: false
+
+jobs:
+  teardown:
+    name: Delete staging namespace
+    runs-on: [self-hosted, linux, dragonfly]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Teardown staging
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          chmod +x scripts/teardown-staging.sh
+          ./scripts/teardown-staging.sh

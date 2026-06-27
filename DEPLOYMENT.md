@@ -415,7 +415,7 @@ Smoke-test then promote:
 ```bash
 OVERLAY=staging ./scripts/deploy.sh                 # all pods must reach Ready; prod untouched
 kubectl port-forward -n home-automation-staging deploy/home-assistant 8124:8123   # optional peek
-kubectl delete ns home-automation-staging           # teardown (local-path PVCs go with it)
+./scripts/teardown-staging.sh                       # teardown (or the Actions "Teardown Staging" button)
 # promote: merge to main (auto-deploys prod) or run OVERLAY=prod ./scripts/deploy.sh
 ```
 
