@@ -55,6 +55,17 @@ Windows host → usbipd (303a:4001) → WSL2 /dev/ttyACM0 → by-id symlink
     station, so without this the dashboard reads "No alarm panel"). On an already-running
     pod, the env var is what takes effect (the seed only writes config.json on first boot);
     `kubectl rollout restart deploy/ring-mqtt -n home-automation` after deploy.
+  - **ring-mqtt liveness kill-loop (fixed).** Enabling modes forced a pod recreate, which
+    exposed a latent bug: the **liveness probe** on `:55123` (delay 120s + 5×30s = 270s)
+    fired before ring-mqtt finished its slow Ring-cloud init (login + 11 cameras, snapshot
+    timeouts), restarting the pod mid-init → inescapable kill-loop (8 restarts, all cameras
+    offline). `Exit code: 0` + "failed liveness probe, will be restarted" confirmed it was
+    the kubelet killing it, NOT a code crash, and NOT enable_modes (errors were all in
+    camera.js publish paths). Fix: **removed the liveness probe** (readiness-only; readiness
+    gates the Service without force-killing), and made ring-mqtt **best-effort in deploy.sh**
+    (warn, never fail — `RING_MQTT_TIMEOUT`, default 420s) so a slow Ring boot can't red-X a
+    deploy that also rolls the locks. Any future ring-mqtt recreate (node reboot, redeploy)
+    is now safe from this loop. The June 26 ring-mqtt deploy "failure" was the same loop.
 - **Frigate** — intentionally **parked**. Ring has no continuous local RTSP stream, so it
   can't be a Frigate/NVR source; revisit Frigate only when an RTSP-capable camera exists.
 - **Tailscale** — not installed yet on the PC. Remote HA access (V1 item) still open.

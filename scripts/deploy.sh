@@ -25,6 +25,8 @@
 #                          Default false: park ONLY if the path is a placeholder;
 #                          a real by-id path always runs.
 #   ROLLOUT_TIMEOUT        per-deployment rollout wait (default: 180s)
+#   RING_MQTT_TIMEOUT      best-effort wait for ring-mqtt (default: 420s); a miss
+#                          only warns, it never fails the deploy
 #
 set -euo pipefail
 
@@ -42,6 +44,7 @@ export KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/config}"
 HAWKSNEST_SECRETS_DIR="${HAWKSNEST_SECRETS_DIR:-${HOME}/hawksnest-secrets}"
 UNPARK_ZWAVE="${UNPARK_ZWAVE:-false}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-180s}"
+RING_MQTT_TIMEOUT="${RING_MQTT_TIMEOUT:-420s}"
 
 log()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\n\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
@@ -118,7 +121,10 @@ else
 fi
 
 # --- wait for the always-on workloads to settle -------------------------------
-WORKLOADS=(mariadb mosquitto home-assistant ring-mqtt)
+# ring-mqtt is handled separately (best-effort) below: its readiness depends on the
+# Ring cloud API + per-camera setup, which can take minutes, so a slow or unhealthy
+# ring-mqtt must NEVER fail the deploy that also rolls the lock-critical workloads.
+WORKLOADS=(mariadb mosquitto home-assistant)
 [ "${zwave_should_run}" = "true" ] && WORKLOADS+=(zwave-js-ui)
 
 log "Waiting for rollouts (timeout ${ROLLOUT_TIMEOUT} each): ${WORKLOADS[*]}"
@@ -129,6 +135,15 @@ for d in "${WORKLOADS[@]}"; do
     rollout_failed="true"
   fi
 done
+
+# ring-mqtt: best-effort. It boots slowly (Ring cloud login + many cameras) and has
+# no liveness probe by design, so give it a longer wait but only WARN if it isn't
+# ready — never fail the deploy on it (locks/HA must not hinge on Ring availability).
+log "Waiting for ring-mqtt (best-effort, timeout ${RING_MQTT_TIMEOUT})"
+if ! kubectl rollout status deploy/ring-mqtt -n "${NS}" --timeout="${RING_MQTT_TIMEOUT}"; then
+  warn "ring-mqtt not ready within ${RING_MQTT_TIMEOUT} — continuing anyway.
+       Ring cloud may be slow; check 'kubectl logs deploy/ring-mqtt -n ${NS}'."
+fi
 
 log "Current pods in ${NS}:"
 kubectl get pods -n "${NS}" -o wide || true
