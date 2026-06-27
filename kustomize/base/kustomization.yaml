@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Base: the workloads + storage shared by every environment. It is deliberately
+# environment-agnostic — NO `namespace:` and NO `secretGenerator` live here.
+# Those differ per environment (real namespace + real secrets for prod, a
+# throwaway namespace + dummy secrets for staging) and are set in the overlays
+# under overlays/<env>/. The Namespace object itself also lives in each overlay,
+# because kustomize's `namespace:` directive renames the namespace OF resources
+# but never the Namespace resource's own name.
+resources:
+  - storage/nfs-pv.yaml
+  - storage/pvcs.yaml
+  - mariadb/deployment.yaml
+  - mariadb/service.yaml
+  - mosquitto/configmap.yaml
+  - mosquitto/deployment.yaml
+  - mosquitto/service.yaml
+  - zwave-js-ui/deployment.yaml
+  - zwave-js-ui/service.yaml
+  - home-assistant/configmap.yaml
+  - home-assistant/deployment.yaml
+  - home-assistant/service.yaml
+  - ring-mqtt/configmap.yaml
+  - ring-mqtt/deployment.yaml
+  - ring-mqtt/service.yaml
+  - go2rtc/configmap.yaml
+  - go2rtc/deployment.yaml
+  - go2rtc/service.yaml

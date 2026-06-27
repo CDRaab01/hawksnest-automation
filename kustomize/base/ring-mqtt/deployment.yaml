@@ -78,32 +78,38 @@ spec:
           env:
             - name: TZ
               value: "America/New_York"   # adjust if needed
+            # Publish the Ring Location Modes panel (Disarmed/Home/Away) so HA gets an
+            # alarm_control_panel entity even on camera/doorbell-only accounts with no
+            # Ring Alarm base station — this is the "ring alarm" Hawksnest's security
+            # panel arms/disarms. Set as an env var (not just config.json) because
+            # seed-config only writes config.json on FIRST boot; ring-mqtt env vars
+            # override the already-seeded PVC config on every boot. Matches
+            # configmap.yaml's enable_modes:true so fresh deploys agree.
+            - name: ENABLEMODES
+              value: "true"
           envFrom:
             - secretRef:
                 name: ring-mqtt-credentials
           volumeMounts:
             - name: data
               mountPath: /data
-          # The web UI on 55123 comes up even before the Ring token is generated (it's
-          # where you generate the token), so the rollout succeeds; generating the token
-          # is a one-time post-deploy step (see README / DEPLOYMENT). Generous thresholds
-          # for the slow npm boot.
+          # Readiness ONLY — deliberately no liveness probe. ring-mqtt's web UI on
+          # 55123 doesn't bind until it has connected to the Ring cloud API and set
+          # up every camera (snapshot fetches can time out and retry for minutes with
+          # many cameras). A liveness probe on 55123 therefore restarts the pod mid-init,
+          # which restarts the slow Ring setup from scratch — an inescapable kill-loop
+          # (observed: 8 restarts, "failed liveness probe, will be restarted", cameras
+          # all dropped offline). Readiness alone gates the Service without force-killing,
+          # so the pod gets an uninterrupted boot and comes up healthy. Generous
+          # thresholds for the slow Ring init.
           readinessProbe:
             httpGet:
               path: /
               port: web-ui
             initialDelaySeconds: 30
-            periodSeconds: 10
+            periodSeconds: 15
             timeoutSeconds: 5
-            failureThreshold: 30
-          livenessProbe:
-            httpGet:
-              path: /
-              port: web-ui
-            initialDelaySeconds: 120
-            periodSeconds: 30
-            timeoutSeconds: 10
-            failureThreshold: 5
+            failureThreshold: 60
           resources:
             requests:
               cpu: 50m

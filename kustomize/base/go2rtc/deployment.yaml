@@ -5,7 +5,11 @@ metadata:
   labels:
     app: go2rtc
 spec:
-  replicas: 1
+  # Opt-in: ships PARKED at 0 so a not-yet-configured go2rtc can never fail a prod
+  # deploy on the lock cluster (no pod → no crashloop, nothing for the rollout wait
+  # to block on). Enable two-way audio by configuring the secret + the configmap
+  # device ids + the :8555 host portproxy (DEPLOYMENT.md §7c), then set replicas: 1.
+  replicas: 0
   # Recreate: go2rtc-config is RWO and go2rtc owns a single Ring session (it rotates
   # the refresh token in its config file).
   strategy:

@@ -1,0 +1,10 @@
+# Staging parks Z-Wave permanently: there is only one ZWA-2 USB controller and it
+# is owned by prod. Staging must never try to claim it, so it runs at replicas:0.
+# (deploy.sh also forces zwave_should_run=false for staging so the rollout wait
+# doesn't block on a 0-replica Deployment.)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zwave-js-ui
+spec:
+  replicas: 0

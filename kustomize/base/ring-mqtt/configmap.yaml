@@ -10,11 +10,17 @@ data:
   # MQTT_URL_PLACEHOLDER is substituted by the seed-config initContainer with the real
   # broker URL + password (from the ring-mqtt-credentials Secret), so no secret is
   # committed here. The 'ring' user must exist in the mosquitto password file.
+  #
+  # enable_modes:true exposes the Ring Location Modes panel (Disarmed/Home/Away) as an
+  # HA alarm_control_panel, which is what Hawksnest's security panel shows — needed for
+  # camera/doorbell-only accounts with no Ring Alarm base station. NOTE: this seed only
+  # applies on FIRST boot; an already-running ring-mqtt keeps its PVC config, so the
+  # deployment also sets the ENABLEMODES env var (overrides config.json every boot).
   config.json: |
     {
       "mqtt_url": "MQTT_URL_PLACEHOLDER",
       "enable_cameras": true,
-      "enable_modes": false,
+      "enable_modes": true,
       "snapshot_mode": "Auto",
       "livestream_user": "",
       "livestream_pass": ""
