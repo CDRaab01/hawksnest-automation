@@ -17,6 +17,13 @@ spec:
     metadata:
       labels:
         app: ring-mqtt
+      annotations:
+        # Bump to force a clean ring-mqtt restart on apply. 2026-06-27: restart so it
+        # reconnects to mosquitto with topic aliases disabled from the first connect
+        # (an MQTT reconnect alone wouldn't re-run a startup that stalled on the
+        # publish errors). The wait-for-mqtt initContainer ensures it starts after
+        # mosquitto is back up.
+        restart-revision: "2026-06-27-topic-alias-fix"
     spec:
       initContainers:
         # Don't start ring-mqtt until the broker is reachable, so first-boot logs

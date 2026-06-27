@@ -15,6 +15,10 @@ spec:
     metadata:
       labels:
         app: mosquitto
+      annotations:
+        # Bump to force a rollout when mosquitto.conf changes (ConfigMap edits don't
+        # restart the pod on their own). 2026-06-27: added max_topic_alias 0.
+        config-revision: "2026-06-27-max-topic-alias-0"
     spec:
       containers:
         - name: mosquitto
