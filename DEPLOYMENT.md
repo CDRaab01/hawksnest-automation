@@ -291,6 +291,70 @@ RTSP-capable camera (Reolink/Amcrest/etc.) exists.
 
 ---
 
+## 7c. go2rtc two-way audio ("talk") bring-up
+
+The Hawksnest app's **walkie-talkie** (push-to-talk) and siren-adjacent live view need a
+**back-channel** (audio *toward* the camera). ring-mqtt's embedded go2rtc can't provide
+this — it runs with its API/WebRTC disabled and bridges Ring as a **one-way** RTSP `exec:`
+source. So we run a **dedicated go2rtc** (`kustomize/base/go2rtc/`) using go2rtc's **native
+`ring:` source**, which supports two-way audio. (It also gives lower-latency live than the
+HA path, though live still works fine without any of this.)
+
+It ships **parked at `replicas: 0`** (opt-in): until you configure it, no go2rtc pod runs,
+so it can never fail a prod deploy. Staging keeps it parked permanently (it would collide
+with prod on host port 8555). Enabling it is the last step below.
+
+The app talks to it as: browser/app → `/go2rtc/` nginx proxy → go2rtc API (`:1984`,
+signaling) → WebRTC **media** on the host at `GO2RTC_HOST_IP:8555/tcp`.
+
+**Setup:**
+
+1. **Fill `kustomize/overlays/prod/secrets/go2rtc.env`** (copy from `go2rtc.env.example`).
+   Until this exists with real values, deploys fall back to the dummy template and go2rtc
+   stays parked.
+   - `RING_REFRESH_TOKEN` — generate from a **separate** Ring login than ring-mqtt's
+     (two clients sharing one token rotate each other out). Easiest: temporarily set
+     `replicas: 1`, deploy, port-forward (`kubectl port-forward deploy/go2rtc 1984 -n
+     home-automation`), open `http://localhost:1984`, **Add > Ring**, sign in; copy the
+     resulting `device_id`s too.
+   - `GO2RTC_HOST_IP` — the Windows host's **Tailscale** IP (or LAN IP) clients reach.
+   - `RING_DEVICE_ID_*` — one per camera.
+2. **Edit `kustomize/base/go2rtc/configmap.yaml`** so each `streams:` entry is named
+   **exactly the HA camera base** (`camera.<base>` → `<base>`); the app derives the go2rtc
+   `src` from it. Add one line per camera.
+3. **Enable it:** set `replicas: 1` in `kustomize/base/go2rtc/deployment.yaml` (staging stays
+   parked via its overlay patch). Then `./scripts/deploy.sh` (or `kubectl apply -k
+   kustomize/overlays/prod/`); `kubectl rollout restart deploy/go2rtc` after any secret edit
+   — stable secret names don't auto-roll.
+4. **Windows portproxy for the media port** (WSL2, mirrors the HA `:30123` portproxy). In an
+   **admin** PowerShell on the host:
+   ```powershell
+   netsh interface portproxy add v4tov4 listenaddress=<GO2RTC_HOST_IP> listenport=8555 `
+     connectaddress=<WSL2-IP> connectport=8555 protocol=tcp
+   ```
+   (`<WSL2-IP>` = `wsl hostname -I`.) Re-add on reboot like the other portproxies.
+5. **HTTPS for the browser mic:** browsers only grant microphone access in a **secure
+   context** (HTTPS or `localhost`). If you open Hawksnest over plain `http://…:30123` the
+   talk button can't get the mic. Reach it via a Tailscale HTTPS name (`tailscale cert` /
+   MagicDNS) or `localhost`. The **Android** app has no such constraint (runtime
+   `RECORD_AUDIO` permission).
+
+**Verification checklist:**
+
+- [ ] `curl http://localhost:1984/api/streams` (port-forwarded) lists each camera by its
+      `<base>` name, producers present (Ring online).
+- [ ] In go2rtc's web UI, the camera's **stream** plays *with* a microphone option
+      (two-way) — confirms the native `ring:` back-channel.
+- [ ] From the app over Tailscale, opening a camera and pressing **Talk** connects (ICE
+      reaches `GO2RTC_HOST_IP:8555`); audio is heard from the Ring device.
+- [ ] After a host reboot + re-adding the portproxy, talk still connects with no re-auth.
+
+> `go2rtc-config` is node-local (`local-path`), not backed up: it only caches the rotated
+> token, which re-seeds from `go2rtc.env` + the ConfigMap. Losing it just needs a
+> `rollout restart` (and possibly a fresh token if Ring rotated it).
+
+---
+
 ## 8. Backups (critical)
 
 - **`zwavejs-config`**, **`ha-config`**, and **`ring-mqtt-data`** PVCs are the must-back-up

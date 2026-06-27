@@ -26,6 +26,9 @@ secretGenerator:
   - name: ring-mqtt-credentials
     envs:
       - secrets/ring-mqtt.env
+  - name: go2rtc-credentials
+    envs:
+      - secrets/go2rtc.env
 
 # Stable Secret names so Deployments can reference them directly. The trade-off is
 # that editing a secret does NOT trigger an automatic rollout — restart the pod

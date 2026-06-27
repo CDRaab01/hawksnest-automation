@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: go2rtc-seed
+data:
+  # Seed config for the dedicated go2rtc that provides TWO-WAY AUDIO ("talk") for
+  # the Hawksnest app. Copied to the PVC at /config/go2rtc.yaml on first boot only
+  # (see the seed-config initContainer) — go2rtc rewrites this file at runtime when
+  # it rotates the Ring refresh token, and that rewrite must persist, so we never
+  # clobber an existing one.
+  #
+  # Why a SEPARATE go2rtc (not ring-mqtt's): ring-mqtt's embedded go2rtc runs with
+  # its API and WebRTC disabled and bridges Ring as a one-way RTSP `exec:` source,
+  # so it cannot carry a back-channel. go2rtc's NATIVE `ring:` source does support
+  # two-way audio (https://github.com/AlexxIT/go2rtc/tree/master/internal/ring).
+  #
+  # ${VARS} are substituted by go2rtc from the container environment (set via the
+  # go2rtc-credentials Secret + the downward-API HOST IP). See secrets/go2rtc.env.example.
+  go2rtc.yaml: |
+    log:
+      level: info
+
+    api:
+      # In-cluster only; the app reaches it through the Hawksnest nginx proxy at
+      # /go2rtc/ (same origin, so Tailscale/LAN-scoped). go2rtc's API has no auth —
+      # do NOT expose this port outside the cluster.
+      listen: ":1984"
+
+    rtsp:
+      # Not needed here — HA already consumes ring-mqtt's RTSP for video. Disable.
+      listen: ""
+
+    webrtc:
+      # TCP-only on 8555, published to the host via a hostPort so ICE can reach it
+      # over Tailscale/LAN. TCP avoids UDP/NAT pain across Tailscale.
+      listen: ":8555/tcp"
+      candidates:
+        # The Windows host's Tailscale (or LAN) IP — the address clients can reach.
+        # Injected from the GO2RTC_HOST_IP env (secrets/go2rtc.env).
+        - "${GO2RTC_HOST_IP}:8555"
+
+    streams:
+      # ONE entry per Ring camera you want to talk through. The stream NAME MUST
+      # match the Home Assistant camera base (`camera.<base>`) so the Hawksnest app
+      # can find it (e.g. HA `camera.front_door_live` -> base `front_door` -> here).
+      #
+      # Fill in each camera's Ring device_id (find it in go2rtc's web UI: Add > Ring,
+      # or in ring-mqtt). The refresh_token is shared via env. Duplicate per camera.
+      front_door: "ring:?device_id=${RING_DEVICE_ID_FRONT_DOOR}&refresh_token=${RING_REFRESH_TOKEN}"
+      # back_door:  "ring:?device_id=${RING_DEVICE_ID_BACK_DOOR}&refresh_token=${RING_REFRESH_TOKEN}"
+      # front:      "ring:?device_id=${RING_DEVICE_ID_FRONT}&refresh_token=${RING_REFRESH_TOKEN}"

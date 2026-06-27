@@ -1,0 +1,10 @@
+# Staging parks go2rtc permanently. go2rtc binds host port 8555 (hostPort) for its
+# WebRTC media; prod's go2rtc owns that port on the shared single-node cluster, so
+# staging must never run a second one. (Base already ships go2rtc at replicas:0; this
+# keeps staging parked even if base is later bumped to 1 to enable prod talk.)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go2rtc
+spec:
+  replicas: 0

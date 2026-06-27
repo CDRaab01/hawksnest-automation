@@ -167,6 +167,24 @@ need_secret() {
        GitHub; bootstrap them once on the runner host."
   fi
 }
+# go2rtc (two-way audio) is OPT-IN and ships parked (replicas:0), so its secret is
+# NON-fatal: use the real one if present, else fall back to the tracked dummy
+# *.example so `kustomize build` always resolves and a not-yet-configured go2rtc can
+# never block a prod deploy. (No talk until the operator fills real creds + device
+# ids and bumps go2rtc to replicas:1 — see DEPLOYMENT.md §7c.)
+optional_secret() {
+  local name="$1"
+  local dst="${SECRETS_DST}/${name}"
+  local src="${HAWKSNEST_SECRETS_DIR}/${name}"
+  [ -f "${dst}" ] && return 0
+  if [ -f "${src}" ]; then
+    install -m 0600 "${src}" "${dst}"
+    log "Loaded secret ${name} from ${src}"
+  else
+    install -m 0600 "${dst}.example" "${dst}"
+    log "Using dummy ${name} (go2rtc is opt-in / parked)."
+  fi
+}
 mkdir -p "${SECRETS_DST}"
 if [ "${OVERLAY}" = "staging" ]; then
   for s in mariadb.env mosquitto.passwd ring-mqtt.env; do
@@ -179,6 +197,7 @@ else
   need_secret "mosquitto.passwd"
   need_secret "ring-mqtt.env"
 fi
+optional_secret "go2rtc.env"
 
 # --- validate the build before touching the cluster ---------------------------
 log "Validating kustomize build"

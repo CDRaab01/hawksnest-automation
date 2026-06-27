@@ -26,6 +26,9 @@ secretGenerator:
   - name: ring-mqtt-credentials
     envs:
       - secrets/ring-mqtt.env
+  - name: go2rtc-credentials
+    envs:
+      - secrets/go2rtc.env
 
 generatorOptions:
   disableNameSuffixHash: true
@@ -33,6 +36,8 @@ generatorOptions:
 patches:
   # Park Z-Wave (single USB stick lives with prod).
   - path: patches/zwave-replicas-0.yaml
+  # Park go2rtc (binds host port 8555; prod owns it on the shared node).
+  - path: patches/go2rtc-replicas-0.yaml
   # HA Service -> ClusterIP (NodePort 30123 is cluster-unique). A JSON 6902 patch
   # is used so the nodePort field is genuinely removed — a strategic-merge null on
   # a list item does not delete it, and a ClusterIP Service with a nodePort is

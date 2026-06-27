@@ -24,3 +24,6 @@ resources:
   - ring-mqtt/configmap.yaml
   - ring-mqtt/deployment.yaml
   - ring-mqtt/service.yaml
+  - go2rtc/configmap.yaml
+  - go2rtc/deployment.yaml
+  - go2rtc/service.yaml

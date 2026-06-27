@@ -73,3 +73,19 @@ spec:
   resources:
     requests:
       storage: 1Gi
+---
+# go2rtc's writable config (seeded once from the go2rtc-seed ConfigMap). go2rtc
+# rewrites it when it rotates the Ring refresh token, so it must persist. Uses the
+# node-local local-path class (not NFS): the only critical state is the rotated
+# token, and re-auth is a documented recovery step — not worth an NFS PV here.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: go2rtc-config
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 256Mi
