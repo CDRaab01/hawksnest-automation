@@ -68,7 +68,14 @@ spec:
               mountPath: /seed
       containers:
         - name: ring-mqtt
-          image: tsightler/ring-mqtt:latest
+          # Pinned (NOT :latest). v5.9.3 bumped bundled mqtt.js to 5.15.0, which throws
+          # in _removeTopicAliasAndRecoverTopicName on every QoS1/2 publish that uses a
+          # topic alias — breaking ALL ring-mqtt -> HA publishing (cameras, snapshots,
+          # the Ring modes/alarm panel) and stalling startup so :55123 never binds.
+          # 5.9.2 ships mqtt 5.14.1 (pre-regression). Pinning also stops :latest from
+          # silently drifting into a broken build on the next pod recreate. Re-evaluate
+          # when a newer ring-mqtt ships a fixed mqtt.js.
+          image: tsightler/ring-mqtt:5.9.2
           ports:
             - name: rtsp
               containerPort: 8554
