@@ -20,6 +20,9 @@ resources:
   - ring-mqtt/configmap.yaml
   - ring-mqtt/deployment.yaml
   - ring-mqtt/service.yaml
+  - go2rtc/configmap.yaml
+  - go2rtc/deployment.yaml
+  - go2rtc/service.yaml
 
 # Credentials are generated from local, untracked files (see secrets/*.example).
 # Copy the .example files, fill them in, then `kubectl apply -k kustomize/`.
@@ -33,6 +36,9 @@ secretGenerator:
   - name: ring-mqtt-credentials
     envs:
       - secrets/ring-mqtt.env
+  - name: go2rtc-credentials
+    envs:
+      - secrets/go2rtc.env
 
 # Stable Secret names so Deployments can reference them directly. The trade-off is
 # that editing a secret does NOT trigger an automatic rollout — restart the pod

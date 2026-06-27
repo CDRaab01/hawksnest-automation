@@ -51,6 +51,7 @@ jobs:
           cp kustomize/secrets/mariadb.env.example     kustomize/secrets/mariadb.env
           cp kustomize/secrets/mosquitto.passwd.example kustomize/secrets/mosquitto.passwd
           cp kustomize/secrets/ring-mqtt.env.example   kustomize/secrets/ring-mqtt.env
+          cp kustomize/secrets/go2rtc.env.example      kustomize/secrets/go2rtc.env
 
       - name: Build manifests
         run: kustomize build kustomize/ | tee /tmp/hawksnest.yaml
