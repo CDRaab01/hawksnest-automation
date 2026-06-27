@@ -195,6 +195,13 @@ RTSP-capable camera exists.)
 3. ring-mqtt connects to Ring and publishes MQTT discovery — **Ring cameras, doorbell
    ding, motion, and battery entities appear in HA automatically.** Open a camera to
    confirm on-demand live view.
+4. **Arm/disarm panel:** the deployment runs ring-mqtt with `ENABLEMODES=true`, so Ring
+   **Location Modes** (Disarmed / Home / Away) surface as an HA `alarm_control_panel` —
+   the panel Hawksnest's dashboard arms and disarms. This works even on
+   camera/doorbell-only Ring accounts (no Ring Alarm base station). If the panel reads
+   "No alarm panel" in Hawksnest, check that an `alarm_control_panel.*` entity exists in
+   HA (**Developer Tools → States**); if not, ensure `ENABLEMODES=true` and
+   `kubectl rollout restart deploy/ring-mqtt -n home-automation`.
 
 > The token grants full access to the Ring account — it lives only on the backed-up
 > `ring-mqtt-data` PVC, never in git.

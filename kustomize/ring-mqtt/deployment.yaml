@@ -78,6 +78,15 @@ spec:
           env:
             - name: TZ
               value: "America/New_York"   # adjust if needed
+            # Publish the Ring Location Modes panel (Disarmed/Home/Away) so HA gets an
+            # alarm_control_panel entity even on camera/doorbell-only accounts with no
+            # Ring Alarm base station — this is the "ring alarm" Hawksnest's security
+            # panel arms/disarms. Set as an env var (not just config.json) because
+            # seed-config only writes config.json on FIRST boot; ring-mqtt env vars
+            # override the already-seeded PVC config on every boot. Matches
+            # configmap.yaml's enable_modes:true so fresh deploys agree.
+            - name: ENABLEMODES
+              value: "true"
           envFrom:
             - secretRef:
                 name: ring-mqtt-credentials

@@ -262,7 +262,18 @@ RTSP-capable camera (Reolink/Amcrest/etc.) exists.
 4. In HA, add the **MQTT** integration (broker `mosquitto`, port `1883`) if not already.
    Ring devices then appear automatically via MQTT discovery (camera live view, doorbell
    ding, motion, battery).
-5. **Reboot drill:** reboot the host → ring-mqtt reconnects and the token persists on NFS;
+5. **Arm/disarm panel (Ring Location Modes):** the deployment sets `ENABLEMODES=true`, so
+   ring-mqtt publishes the Ring **Location Modes** (Disarmed / Home / Away) as an HA
+   `alarm_control_panel` entity. This is the "ring alarm" Hawksnest's security panel arms
+   and disarms — it works even on camera/doorbell-only accounts with no Ring Alarm base
+   station. (If you *do* have a Ring Alarm system, its own `alarm_control_panel` appears
+   regardless.) Confirm with **Developer Tools → States** in HA: an
+   `alarm_control_panel.*` entity should report `disarmed` / `armed_home` / `armed_away`.
+   > `enable_modes` is also set in `configmap.yaml`, but that seed only applies on FIRST
+   > boot — an already-running ring-mqtt keeps its PVC `config.json`, so the `ENABLEMODES`
+   > env var is what enables modes on an existing deployment. After changing it,
+   > `kubectl rollout restart deploy/ring-mqtt -n home-automation`.
+6. **Reboot drill:** reboot the host → ring-mqtt reconnects and the token persists on NFS;
    no re-auth needed.
 
 > The refresh token grants full access to the Ring account. It lives only on the

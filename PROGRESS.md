@@ -3,7 +3,7 @@
 Living status doc for the HA + Z-Wave deployment. Update at the end of each working
 session so the next one can pick up without re-deriving the fiddly bits.
 
-_Last updated: 2026-06-26 (ring-mqtt manifests added; front + back door locks live; garage + user codes pending)_
+_Last updated: 2026-06-27 (ring-mqtt: enabled Ring Location Modes alarm panel via ENABLEMODES; front + back door locks live; garage + user codes pending)_
 
 ## TL;DR — where we are
 
@@ -48,6 +48,13 @@ Windows host → usbipd (303a:4001) → WSL2 /dev/ttyACM0 → by-id symlink
   To finish: create the `ring` mosquitto user + `ring-mqtt.env`, `apply -k`, then generate
   the Ring token (`kubectl exec -it deploy/ring-mqtt -- /app/ring-mqtt/init-ring-mqtt.js`,
   one-time 2FA) and add the HA MQTT integration. See DEPLOYMENT.md §7b.
+  - **Ring alarm/modes panel:** `ENABLEMODES=true` is now set on the ring-mqtt deployment
+    (and `enable_modes:true` in the seed configmap) so Ring **Location Modes**
+    (Disarmed/Home/Away) publish as an HA `alarm_control_panel` — that's what Hawksnest's
+    security panel arms/disarms (camera/doorbell-only accounts have no Ring Alarm base
+    station, so without this the dashboard reads "No alarm panel"). On an already-running
+    pod, the env var is what takes effect (the seed only writes config.json on first boot);
+    `kubectl rollout restart deploy/ring-mqtt -n home-automation` after deploy.
 - **Frigate** — intentionally **parked**. Ring has no continuous local RTSP stream, so it
   can't be a Frigate/NVR source; revisit Frigate only when an RTSP-capable camera exists.
 - **Tailscale** — not installed yet on the PC. Remote HA access (V1 item) still open.
