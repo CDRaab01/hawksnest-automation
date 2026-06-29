@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ring-mqtt-seed
+data:
+  # Seed config for ring-mqtt. Copied to the PVC at /data/config.json on first boot
+  # only (see the seed-config initContainer) — ring-mqtt rewrites this file at runtime
+  # and any later edits on the PVC are preserved.
+  #
+  # MQTT_URL_PLACEHOLDER is substituted by the seed-config initContainer with the real
+  # broker URL + password (from the ring-mqtt-credentials Secret), so no secret is
+  # committed here. The 'ring' user must exist in the mosquitto password file.
+  #
+  # enable_modes is false: this account has a real Ring Alarm (security-panel device),
+  # so ring-mqtt publishes a real alarm_control_panel automatically. Location Modes is
+  # only for camera/doorbell-only accounts with no Ring Alarm; enabling it here would add
+  # a redundant second alarm panel and could mask the real one in the dashboard.
+  config.json: |
+    {
+      "mqtt_url": "MQTT_URL_PLACEHOLDER",
+      "enable_cameras": true,
+      "enable_modes": false,
+      "snapshot_mode": "Auto",
+      "livestream_user": "",
+      "livestream_pass": ""
+    }

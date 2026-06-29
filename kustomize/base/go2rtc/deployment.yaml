@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: go2rtc
+  labels:
+    app: go2rtc
+spec:
+  # Opt-in: ships PARKED at 0 so a not-yet-configured go2rtc can never fail a prod
+  # deploy on the lock cluster (no pod → no crashloop, nothing for the rollout wait
+  # to block on). Enable two-way audio by configuring the secret + the configmap
+  # device ids + the :8555 host portproxy (DEPLOYMENT.md §7c), then set replicas: 1.
+  replicas: 0
+  # Recreate: go2rtc-config is RWO and go2rtc owns a single Ring session (it rotates
+  # the refresh token in its config file).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: go2rtc
+  template:
+    metadata:
+      labels:
+        app: go2rtc
+    spec:
+      initContainers:
+        # Seed /config/go2rtc.yaml on first boot only. go2rtc rewrites this file when
+        # it rotates the Ring refresh token, so we must NOT clobber an existing one.
+        - name: seed-config
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              if [ ! -f /config/go2rtc.yaml ]; then
+                echo "seeding go2rtc.yaml"
+                cp /seed/go2rtc.yaml /config/go2rtc.yaml
+              fi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: seed
+              mountPath: /seed
+      containers:
+        - name: go2rtc
+          image: alexxit/go2rtc:latest
+          # The image defaults to -config /config/go2rtc.yaml, which is our PVC.
+          ports:
+            - name: api
+              containerPort: 1984
+            - name: webrtc-tcp
+              # hostPort publishes go2rtc's WebRTC media on the node so ICE can reach
+              # it. The candidate go2rtc advertises is GO2RTC_HOST_IP:8555 (the host's
+              # Tailscale/LAN IP) — on WSL2 a Windows netsh portproxy must forward that
+              # host IP:8555 to this node (see the two-way-audio runbook).
+              containerPort: 8555
+              hostPort: 8555
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: go2rtc-credentials
+          readinessProbe:
+            httpGet:
+              path: /api/streams
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet:
+              path: /api/streams
+              port: api
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: go2rtc-config
+        - name: seed
+          configMap:
+            name: go2rtc-seed

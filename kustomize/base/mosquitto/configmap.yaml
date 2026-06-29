@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mosquitto-config
+data:
+  mosquitto.conf: |
+    # Mosquitto broker config.
+    # Installed now as a seam for future local MQTT devices (e.g. Ratgdo on ESP32).
+    # Harmless if nothing connects.
+    listener 1883
+    persistence true
+    persistence_location /mosquitto/data/
+
+    # Disable MQTT 5 topic aliases (advertise Topic Alias Maximum = 0 to clients).
+    # ring-mqtt's bundled mqtt.js has a bug in _removeTopicAliasAndRecoverTopicName
+    # that throws "Cannot read properties of undefined (reading 'toString')" on
+    # every QoS1/2 publish that uses a topic alias, which silently breaks ALL
+    # ring-mqtt -> HA publishing (cameras, snapshots, and the Ring modes/alarm
+    # panel) and stalls ring-mqtt startup so its web UI never binds. Granting 0
+    # aliases makes the client stop using them, avoiding the buggy path. Purely a
+    # bandwidth optimization otherwise — safe for HA's MQTT client too.
+    max_topic_alias 0
+
+    # Authentication required (no anonymous access). The password file is provided
+    # via the `mosquitto-credentials` Secret (see secrets/mosquitto.passwd.example).
+    allow_anonymous false
+    password_file /mosquitto/config/passwd
+
+    log_dest stdout
+    log_type warning
+    log_type notice

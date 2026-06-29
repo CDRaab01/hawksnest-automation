@@ -1,0 +1,74 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Staging overlay — a throwaway smoke-test environment on the SAME K3s cluster,
+# isolated from prod so a deploy can be proven to actually come up (all pods reach
+# Ready) before it is promoted to the live lock cluster. It deliberately diverges
+# from prod in four ways, all so it can never touch the things it must not:
+#   * own namespace (home-automation-staging)               -> no resource collision
+#   * Z-Wave parked at replicas:0 (patch)                    -> never claims the stick
+#   * HA Service -> ClusterIP, no NodePort (patch)           -> no 30123 collision
+#   * all storage on node-local `local-path`, NFS PVs gone   -> never touches Synology
+# Secrets are dummy (from the tracked *.example files); staging needs no real creds.
+namespace: home-automation-staging
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+secretGenerator:
+  - name: mariadb-credentials
+    envs:
+      - secrets/mariadb.env
+  - name: mosquitto-credentials
+    files:
+      - passwd=secrets/mosquitto.passwd
+  - name: ring-mqtt-credentials
+    envs:
+      - secrets/ring-mqtt.env
+  - name: go2rtc-credentials
+    envs:
+      - secrets/go2rtc.env
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+patches:
+  # Park Z-Wave (single USB stick lives with prod).
+  - path: patches/zwave-replicas-0.yaml
+  # Park go2rtc (binds host port 8555; prod owns it on the shared node).
+  - path: patches/go2rtc-replicas-0.yaml
+  # HA Service -> ClusterIP (NodePort 30123 is cluster-unique). A JSON 6902 patch
+  # is used so the nodePort field is genuinely removed — a strategic-merge null on
+  # a list item does not delete it, and a ClusterIP Service with a nodePort is
+  # rejected by the API server.
+  - target:
+      kind: Service
+      name: home-assistant
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: ClusterIP
+      - op: remove
+        path: /spec/ports/0/nodePort
+  # Repoint every PVC to node-local local-path and drop the NFS volumeName binding.
+  # mariadb-data is already local-path with no volumeName, so this is a no-op for it.
+  - target:
+      kind: PersistentVolumeClaim
+    patch: |-
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: any
+      spec:
+        storageClassName: local-path
+        volumeName: null
+  # Delete the static NFS PersistentVolumes — staging never reaches the Synology.
+  - target:
+      kind: PersistentVolume
+    patch: |-
+      $patch: delete
+      apiVersion: v1
+      kind: PersistentVolume
+      metadata:
+        name: any

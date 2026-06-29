@@ -16,8 +16,13 @@ name: Deploy Hawksnest
 on:
   workflow_dispatch:
     inputs:
+      overlay:
+        description: "Which overlay to deploy"
+        type: choice
+        options: [prod, staging]
+        default: prod
       unpark_zwave:
-        description: "Run zwave-js-ui at replicas:1 (only after the ZWA-2 by-id path is filled in)"
+        description: "Run zwave-js-ui at replicas:1 (prod only; after the ZWA-2 by-id path is filled in)"
         type: boolean
         default: false
   push:
@@ -44,6 +49,10 @@ jobs:
 
       - name: Deploy
         env:
+          # push events have no inputs → deploy prod. Staging is only ever reached
+          # via the manual dispatch button, so an auto-deploy on merge always targets
+          # the live prod overlay (unchanged behaviour).
+          OVERLAY: ${{ github.event.inputs.overlay || 'prod' }}
           # push events have no inputs → false. deploy.sh treats false as
           # "park ONLY if the device path is still a REPLACE- placeholder"; once
           # the real by-id path is committed, zwave-js-ui keeps running, so an

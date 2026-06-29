@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Production overlay — the live cluster that controls the door locks.
+# This is intentionally a near no-op on top of base: it only pins the real
+# namespace and wires the real (gitignored) credentials. The rendered output is
+# byte-equivalent to the old flat kustomize/ tree (verified by a normalized diff
+# in CI / scripts — see DEPLOYMENT.md). Do not add behavioural patches here; if a
+# change is meant for both environments it belongs in base/.
+namespace: home-automation
+
+resources:
+  - ../../base
+  - namespace.yaml
+
+# Credentials are generated from local, untracked files (see secrets/*.example).
+# Copy the .example files, fill them in, then deploy. On the runner these are
+# materialized from HAWKSNEST_SECRETS_DIR by scripts/deploy.sh.
+secretGenerator:
+  - name: mariadb-credentials
+    envs:
+      - secrets/mariadb.env
+  - name: mosquitto-credentials
+    files:
+      - passwd=secrets/mosquitto.passwd
+  - name: ring-mqtt-credentials
+    envs:
+      - secrets/ring-mqtt.env
+  - name: go2rtc-credentials
+    envs:
+      - secrets/go2rtc.env
+
+# Stable Secret names so Deployments can reference them directly. The trade-off is
+# that editing a secret does NOT trigger an automatic rollout — restart the pod
+# (e.g. `kubectl rollout restart deploy/<name> -n home-automation`) after changes.
+generatorOptions:
+  disableNameSuffixHash: true

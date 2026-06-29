@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: go2rtc
+  labels:
+    app: go2rtc
+spec:
+  # ClusterIP is enough: the app reaches the go2rtc API in-cluster via the Hawksnest
+  # nginx proxy (/go2rtc/ -> go2rtc:1984). The WebRTC media on 8555 does NOT go
+  # through this Service — it's published on the node via the Deployment's hostPort
+  # and reached directly by ICE at GO2RTC_HOST_IP:8555.
+  selector:
+    app: go2rtc
+  ports:
+    - name: api
+      port: 1984
+      targetPort: api

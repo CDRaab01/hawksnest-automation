@@ -16,15 +16,30 @@
 #     leave it running, so a routine deploy never takes the door locks offline.
 #
 # Environment knobs (all optional):
+#   OVERLAY                which kustomize overlay to apply: 'prod' (default) or
+#                          'staging'. prod -> namespace home-automation (live locks);
+#                          staging -> home-automation-staging (throwaway smoke test,
+#                          Z-Wave parked, local-path storage, dummy secrets).
 #   KUBECONFIG              kubeconfig path        (default: ~/.kube/config)
 #   HAWKSNEST_SECRETS_DIR  where the real secrets live on the runner host
 #                          (default: ~/hawksnest-secrets) — must contain
-#                          mariadb.env and mosquitto.passwd
+#                          mariadb.env, mosquitto.passwd and ring-mqtt.env.
+#                          Ignored for OVERLAY=staging, which uses the dummy
+#                          *.example secrets straight from the overlay.
 #   UNPARK_ZWAVE           "true" forces zwave-js-ui to run even while the device
 #                          path is still a REPLACE- placeholder (escape hatch).
 #                          Default false: park ONLY if the path is a placeholder;
-#                          a real by-id path always runs.
+#                          a real by-id path always runs. (prod only)
+#   SKIP_HA_CONFIG_CHECK   "true" skips the pre-apply Home Assistant config check
+#                          (default false). The check validates the LIVE config on
+#                          the ha-config PVC and aborts the deploy BEFORE apply if
+#                          it is invalid, so a broken config can't crash-loop HA and
+#                          take the locks offline. A mount/scheduling stall only
+#                          warns; only a genuine check_config failure aborts.
+#   HA_CHECK_TIMEOUT       how long to wait for the config-check Job (default 120s)
 #   ROLLOUT_TIMEOUT        per-deployment rollout wait (default: 180s)
+#   RING_MQTT_TIMEOUT      best-effort wait for ring-mqtt (default: 420s); a miss
+#                          only warns, it never fails the deploy
 #
 set -euo pipefail
 
@@ -33,19 +48,93 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
-NS="home-automation"
-KUSTOMIZE_DIR="kustomize"
-SECRETS_DST="${KUSTOMIZE_DIR}/secrets"
-ZWAVE_MANIFEST="${KUSTOMIZE_DIR}/zwave-js-ui/deployment.yaml"
-
 export KUBECONFIG="${KUBECONFIG:-${HOME}/.kube/config}"
+OVERLAY="${OVERLAY:-prod}"
 HAWKSNEST_SECRETS_DIR="${HAWKSNEST_SECRETS_DIR:-${HOME}/hawksnest-secrets}"
 UNPARK_ZWAVE="${UNPARK_ZWAVE:-false}"
+SKIP_HA_CONFIG_CHECK="${SKIP_HA_CONFIG_CHECK:-false}"
+HA_IMAGE="ghcr.io/home-assistant/home-assistant:stable"   # match the Deployment tag
+HA_CHECK_TIMEOUT="${HA_CHECK_TIMEOUT:-120s}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-180s}"
+RING_MQTT_TIMEOUT="${RING_MQTT_TIMEOUT:-420s}"
+# The Z-Wave device path lives in the shared base manifest now.
+ZWAVE_MANIFEST="kustomize/base/zwave-js-ui/deployment.yaml"
 
 log()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\n\033[1;33m[warn]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\n\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# --- resolve the target overlay -> namespace + paths --------------------------
+case "${OVERLAY}" in
+  prod)    NS="home-automation" ;;
+  staging) NS="home-automation-staging" ;;
+  *) die "Unknown OVERLAY='${OVERLAY}' (expected 'prod' or 'staging')." ;;
+esac
+KUSTOMIZE_DIR="kustomize/overlays/${OVERLAY}"
+SECRETS_DST="${KUSTOMIZE_DIR}/secrets"
+
+# --- pre-apply Home Assistant config validation (Gate B) ----------------------
+# Validate the LIVE config on the ha-config PVC with HA's own check_config, in a
+# one-shot Job, BEFORE `kubectl apply`. If it's invalid we abort here — the old
+# (working) HA pod keeps running its good config, so a bad edit never rolls out a
+# crash-looping HA and takes the door locks offline.
+#   * Skipped on a fresh cluster (no ha-config PVC yet — nothing to validate).
+#   * A mount/scheduling stall (e.g. RWO held by the running HA pod, slow image
+#     pull) only WARNS and continues — it must never block a deploy.
+#   * Only a genuine non-zero check_config aborts the deploy.
+ha_config_check() {
+  if ! kubectl get pvc ha-config -n "${NS}" >/dev/null 2>&1; then
+    log "No ha-config PVC in ${NS} yet — skipping live HA config check (fresh install)."
+    return 0
+  fi
+  log "Validating live HA config on the ha-config PVC (check_config, timeout ${HA_CHECK_TIMEOUT})"
+  kubectl delete job ha-config-check -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
+  cat <<EOF | kubectl apply -f - >/dev/null
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ha-config-check
+  namespace: ${NS}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 120
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: check
+          image: ${HA_IMAGE}
+          command: ["python", "-m", "homeassistant", "--script", "check_config", "--config", "/config"]
+          volumeMounts:
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: ha-config
+EOF
+  if kubectl wait --for=condition=complete job/ha-config-check -n "${NS}" \
+       --timeout="${HA_CHECK_TIMEOUT}" >/dev/null 2>&1; then
+    log "HA config check passed."
+    kubectl delete job ha-config-check -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
+    return 0
+  fi
+  if kubectl wait --for=condition=failed job/ha-config-check -n "${NS}" \
+       --timeout=5s >/dev/null 2>&1; then
+    warn "Home Assistant config check FAILED — the live config is invalid:"
+    kubectl logs job/ha-config-check -n "${NS}" --tail=60 >&2 || true
+    kubectl delete job ha-config-check -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
+    die "Aborting BEFORE apply so the running HA pod keeps its good config.
+       Fix configuration.yaml (HA UI / file editor) and re-deploy, or set
+       SKIP_HA_CONFIG_CHECK=true to override (not recommended on prod)."
+  fi
+  warn "HA config check did not finish within ${HA_CHECK_TIMEOUT} — could not mount
+       ha-config (RWO held by the running HA pod) or the image pull was slow.
+       Skipping the check, NOT failing the deploy."
+  kubectl logs job/ha-config-check -n "${NS}" --tail=20 >&2 2>/dev/null || true
+  kubectl delete job ha-config-check -n "${NS}" --ignore-not-found >/dev/null 2>&1 || true
+  return 0
+}
 
 # --- pre-flight ---------------------------------------------------------------
 command -v kubectl >/dev/null 2>&1 || die "kubectl not found on PATH."
@@ -54,11 +143,14 @@ kubectl cluster-info >/dev/null 2>&1 \
   || die "Cannot reach the cluster with KUBECONFIG=${KUBECONFIG}. Is K3s up?"
 
 log "Cluster: $(kubectl config current-context 2>/dev/null || echo '?')  (KUBECONFIG=${KUBECONFIG})"
+log "Overlay: ${OVERLAY}  ->  namespace ${NS}"
 
 # --- materialize the gitignored secrets onto this checkout --------------------
-# The repo only tracks *.example templates; the real secrets are kept on the
+# prod: the repo only tracks *.example templates; the real secrets are kept on the
 # runner host (HAWKSNEST_SECRETS_DIR) and copied into the kustomize tree so the
 # secretGenerator can build them. Existing files in the checkout are left alone.
+# staging: there are no real secrets — it materializes the dummy *.example files in
+# the overlay so a smoke deploy needs nothing bootstrapped on the host.
 need_secret() {
   local name="$1"
   local dst="${SECRETS_DST}/${name}"
@@ -75,14 +167,49 @@ need_secret() {
        GitHub; bootstrap them once on the runner host."
   fi
 }
+# go2rtc (two-way audio) is OPT-IN and ships parked (replicas:0), so its secret is
+# NON-fatal: use the real one if present, else fall back to the tracked dummy
+# *.example so `kustomize build` always resolves and a not-yet-configured go2rtc can
+# never block a prod deploy. (No talk until the operator fills real creds + device
+# ids and bumps go2rtc to replicas:1 — see DEPLOYMENT.md §7c.)
+optional_secret() {
+  local name="$1"
+  local dst="${SECRETS_DST}/${name}"
+  local src="${HAWKSNEST_SECRETS_DIR}/${name}"
+  [ -f "${dst}" ] && return 0
+  if [ -f "${src}" ]; then
+    install -m 0600 "${src}" "${dst}"
+    log "Loaded secret ${name} from ${src}"
+  else
+    install -m 0600 "${dst}.example" "${dst}"
+    log "Using dummy ${name} (go2rtc is opt-in / parked)."
+  fi
+}
 mkdir -p "${SECRETS_DST}"
-need_secret "mariadb.env"
-need_secret "mosquitto.passwd"
+if [ "${OVERLAY}" = "staging" ]; then
+  for s in mariadb.env mosquitto.passwd ring-mqtt.env; do
+    [ -f "${SECRETS_DST}/${s}" ] \
+      || install -m 0600 "${SECRETS_DST}/${s}.example" "${SECRETS_DST}/${s}"
+  done
+  log "Staging: using dummy credentials from the overlay's *.example templates."
+else
+  need_secret "mariadb.env"
+  need_secret "mosquitto.passwd"
+  need_secret "ring-mqtt.env"
+fi
+optional_secret "go2rtc.env"
 
 # --- validate the build before touching the cluster ---------------------------
 log "Validating kustomize build"
 kubectl kustomize "${KUSTOMIZE_DIR}" >/dev/null \
   || die "kustomize build failed — fix the manifests before deploying."
+
+# --- validate the LIVE Home Assistant config (Gate B) before apply ------------
+if [ "${SKIP_HA_CONFIG_CHECK}" = "true" ]; then
+  warn "SKIP_HA_CONFIG_CHECK=true — skipping the live HA config validation."
+else
+  ha_config_check
+fi
 
 # --- apply --------------------------------------------------------------------
 log "Applying ${KUSTOMIZE_DIR}/ to namespace ${NS}"
@@ -98,6 +225,13 @@ kubectl apply -k "${KUSTOMIZE_DIR}"
 # otherwise every push-triggered deploy would scale the controller to 0 and take
 # the door locks offline. UNPARK_ZWAVE=true is an escape hatch to force it on even
 # while the path is still a placeholder.
+# Staging parks Z-Wave permanently via the overlay (replicas:0) and must never own
+# the single USB stick, so skip the prod parking logic entirely and exclude it from
+# the rollout wait below.
+if [ "${OVERLAY}" = "staging" ]; then
+  log "Staging: zwave-js-ui stays parked (replicas:0 from the overlay)."
+  zwave_should_run="false"
+else
 zwave_placeholder="false"
 grep -q 'REPLACE-' "${ZWAVE_MANIFEST}" && zwave_placeholder="true"
 
@@ -115,8 +249,12 @@ else
   kubectl scale deploy/zwave-js-ui --replicas=0 -n "${NS}"
   zwave_should_run="false"
 fi
+fi  # end OVERLAY=staging wrapper
 
 # --- wait for the always-on workloads to settle -------------------------------
+# ring-mqtt is handled separately (best-effort) below: its readiness depends on the
+# Ring cloud API + per-camera setup, which can take minutes, so a slow or unhealthy
+# ring-mqtt must NEVER fail the deploy that also rolls the lock-critical workloads.
 WORKLOADS=(mariadb mosquitto home-assistant)
 [ "${zwave_should_run}" = "true" ] && WORKLOADS+=(zwave-js-ui)
 
@@ -129,6 +267,15 @@ for d in "${WORKLOADS[@]}"; do
   fi
 done
 
+# ring-mqtt: best-effort. It boots slowly (Ring cloud login + many cameras) and has
+# no liveness probe by design, so give it a longer wait but only WARN if it isn't
+# ready — never fail the deploy on it (locks/HA must not hinge on Ring availability).
+log "Waiting for ring-mqtt (best-effort, timeout ${RING_MQTT_TIMEOUT})"
+if ! kubectl rollout status deploy/ring-mqtt -n "${NS}" --timeout="${RING_MQTT_TIMEOUT}"; then
+  warn "ring-mqtt not ready within ${RING_MQTT_TIMEOUT} — continuing anyway.
+       Ring cloud may be slow; check 'kubectl logs deploy/ring-mqtt -n ${NS}'."
+fi
+
 log "Current pods in ${NS}:"
 kubectl get pods -n "${NS}" -o wide || true
 
@@ -137,4 +284,10 @@ if [ "${rollout_failed}" = "true" ]; then
        'kubectl logs' / 'kubectl describe' for the failing workload."
 fi
 
-log "Deploy complete. HA UI: http://<PC-LAN-IP>:8123 (LAN) or Tailscale IP."
+if [ "${OVERLAY}" = "staging" ]; then
+  log "Staging deploy complete. HA is ClusterIP (no NodePort) — reach it with:
+       kubectl port-forward -n ${NS} deploy/home-assistant 8124:8123
+       then open http://localhost:8124/ . Tear down with: kubectl delete ns ${NS}"
+else
+  log "Deploy complete. HA UI: http://<PC-LAN-IP>:8123 (LAN) or Tailscale IP."
+fi

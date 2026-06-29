@@ -1,3 +1,4 @@
 # Real secrets — never commit. Only the *.example templates are tracked.
-kustomize/secrets/*
-!kustomize/secrets/*.example
+# Each overlay (overlays/prod, overlays/staging) has its own secrets/ dir.
+kustomize/overlays/*/secrets/*
+!kustomize/overlays/*/secrets/*.example

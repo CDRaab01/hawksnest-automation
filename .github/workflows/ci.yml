@@ -18,32 +18,86 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Invariant checks (PVC/Secret wiring, NFS v3, device path, ports)
-        run: |
-          pip install pyyaml
-          python3 tests/validate_manifests.py
-
       - name: Install kustomize + kubeconform
-        # Install into a temp dir: install_kustomize.sh writes ./kustomize, which
-        # collides with the repo's kustomize/ manifests dir and aborts the script.
+        # Pinned, direct release tarballs. The old `install_kustomize.sh | bash` from
+        # kustomize master and the kubeconform `/latest/` URL were brittle and started
+        # failing the `curl -f` outright (the install step died in <1s), which skipped
+        # the build/schema steps below. Pinning is reproducible and avoids that.
+        env:
+          KUSTOMIZE_VERSION: v5.4.3
+          KUBECONFORM_VERSION: v0.6.7
         run: |
-          cd "$RUNNER_TEMP"
-          curl -sSfL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
-          sudo mv kustomize /usr/local/bin/
-          curl -sSfL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
-            | tar xz kubeconform
-          sudo mv kubeconform /usr/local/bin/
+          # Extract into a temp dir: the repo root already contains a `kustomize/`
+          # directory, so extracting a binary named `kustomize` here collides
+          # ("tar: kustomize: Cannot open: File exists").
+          tmp="$(mktemp -d)"
+          curl -sSfL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
+            | tar xz -C "$tmp" kustomize
+          sudo mv "$tmp/kustomize" /usr/local/bin/
+          curl -sSfL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | tar xz -C "$tmp" kubeconform
+          sudo mv "$tmp/kubeconform" /usr/local/bin/
 
       - name: Stage placeholder secrets so kustomize can build
         # secretGenerator reads gitignored files that never exist in CI. The
         # *.example templates are enough to make `kustomize build` resolve — the
-        # real secrets are bootstrapped on the host (see DEPLOYMENT.md §10).
+        # real prod secrets are bootstrapped on the host (see DEPLOYMENT.md §10),
+        # and staging only ever uses these dummies.
         run: |
-          cp kustomize/secrets/mariadb.env.example     kustomize/secrets/mariadb.env
-          cp kustomize/secrets/mosquitto.passwd.example kustomize/secrets/mosquitto.passwd
+          for ov in prod staging; do
+            d="kustomize/overlays/$ov/secrets"
+            for ex in "$d"/*.example; do
+              cp "$ex" "${ex%.example}"
+            done
+          done
 
-      - name: Build manifests
-        run: kustomize build kustomize/ | tee /tmp/hawksnest.yaml
+      - name: Build both overlays
+        run: |
+          kustomize build kustomize/overlays/prod    | tee /tmp/prod.yaml    >/dev/null
+          kustomize build kustomize/overlays/staging | tee /tmp/staging.yaml >/dev/null
 
-      - name: Validate against Kubernetes schemas
-        run: kubeconform -strict -summary -ignore-missing-schemas /tmp/hawksnest.yaml
+      - name: Invariant checks (per overlay — wiring, NFS, device path, ports, isolation)
+        run: |
+          pip install pyyaml
+          python3 tests/validate_manifests.py prod    /tmp/prod.yaml
+          python3 tests/validate_manifests.py staging /tmp/staging.yaml
+
+      - name: Validate against Kubernetes schemas (both overlays)
+        run: |
+          kubeconform -strict -summary -ignore-missing-schemas /tmp/prod.yaml
+          kubeconform -strict -summary -ignore-missing-schemas /tmp/staging.yaml
+
+  ha-config-check:
+    # Gate A: validate the committed Home Assistant SEED config with HA's own
+    # check_config, using the same image tag the Deployment runs. This catches a
+    # malformed configuration.yaml before it can land on a fresh cluster's PVC and
+    # fail HA's first boot. (The LIVE config on an existing PVC — which CI can't see
+    # — is validated separately by scripts/deploy.sh before every apply.)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Extract the seed config from the ConfigMap
+        run: |
+          pip install pyyaml
+          mkdir -p /tmp/ha-config
+          python3 - <<'PY'
+          import pathlib, yaml
+          cm = yaml.safe_load(open("kustomize/base/home-assistant/configmap.yaml"))
+          out = pathlib.Path("/tmp/ha-config")
+          for fn, content in cm["data"].items():
+              (out / fn).write_text(content)
+          # configuration.yaml references `!secret recorder_db_url`; check_config
+          # resolves secrets, so provide a dummy (it does not connect to the DB).
+          (out / "secrets.yaml").write_text('recorder_db_url: "mysql://u:p@localhost/db"\n')
+          PY
+
+      - name: Run Home Assistant check_config on the seed
+        run: |
+          docker run --rm -v /tmp/ha-config:/config \
+            ghcr.io/home-assistant/home-assistant:stable \
+            python -m homeassistant --script check_config --config /config

@@ -3,7 +3,7 @@
 Living status doc for the HA + Z-Wave deployment. Update at the end of each working
 session so the next one can pick up without re-deriving the fiddly bits.
 
-_Last updated: 2026-06-23 (front + back door locks live; garage + user codes pending)_
+_Last updated: 2026-06-27 (added base+overlays refactor, a staging smoke-test overlay, and HA config-validation gates so a deploy can be tested before it touches the live locks; ring-mqtt Location Modes alarm panel live; front + back door locks live; garage + user codes pending)_
 
 ## TL;DR — where we are
 
@@ -17,9 +17,19 @@ Windows host → usbipd (303a:4001) → WSL2 /dev/ttyACM0 → by-id symlink
 
 ## Done ✅
 
+- **Deploy testing + config gates (this session).** Refactored `kustomize/` into
+  `base/` + `overlays/{prod,staging}` (prod renders byte-equivalent to the old flat tree).
+  A `staging` overlay deploys the whole stack to an isolated `home-automation-staging`
+  namespace on the same K3s — Z-Wave parked, all storage on `local-path` (never touches the
+  Synology), HA ClusterIP — via `OVERLAY=staging ./scripts/deploy.sh`, so a change can be
+  proven to come up Ready before promotion. Added HA `check_config` gates: CI validates the
+  seed config; `deploy.sh` validates the **live** `ha-config` PVC config and aborts *before*
+  apply if invalid (so a bad config can't crash-loop HA and drop the locks). `validate_manifests.py`
+  now validates both rendered overlays; CI builds + kubeconforms both. See DEPLOYMENT.md §11.
+  Motivated by the earlier "deploy knocked out a service that didn't relaunch" incident.
 - **USB passthrough working.** ZWA-2 confirmed as VID:PID `303a:4001`, serial
   `9070690E14E4`, enumerates as `/dev/ttyACM0`. Stable mount path in
-  `kustomize/zwave-js-ui/deployment.yaml`:
+  `kustomize/base/zwave-js-ui/deployment.yaml`:
   `/dev/serial/by-id/usb-Nabu_Casa_ZWA-2_9070690E14E4-if00`.
   - usbipd is **5.x** — attach syntax is `usbipd attach --busid <id> --wsl Dragonfly`
     (the older `--distribution` flag is gone). `attach-zwa2.ps1` was fixed for this.
@@ -44,7 +54,30 @@ Windows host → usbipd (303a:4001) → WSL2 /dev/ttyACM0 → by-id symlink
   Do once all locks are in (one pass via the User Code CC / Users tab).
 - **ZEN72 dimmer(s)** — not added. Worth doing one *between* the PC and the doors to
   build mesh; lock RSSI is ~-87 dBm (workable but middling, no repeaters yet).
-- **Ring integration** — not started.
+- **ring-mqtt** — manifests added this session (`kustomize/ring-mqtt/`), not yet deployed.
+  To finish: create the `ring` mosquitto user + `ring-mqtt.env`, `apply -k`, then generate
+  the Ring token (`kubectl exec -it deploy/ring-mqtt -- /app/ring-mqtt/init-ring-mqtt.js`,
+  one-time 2FA) and add the HA MQTT integration. See DEPLOYMENT.md §7b.
+  - **Ring alarm/modes panel:** `ENABLEMODES=true` is now set on the ring-mqtt deployment
+    (and `enable_modes:true` in the seed configmap) so Ring **Location Modes**
+    (Disarmed/Home/Away) publish as an HA `alarm_control_panel` — that's what Hawksnest's
+    security panel arms/disarms (camera/doorbell-only accounts have no Ring Alarm base
+    station, so without this the dashboard reads "No alarm panel"). On an already-running
+    pod, the env var is what takes effect (the seed only writes config.json on first boot);
+    `kubectl rollout restart deploy/ring-mqtt -n home-automation` after deploy.
+  - **ring-mqtt liveness kill-loop (fixed).** Enabling modes forced a pod recreate, which
+    exposed a latent bug: the **liveness probe** on `:55123` (delay 120s + 5×30s = 270s)
+    fired before ring-mqtt finished its slow Ring-cloud init (login + 11 cameras, snapshot
+    timeouts), restarting the pod mid-init → inescapable kill-loop (8 restarts, all cameras
+    offline). `Exit code: 0` + "failed liveness probe, will be restarted" confirmed it was
+    the kubelet killing it, NOT a code crash, and NOT enable_modes (errors were all in
+    camera.js publish paths). Fix: **removed the liveness probe** (readiness-only; readiness
+    gates the Service without force-killing), and made ring-mqtt **best-effort in deploy.sh**
+    (warn, never fail — `RING_MQTT_TIMEOUT`, default 420s) so a slow Ring boot can't red-X a
+    deploy that also rolls the locks. Any future ring-mqtt recreate (node reboot, redeploy)
+    is now safe from this loop. The June 26 ring-mqtt deploy "failure" was the same loop.
+- **Frigate** — intentionally **parked**. Ring has no continuous local RTSP stream, so it
+  can't be a Frigate/NVR source; revisit Frigate only when an RTSP-capable camera exists.
 - **Tailscale** — not installed yet on the PC. Remote HA access (V1 item) still open.
   Once installed, `portproxy-ha.ps1` already exposes HA at `http://<tailscale-ip>:8123`.
 
