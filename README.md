@@ -105,6 +105,23 @@ kubectl get pods -n home-automation -w
 Or use the wrapper that encodes the safety rules (validates the live HA config, re-parks
 `zwave-js-ui`, loads secrets, waits on rollouts): `./scripts/deploy.sh`.
 
+### Is it up? (read-only health check)
+
+`./scripts/healthcheck.sh` is a **read-only** probe — it never applies, scales, or restarts
+anything. It reports cluster reachability, per-workload ready replicas, PVC bind state, unhealthy
+pods, and (optionally) HTTP reachability of the HA / Hawksnest endpoints, then exits `0` healthy /
+`1` degraded / `2` cluster-down:
+
+```bash
+./scripts/healthcheck.sh                                   # cluster + workload checks
+HA_URL=http://192.168.4.34:8123 \
+HAWKSNEST_URL=http://192.168.4.34:8080 ./scripts/healthcheck.sh   # also probe the endpoints
+```
+
+It distinguishes *cluster down* (exit 2 — K3s/WSL/host layer) from *workload degraded* (exit 1).
+A redeploy runs **on** this cluster, so an exit-2 result means a deploy can't help yet — recover
+the host/K3s layer first.
+
 ### Staging (test before prod)
 
 A `staging` overlay deploys the whole stack to an isolated `home-automation-staging`
