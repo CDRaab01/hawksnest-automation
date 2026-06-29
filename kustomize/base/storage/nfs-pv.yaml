@@ -31,6 +31,7 @@ spec:
     - nfsvers=3
     - hard
     - noatime
+    - nolock          # HA flock() needs local locking; NAS NLM unreliable -> ENOLCK
   nfs:
     server: 192.168.5.78           # e.g. 192.168.1.10
     path: /volume3/home-automation/ha-config

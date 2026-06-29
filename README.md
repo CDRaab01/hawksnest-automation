@@ -269,6 +269,10 @@ node-local.
 **Host reboot:** run the Windows scheduled task (USB re-attach + portproxy). See the
 reboot drill in [`windows/README-windows.md`](./windows/README-windows.md).
 
+**HA unreachable but pods are `Running`:** the Windows→WSL2 portproxy is stale (WSL2 got a
+new IP on reboot). Run `windows\heal-ha.ps1` (elevated) to detect and repair it, or see the
+["HA unreachable after a reboot" troubleshooting](./windows/README-windows.md) section.
+
 **Stick replaced (same controller restored):** restore `zwavejs-config`, attach the new
 stick, set the port to `/dev/zwave`. Note: a brand-new controller without the restored
 NVM backup requires re-pairing — keep the `zwavejs-config` backup current.
