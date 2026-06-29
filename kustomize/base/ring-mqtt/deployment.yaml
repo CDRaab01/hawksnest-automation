@@ -132,19 +132,18 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-          # Readiness ONLY — deliberately no liveness probe. ring-mqtt's web UI on
-          # 55123 doesn't bind until it has connected to the Ring cloud API and set
-          # up every camera (snapshot fetches can time out and retry for minutes with
-          # many cameras). A liveness probe on 55123 therefore restarts the pod mid-init,
-          # which restarts the slow Ring setup from scratch — an inescapable kill-loop
-          # (observed: 8 restarts, "failed liveness probe, will be restarted", cameras
-          # all dropped offline). Readiness alone gates the Service without force-killing,
-          # so the pod gets an uninterrupted boot and comes up healthy. Generous
-          # thresholds for the slow Ring init.
+          # Readiness ONLY — deliberately no liveness probe (a liveness probe restarts
+          # the pod mid-init and restarts the slow Ring setup from scratch — an
+          # inescapable kill-loop: observed 8 restarts, cameras all dropped offline).
+          # Probe rtsp (8554), NOT the web UI on 55123: in this deployment 55123 never
+          # actually binds (the web UI isn't served — confirmed only 8554 + the MQTT
+          # client port listen), so the old httpGet on web-ui left the pod stuck 0/1
+          # forever even while ring-mqtt was fully working and publishing to MQTT.
+          # rtsp:8554 comes up once go2rtc starts, so it's a real "serving" signal.
+          # Generous thresholds for the slow Ring init.
           readinessProbe:
-            httpGet:
-              path: /
-              port: web-ui
+            tcpSocket:
+              port: rtsp
             initialDelaySeconds: 30
             periodSeconds: 15
             timeoutSeconds: 5
