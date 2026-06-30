@@ -1,0 +1,29 @@
+# WSL systemd unit (NOT a Windows service). Makes Home Assistant reachable from the
+# Windows host / LAN under WSL mirrored networking.
+#
+# Why this exists: WSL mirrored mode only forwards the Windows host to REAL listening
+# sockets inside WSL. A K3s NodePort (and a LoadBalancer/svclb hostPort) is nft/iptables
+# DNAT with NO listening socket, so the host can't reach it (proven: a plain socket on
+# :8200 IS reachable from Windows; :30123 is not). socat opens a real socket on :8123
+# and forwards to HA's NodePort, so http://<host>:8123 works. The Hyper-V firewall rule
+# 'HomeAssistant-8123' allows LAN/Tailscale access; mirrored localhost covers the host.
+#
+# Install (in the Dragonfly distro):
+#   sudo apt-get update && sudo apt-get install -y socat
+#   sudo cp windows/ha-forwarder.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ha-forwarder.service
+#
+# This replaces the old netsh portproxy approach, which is dead under mirrored mode
+# (it targeted a NAT-era 172.x WSL IP that no longer exists).
+[Unit]
+Description=Home Assistant host-reachability forwarder (WSL mirrored networking)
+After=network-online.target k3s.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/socat TCP-LISTEN:8123,fork,reuseaddr TCP:127.0.0.1:30123
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

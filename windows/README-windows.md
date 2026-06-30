@@ -120,3 +120,40 @@ rule (`HomeAssistant-8123`) and confirm the NodePort answers from inside WSL:
 4. In Z-Wave JS UI, the controller is online and all locks report state — **no
    re-pairing required**.
 5. HA is reachable at `http://<PC-LAN-IP>:8123` and over Tailscale.
+
+---
+
+## ⚠️ Mirrored networking (current setup — supersedes the portproxy steps above)
+
+WSL2 here runs `networkingMode=mirrored` (set deliberately to reduce remote-control / WSL
+crashes). That **breaks the netsh portproxy + `heal-ha.ps1` approach above** — there is no
+NAT-era `172.x` WSL IP for the proxy to target anymore. Use the following instead.
+
+**HA host/LAN reachability — `ha-forwarder.service` (socat).** Mirrored mode only forwards the
+Windows host to *real listening sockets* in WSL; a K3s NodePort is nft DNAT with no socket, so
+the host can't reach `:30123`. A socat real-socket forwarder bridges it:
+
+```bash
+# in the Dragonfly distro
+sudo apt-get update && sudo apt-get install -y socat
+sudo cp windows/ha-forwarder.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now ha-forwarder.service
+```
+
+LAN/Tailscale access additionally needs a one-time (elevated) Hyper-V firewall allow for 8123:
+
+```powershell
+New-NetFirewallHyperVRule -Name 'HomeAssistant-8123' -DisplayName 'HomeAssistant-8123' `
+  -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' `
+  -Protocol TCP -LocalPorts 8123 -Action Allow
+```
+
+**Z-Wave stick re-attach — logon task.** `usbipd attach` doesn't survive a reboot, and if
+zwave-js-ui starts before the stick is attached, containerd masks the device path with a
+directory (`/dev/zwave: Is a directory`) and the locks drop to Unavailable. Register the logon
+task once (elevated): `& 'C:\code\hawksnest-automation\windows\register-zwa2-task.ps1'`. It runs
+`attach-zwa2-logon.ps1` (attach by VID:PID — needs no admin) then `zwave-attach-heal.sh` (clears
+any directory mask and bounces zwave-js-ui).
+
+**HA on NFS:** the `ha-config` PV needs `nolock` in its mountOptions (already in
+`kustomize/base/storage/nfs-pv.yaml`) — without it HA's `flock()` fails `ENOLCK` and crash-loops.
