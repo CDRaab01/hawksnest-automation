@@ -48,8 +48,9 @@ KUSTOMIZE = REPO / "kustomize"
 OVERLAYS = {
     "prod": {
         "namespace": "home-automation",
-        "ha_service_type": "NodePort",
-        "ha_nodeport": 30123,        # the Windows portproxy target — must not drift
+        "ha_service_type": "LoadBalancer",
+        "ha_nodeport": 30123,        # kept stable; host access is via the ServiceLB
+                                     # hostPort (mirrored WSL can't reach an nft NodePort)
         "require_nfs": True,         # 4 NFS PVs present, v3, real server/path
         "zwave_device_real": True,   # privileged + real /dev by-id path, running
     },

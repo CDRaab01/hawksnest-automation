@@ -5,7 +5,7 @@ metadata:
   labels:
     app: home-assistant
 spec:
-  type: NodePort
+  type: LoadBalancer
   selector:
     app: home-assistant
   ports:
