@@ -1,5 +1,27 @@
 # CLAUDE.md — Household Home Assistant Deployment
 
+> **Status (2026-07-03): this spec has been BUILT.** Everything below was the implementation
+> brief; the as-built, operational documentation is **[README.md](README.md)** — bring-up order,
+> secrets creation, staging overlay, Z-Wave pairing, ring-mqtt setup, backups, recovery. When
+> this file and the README disagree, the README wins. Kept for the design rationale and
+> acceptance criteria, which still apply.
+>
+> Notable divergence from the spec: cameras run through **ring-mqtt + go2rtc** (local MQTT
+> bridge, live video + events), not only the official cloud Ring integration (which remains
+> optional) — see README §"Ring via ring-mqtt".
+>
+> **Cross-repo couplings to keep in mind:**
+> - The **Hawksnest** repo's pod deploys into the same `home-automation` namespace and
+>   reverse-proxies `/api` to HA. HA's `trusted_proxies`/`use_x_forwarded_for` config here and
+>   Hawksnest's nginx XFF behavior are one system — change them together or cameras 400
+>   (details: Hawksnest `deploy/README.md`).
+> - CI deploys run on the self-hosted **Linux runner in WSL** (labels `self-hosted, linux,
+>   dragonfly`) — the same WSL2 distro (`Dragonfly`) that hosts k3s. A staging overlay exists
+>   (`home-automation-staging` namespace, teardown workflow) — use it before touching prod;
+>   this stack controls physical door locks.
+> - The WSL2 IP changes on reboot; LAN/Tailscale exposure depends on the logon-time
+>   `portproxy-*.ps1` tasks on the Windows host (see README + Hawksnest deploy docs).
+
 ## Purpose
 
 This document is the implementation spec for deploying Home Assistant (HA) and supporting
