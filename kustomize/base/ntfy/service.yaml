@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ntfy
+  labels:
+    app: ntfy
+spec:
+  # NodePort in base = prod's external front (Tailscale Serve :8444 -> this port
+  # via the host forwarder). NodePorts are cluster-unique, so the staging overlay
+  # patches this to ClusterIP (mirrors home-assistant) to avoid a 30081 collision
+  # on the shared K3s cluster. HA reaches ntfy in-cluster via the Service name.
+  type: NodePort
+  selector:
+    app: ntfy
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      # Fixed NodePort so the Windows-side Tailscale Serve forwarder is stable.
+      nodePort: 30081

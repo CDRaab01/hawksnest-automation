@@ -51,6 +51,17 @@ patches:
         value: ClusterIP
       - op: remove
         path: /spec/ports/0/nodePort
+  # ntfy Service -> ClusterIP too (NodePort 30081 is cluster-unique, same reason
+  # as HA above). Staging needs no external push front.
+  - target:
+      kind: Service
+      name: ntfy
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: ClusterIP
+      - op: remove
+        path: /spec/ports/0/nodePort
   # Repoint every PVC to node-local local-path and drop the NFS volumeName binding.
   # mariadb-data is already local-path with no volumeName, so this is a no-op for it.
   - target:

@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ntfy
+  labels:
+    app: ntfy
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ntfy
+  template:
+    metadata:
+      labels:
+        app: ntfy
+      annotations:
+        # Bump to force a rollout when server.yml changes (ConfigMap edits don't
+        # restart the pod on their own).
+        config-revision: "2026-07-12-initial"
+    spec:
+      containers:
+        - name: ntfy
+          image: binwiederhier/ntfy:v2.11.0
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 80
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ntfy/server.yml
+              subPath: server.yml
+            - name: cache
+              mountPath: /var/cache/ntfy
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: ntfy-config
+        - name: cache
+          persistentVolumeClaim:
+            claimName: ntfy-cache

@@ -17,6 +17,7 @@ start there if you're picking this up fresh.
 | `mariadb`        | HA recorder database (replaces SQLite-on-NFS).                | `mariadb-data` (local-path) |
 | `mosquitto`      | MQTT broker — used by `ring-mqtt`; also seam for future Ratgdo. | `mosquitto-data` (NFS)   |
 | `ring-mqtt`      | Bridges Ring cameras/doorbell/sensors to MQTT; on-demand live video via RTSP. | `ring-mqtt-data` (NFS) ⭐ |
+| `ntfy`           | Self-hosted push for Hawksnest doorbell + alarm alerts (tailnet-only). See [docs/ntfy-push.md](docs/ntfy-push.md). | `ntfy-cache` (local-path) |
 
 ⭐ = **must be backed up** (see [Backups](#backups)).
 
