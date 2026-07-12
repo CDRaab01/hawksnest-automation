@@ -89,3 +89,19 @@ spec:
   resources:
     requests:
       storage: 256Mi
+---
+# ntfy's message cache (recent-push replay for reconnecting phones). Node-local
+# local-path, not NFS: it's a regenerable cache — losing it drops at most a few
+# hours of undelivered pushes, not worth an NFS PV. Local-path also means the
+# staging overlay's "repoint every PVC to local-path" patch is a no-op here.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ntfy-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 256Mi

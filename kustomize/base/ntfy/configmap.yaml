@@ -1,0 +1,33 @@
+# ntfy server config (self-hosted push for Hawksnest doorbell + alarm alerts).
+#
+# ntfy is the suite's push transport (decided 2026-07-12, Hawksnest V1.md Gate 3):
+# no Google/FCM dependency, fits the tailnet-only / local-first posture. HA
+# publishes to it in-cluster (http://ntfy/<topic>); phones subscribe over the
+# Tailscale Serve TLS front (https://<host>.ts.net:8444 -> NodePort 30081).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ntfy-config
+  labels:
+    app: ntfy
+data:
+  server.yml: |
+    # Public base URL the phones reach ntfy at — the Tailscale Serve front, NOT
+    # the in-cluster Service. ntfy stamps this into subscription/attachment URLs,
+    # so it must be the external name even though HA publishes via the ClusterIP.
+    base-url: "https://dragonfly.tail2ce561.ts.net:8444"
+    listen-http: ":80"
+    # Tailscale Serve terminates TLS and forwards; trust its forwarded headers.
+    behind-proxy: true
+    # Message cache so a phone that reconnects gets recent pushes (since=…).
+    cache-file: "/var/cache/ntfy/cache.db"
+    cache-duration: "12h"
+    # Attachments unused (doorbell/alarm payloads are text + a click URL).
+    attachment-cache-dir: ""
+    # No auth-file → open read-write. Deliberate: ntfy is reachable only on the
+    # tailnet (never the public internet — no Cloudflare tunnel, by design), so
+    # this matches the suite's tailnet-only bias. To lock it down later, add an
+    # auth-file (SQLite), set auth-default-access "deny-all", and mint per-topic
+    # tokens for HA (publish) and the phones (subscribe).
+    enable-signup: false
+    enable-login: false

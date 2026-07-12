@@ -50,6 +50,8 @@ OVERLAYS = {
         "namespace": "home-automation",
         "ha_service_type": "NodePort",
         "ha_nodeport": 30123,        # the Windows portproxy target — must not drift
+        "ntfy_service_type": "NodePort",
+        "ntfy_nodeport": 30081,      # the Tailscale Serve :8444 forwarder target
         "require_nfs": True,         # 4 NFS PVs present, v3, real server/path
         "zwave_device_real": True,   # privileged + real /dev by-id path, running
     },
@@ -57,6 +59,8 @@ OVERLAYS = {
         "namespace": "home-automation-staging",
         "ha_service_type": "ClusterIP",
         "ha_nodeport": None,         # ClusterIP: no NodePort at all
+        "ntfy_service_type": "ClusterIP",
+        "ntfy_nodeport": None,       # ClusterIP: no NodePort (no 30081 collision)
         "require_nfs": False,        # NFS PVs deleted; PVCs on local-path
         "zwave_device_real": False,  # parked at replicas:0 (never claims the stick)
     },
@@ -242,6 +246,19 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
             check(expected["ha_nodeport"] in node_ports,
                   f"home-assistant NodePort must stay {expected['ha_nodeport']} "
                   "(the Windows portproxy target)")
+    ntfy_svc = next((s for s in services if name(s) == "ntfy"), None)
+    check(ntfy_svc is not None, "ntfy Service is missing (push transport)")
+    if ntfy_svc:
+        check(ntfy_svc["spec"].get("type") == expected["ntfy_service_type"],
+              f"ntfy Service must be {expected['ntfy_service_type']}")
+        ntfy_node_ports = [p.get("nodePort") for p in ntfy_svc["spec"]["ports"]]
+        if expected["ntfy_nodeport"] is None:
+            check(all(np is None for np in ntfy_node_ports),
+                  "staging ntfy Service must not set a nodePort (ClusterIP)")
+        else:
+            check(expected["ntfy_nodeport"] in ntfy_node_ports,
+                  f"ntfy NodePort must stay {expected['ntfy_nodeport']} "
+                  "(the Tailscale Serve :8444 forwarder target)")
     zwave_svc = next((s for s in services if name(s) == "zwave-js-ui"), None)
     if zwave_svc:
         zports = {p["port"] for p in zwave_svc["spec"]["ports"]}

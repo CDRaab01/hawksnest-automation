@@ -27,3 +27,6 @@ resources:
   - go2rtc/configmap.yaml
   - go2rtc/deployment.yaml
   - go2rtc/service.yaml
+  - ntfy/configmap.yaml
+  - ntfy/deployment.yaml
+  - ntfy/service.yaml

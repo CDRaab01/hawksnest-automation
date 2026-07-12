@@ -4,6 +4,12 @@
 # not already exist (see the Deployment). After first boot, HA owns these files on the
 # PVC and edits via the UI / file editor persist normally — re-applying this ConfigMap
 # will not clobber them.
+#
+# IMPORTANT: because the seed is a fresh-install-only copy, changes here do NOT reach
+# the LIVE prod HA (its PVC is already seeded). To roll the ntfy push config below onto
+# the running instance, follow docs/ntfy-push.md (add the rest_command + automations to
+# the live config, then Developer Tools → YAML → Reload). CI's ha-config-check still
+# validates this seed with HA's own check_config, so it stays a correct record.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -30,6 +36,21 @@ data:
       purge_keep_days: 30
       commit_interval: 5
 
+    # Push transport for Hawksnest (doorbell + alarm). Publishes to the in-cluster
+    # ntfy Service (http://ntfy) — phones subscribe over Tailscale Serve. Generic,
+    # entity-agnostic: the automations below pass topic/title/message/tags/etc.
+    rest_command:
+      ntfy_publish:
+        url: "http://ntfy/{{ topic }}"
+        method: POST
+        content_type: "text/plain; charset=utf-8"
+        payload: "{{ message }}"
+        headers:
+          Title: "{{ title }}"
+          Priority: "{{ priority | default('default') }}"
+          Tags: "{{ tags | default('') }}"
+          Click: "{{ click | default('') }}"
+
     # Modular config splits so automations/scripts/scenes can grow independently
     # (WLED, Zigbee, Plex, presence/auto-lock all slot in here later).
     automation: !include automations.yaml
@@ -37,7 +58,74 @@ data:
     scene: !include scenes.yaml
 
   automations.yaml: |
-    []
+    # Hawksnest push notifications (Gate 3). Both automations are deliberately
+    # entity-ID-free: they watch the global state_changed event and filter in a
+    # cheap template condition, so they work regardless of how the Ring/alarm
+    # entities are named on this instance (no guessing on the lock stack). Once
+    # you've confirmed the real entity_ids you may convert these to specific
+    # `platform: state` triggers for efficiency — see docs/ntfy-push.md.
+    - id: hawksnest_push_doorbell
+      alias: "Hawksnest push: doorbell ding"
+      mode: parallel
+      max: 10
+      trigger:
+        - platform: event
+          event_type: state_changed
+      condition:
+        - condition: template
+          value_template: >-
+            {{ trigger.event.data.entity_id.endswith('_ding')
+               and trigger.event.data.new_state is not none
+               and trigger.event.data.new_state.state == 'on'
+               and (trigger.event.data.old_state is none
+                    or trigger.event.data.old_state.state != 'on') }}
+      action:
+        - service: rest_command.ntfy_publish
+          data:
+            topic: "hawksnest-alerts"
+            title: "Doorbell"
+            message: >-
+              Someone's at {{ trigger.event.data.new_state.attributes.friendly_name
+                              | default(trigger.event.data.entity_id) }}
+            tags: "bell"
+            priority: "high"
+            click: "https://dragonfly.tail2ce561.ts.net:8443/"
+
+    - id: hawksnest_push_alarm
+      alias: "Hawksnest push: alarm state change"
+      mode: parallel
+      max: 10
+      trigger:
+        - platform: event
+          event_type: state_changed
+      condition:
+        - condition: template
+          value_template: >-
+            {{ trigger.event.data.entity_id.startswith('alarm_control_panel.')
+               and trigger.event.data.new_state is not none
+               and trigger.event.data.old_state is not none
+               and trigger.event.data.new_state.state
+                   != trigger.event.data.old_state.state
+               and trigger.event.data.new_state.state in
+                   ['armed_home', 'armed_away', 'armed_night', 'armed_vacation',
+                    'disarmed', 'triggered', 'pending', 'arming'] }}
+      action:
+        - service: rest_command.ntfy_publish
+          data:
+            topic: "hawksnest-alerts"
+            title: >-
+              Alarm {{ trigger.event.data.new_state.state | replace('_', ' ') }}
+            message: >-
+              {{ trigger.event.data.new_state.attributes.friendly_name
+                 | default('Alarm') }} is now
+              {{ trigger.event.data.new_state.state | replace('_', ' ') }}
+            tags: >-
+              {{ 'rotating_light' if trigger.event.data.new_state.state == 'triggered'
+                 else 'shield' }}
+            priority: >-
+              {{ 'urgent' if trigger.event.data.new_state.state == 'triggered'
+                 else 'default' }}
+            click: "https://dragonfly.tail2ce561.ts.net:8443/"
 
   scripts.yaml: |
     {}
