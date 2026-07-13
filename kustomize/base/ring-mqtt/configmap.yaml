@@ -15,12 +15,18 @@ data:
   # so ring-mqtt publishes a real alarm_control_panel automatically. Location Modes is
   # only for camera/doorbell-only accounts with no Ring Alarm; enabling it here would add
   # a redundant second alarm panel and could mask the real one in the dashboard.
+  #
+  # NOTE: deliberately NO snapshot key here. A "snapshot_mode" in config.json is INERT
+  # at ring-mqtt 5.9.2 (lib/config.js reads no such key) — snapshot behavior is owned by
+  # the per-camera HA entities `select.<base>_snapshot_mode` /
+  # `number.<base>_snapshot_interval`, persisted in ring-mqtt saved state on the
+  # ring-mqtt-data PVC. Policy (battery cams get interval snapshots) is enforced by the
+  # `hawksnest_ring_snapshot_policy` HA automation — see docs/camera-freshness.md.
   config.json: |
     {
       "mqtt_url": "MQTT_URL_PLACEHOLDER",
       "enable_cameras": true,
       "enable_modes": false,
-      "snapshot_mode": "Auto",
       "livestream_user": "",
       "livestream_pass": ""
     }

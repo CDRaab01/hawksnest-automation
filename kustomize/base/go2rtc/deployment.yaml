@@ -5,11 +5,15 @@ metadata:
   labels:
     app: go2rtc
 spec:
-  # Opt-in: ships PARKED at 0 so a not-yet-configured go2rtc can never fail a prod
-  # deploy on the lock cluster (no pod → no crashloop, nothing for the rollout wait
-  # to block on). Enable two-way audio by configuring the secret + the configmap
-  # device ids + the :8555 host portproxy (DEPLOYMENT.md §7c), then set replicas: 1.
-  replicas: 0
+  # ENABLED in prod (was parked at 0 until 2026-07-13): go2rtc's native `ring:`
+  # source is the low-latency live path + the two-way "talk" backchannel. Safe to
+  # run before the real secret lands: deploy.sh falls back to the dummy example
+  # secret, go2rtc still boots and serves /api/streams (probes pass — the ring
+  # streams just error until real creds arrive), and go2rtc is deliberately NOT in
+  # deploy.sh's rollout-wait list, so it can never fail a lock-cluster deploy.
+  # Staging keeps it parked via the go2rtc-replicas-0 overlay patch.
+  # Full enablement (secret + device ids + :8555 socat forwarder): DEPLOYMENT.md §7c.
+  replicas: 1
   # Recreate: go2rtc-config is RWO and go2rtc owns a single Ring session (it rotates
   # the refresh token in its config file).
   strategy:
@@ -49,12 +53,13 @@ spec:
             - name: api
               containerPort: 1984
             - name: webrtc-tcp
-              # hostPort publishes go2rtc's WebRTC media on the node so ICE can reach
-              # it. The candidate go2rtc advertises is GO2RTC_HOST_IP:8555 (the host's
-              # Tailscale/LAN IP) — on WSL2 a Windows netsh portproxy must forward that
-              # host IP:8555 to this node (see the two-way-audio runbook).
+              # WebRTC media (TCP). Exposed via the go2rtc-webrtc NodePort Service
+              # (30855) + a socat forwarder in the distro (windows/go2rtc-forwarder
+              # .service) — NOT a hostPort: under WSL mirrored networking a hostPort
+              # is iptables DNAT with no listening socket, unreachable from Windows
+              # (same reason the HA portproxy died — see windows/ha-forwarder.service).
+              # The ICE candidate go2rtc advertises stays GO2RTC_HOST_IP:8555.
               containerPort: 8555
-              hostPort: 8555
               protocol: TCP
           envFrom:
             - secretRef:

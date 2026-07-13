@@ -62,6 +62,17 @@ patches:
         value: ClusterIP
       - op: remove
         path: /spec/ports/0/nodePort
+  # go2rtc WebRTC Service -> ClusterIP (NodePort 30855 is cluster-unique; go2rtc
+  # itself is also parked at replicas:0 in staging, so nothing serves it anyway).
+  - target:
+      kind: Service
+      name: go2rtc-webrtc
+    patch: |-
+      - op: replace
+        path: /spec/type
+        value: ClusterIP
+      - op: remove
+        path: /spec/ports/0/nodePort
   # Repoint every PVC to node-local local-path and drop the NFS volumeName binding.
   # mariadb-data is already local-path with no volumeName, so this is a no-op for it.
   - target:
