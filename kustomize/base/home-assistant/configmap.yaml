@@ -50,6 +50,9 @@ data:
           Priority: "{{ priority | default('default') }}"
           Tags: "{{ tags | default('') }}"
           Click: "{{ click | default('') }}"
+          # Optional external image URL (the doorbell snapshot). Empty = no
+          # attachment, so alarm/other publishes that omit it are unaffected.
+          Attach: "{{ attach | default('') }}"
 
     # Modular config splits so automations/scripts/scenes can grow independently
     # (WLED, Zigbee, Plex, presence/auto-lock all slot in here later).
@@ -80,6 +83,16 @@ data:
                and (trigger.event.data.old_state is none
                     or trigger.event.data.old_state.state != 'on') }}
       action:
+        # The camera base (`binary_sensor.<base>_ding` → `<base>`) is the app's logical
+        # camera id (`camera.<base>`). The click deep-links a Hawksnest notification tap
+        # straight to that camera's live view (PushRoute.cameraOf), and `attach` sends the
+        # camera's current snapshot as the notification image (best-effort — empty if the
+        # `camera.<base>` entity has no picture yet).
+        - variables:
+            cam_base: >-
+              {{ trigger.event.data.entity_id
+                 | replace('binary_sensor.', '') | replace('_ding', '') }}
+            cam_pic: "{{ state_attr('camera.' ~ cam_base, 'entity_picture') }}"
         - service: rest_command.ntfy_publish
           data:
             topic: "hawksnest-alerts"
@@ -89,7 +102,10 @@ data:
                               | default(trigger.event.data.entity_id) }}
             tags: "bell"
             priority: "high"
-            click: "https://dragonfly.tail2ce561.ts.net:8443/"
+            click: "https://dragonfly.tail2ce561.ts.net:8443/?camera=camera.{{ cam_base }}"
+            attach: >-
+              {{ ('https://dragonfly.tail2ce561.ts.net:8443' ~ cam_pic)
+                 if cam_pic else '' }}
 
     - id: hawksnest_push_alarm
       alias: "Hawksnest push: alarm state change"
