@@ -24,6 +24,22 @@ Phone (Hawksnest app / ntfy app) ◀── Tailscale Serve https://<host>.ts.net
 The seed only reaches a **fresh** HA install (the initContainer won't clobber the live PVC), so
 the two live-apply steps below are required to light this up on the running instance.
 
+### Rich doorbell payload (2026-07-13)
+
+The doorbell automation + `rest_command` gained two things (pairs with the Hawksnest app's
+rich-push release — a tap deep-links to the camera and shows its snapshot):
+
+- **`rest_command.ntfy_publish`** grew an `Attach:` header (`{{ attach | default('') }}`) — empty
+  for alarm/other publishes, so they're unaffected.
+- **`hawksnest_push_doorbell`** derives the camera base from the `_ding` sensor and sets
+  `click: …/?camera=camera.<base>` (the app's `PushRoute.cameraOf` opens that camera) and
+  `attach:` = the camera's `entity_picture` resolved against the TLS front (the snapshot image).
+
+**To apply to a running instance:** add the `Attach:` line to the live `configuration.yaml`
+`rest_command`, and replace the live `hawksnest_push_doorbell` automation with the seed version;
+then Reload *REST Commands* + *Automations*. Until then, doorbell push still works — it just lands
+on Home with no photo instead of the specific camera.
+
 ## Step 1 — deploy ntfy (staging first, then prod)
 
 ```bash
