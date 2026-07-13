@@ -52,6 +52,8 @@ OVERLAYS = {
         "ha_nodeport": 30123,        # the Windows portproxy target — must not drift
         "ntfy_service_type": "NodePort",
         "ntfy_nodeport": 30081,      # the Tailscale Serve :8444 forwarder target
+        "go2rtc_webrtc_service_type": "NodePort",
+        "go2rtc_webrtc_nodeport": 30855,  # the :8555 socat forwarder target
         "require_nfs": True,         # 4 NFS PVs present, v3, real server/path
         "zwave_device_real": True,   # privileged + real /dev by-id path, running
     },
@@ -61,6 +63,8 @@ OVERLAYS = {
         "ha_nodeport": None,         # ClusterIP: no NodePort at all
         "ntfy_service_type": "ClusterIP",
         "ntfy_nodeport": None,       # ClusterIP: no NodePort (no 30081 collision)
+        "go2rtc_webrtc_service_type": "ClusterIP",
+        "go2rtc_webrtc_nodeport": None,  # ClusterIP: no NodePort (no 30855 collision)
         "require_nfs": False,        # NFS PVs deleted; PVCs on local-path
         "zwave_device_real": False,  # parked at replicas:0 (never claims the stick)
     },
@@ -259,6 +263,19 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
             check(expected["ntfy_nodeport"] in ntfy_node_ports,
                   f"ntfy NodePort must stay {expected['ntfy_nodeport']} "
                   "(the Tailscale Serve :8444 forwarder target)")
+    g2w_svc = next((s for s in services if name(s) == "go2rtc-webrtc"), None)
+    check(g2w_svc is not None, "go2rtc-webrtc Service is missing (WebRTC media path)")
+    if g2w_svc:
+        check(g2w_svc["spec"].get("type") == expected["go2rtc_webrtc_service_type"],
+              f"go2rtc-webrtc Service must be {expected['go2rtc_webrtc_service_type']}")
+        g2w_node_ports = [p.get("nodePort") for p in g2w_svc["spec"]["ports"]]
+        if expected["go2rtc_webrtc_nodeport"] is None:
+            check(all(np is None for np in g2w_node_ports),
+                  "staging go2rtc-webrtc Service must not set a nodePort (ClusterIP)")
+        else:
+            check(expected["go2rtc_webrtc_nodeport"] in g2w_node_ports,
+                  f"go2rtc-webrtc NodePort must stay {expected['go2rtc_webrtc_nodeport']} "
+                  "(the :8555 socat forwarder target)")
     zwave_svc = next((s for s in services if name(s) == "zwave-js-ui"), None)
     if zwave_svc:
         zports = {p["port"] for p in zwave_svc["spec"]["ports"]}

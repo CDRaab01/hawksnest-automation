@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: go2rtc-webrtc
+  labels:
+    app: go2rtc
+spec:
+  # WebRTC media path (TCP). NodePort in base = prod's exposure: the distro-side
+  # socat unit (windows/go2rtc-forwarder.service) listens on :8555 and forwards to
+  # this NodePort, and go2rtc advertises GO2RTC_HOST_IP:8555 as its ICE candidate.
+  # (A hostPort is NOT reachable from Windows under WSL mirrored networking — it's
+  # DNAT with no listening socket; only a real socket like socat's is surfaced.)
+  # NodePorts are cluster-unique, so the staging overlay patches this to ClusterIP
+  # (mirrors home-assistant/ntfy) to avoid a 30855 collision on the shared cluster.
+  type: NodePort
+  selector:
+    app: go2rtc
+  ports:
+    - name: webrtc-tcp
+      port: 8555
+      targetPort: webrtc-tcp
+      # Fixed NodePort so the socat forwarder target is stable.
+      nodePort: 30855

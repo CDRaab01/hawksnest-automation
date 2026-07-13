@@ -1,0 +1,31 @@
+# WSL systemd unit (NOT a Windows service). Makes go2rtc's WebRTC media port (:8555)
+# reachable from the Windows host / LAN / Tailscale under WSL mirrored networking.
+#
+# Same rationale as ha-forwarder.service: mirrored mode only surfaces REAL listening
+# sockets to the host — a K3s NodePort is nft/iptables DNAT with no socket, so the
+# host can't reach :30855 directly. socat opens a real socket on :8555 (the port
+# go2rtc advertises in its ICE candidate, GO2RTC_HOST_IP:8555) and forwards to the
+# go2rtc-webrtc NodePort. This replaces the old netsh-portproxy step in DEPLOYMENT.md
+# §7c, which is dead under mirrored mode (it targeted a NAT-era 172.x WSL IP).
+#
+# Install (in the Dragonfly distro):
+#   sudo cp windows/go2rtc-forwarder.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now go2rtc-forwarder.service
+#
+# One-time Windows-side firewall allow for LAN/Tailscale clients (elevated), mirroring
+# the HomeAssistant-8123 rule — see windows/README-windows.md:
+#   New-NetFirewallHyperVRule -Name 'Go2rtc-8555' -DisplayName 'go2rtc WebRTC 8555' `
+#     -Direction Inbound -Action Allow -Protocol TCP -LocalPorts 8555 `
+#     -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+[Unit]
+Description=go2rtc WebRTC media forwarder (WSL mirrored networking)
+After=network-online.target k3s.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/socat TCP-LISTEN:8555,fork,reuseaddr TCP:127.0.0.1:30855
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

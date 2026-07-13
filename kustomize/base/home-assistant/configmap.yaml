@@ -127,6 +127,59 @@ data:
                  else 'default' }}
             click: "https://dragonfly.tail2ce561.ts.net:8443/"
 
+    # Ring snapshot policy (camera tile freshness). ring-mqtt's per-camera
+    # `select.<base>_snapshot_mode` defaults to Auto, whose interval flag is
+    # !operatingOnBattery — so battery cameras only snapshot on motion/ding and
+    # their Hawksnest tiles go stale for hours between events. Policy: every
+    # camera gets mode "All" (= Auto's ding+motion PLUS interval snapshots on
+    # battery too), and battery cams (those with a `sensor.<base>_battery`) get
+    # a 300s interval — wired cams keep ring-mqtt's 30s default. Self-healing
+    # (hourly + on HA start) because these live in ring-mqtt saved state on the
+    # PVC: a PVC restore or camera re-discovery silently reverts them to Auto.
+    # Entity-ID-free, like the push automations above. Battery cost is the
+    # accepted trade-off; tune per-camera via the number entity if drain bites.
+    - id: hawksnest_ring_snapshot_policy
+      alias: "Hawksnest: Ring snapshot policy (battery cams get interval snapshots)"
+      mode: single
+      trigger:
+        - platform: homeassistant
+          event: start
+        - platform: time_pattern
+          hours: "/1"
+          minutes: "7"
+      action:
+        - repeat:
+            for_each: >-
+              {{ states.select
+                 | selectattr('entity_id', 'search', '_snapshot_mode$')
+                 | selectattr('state', 'ne', 'All')
+                 | rejectattr('state', 'in', ['unavailable', 'unknown'])
+                 | map(attribute='entity_id') | list }}
+            sequence:
+              - service: select.select_option
+                target:
+                  entity_id: "{{ repeat.item }}"
+                data:
+                  option: "All"
+        - repeat:
+            for_each: >-
+              {{ states.number
+                 | selectattr('entity_id', 'search', '_snapshot_interval$')
+                 | rejectattr('state', 'in', ['unavailable', 'unknown'])
+                 | map(attribute='entity_id') | list }}
+            sequence:
+              - condition: template
+                value_template: >-
+                  {% set base = repeat.item
+                     | replace('number.', '') | replace('_snapshot_interval', '') %}
+                  {{ has_value('sensor.' ~ base ~ '_battery')
+                     and (states(repeat.item) | float(0)) != 300 }}
+              - service: number.set_value
+                target:
+                  entity_id: "{{ repeat.item }}"
+                data:
+                  value: 300
+
   scripts.yaml: |
     {}
 

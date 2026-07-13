@@ -129,6 +129,40 @@ WSL2 here runs `networkingMode=mirrored` (set deliberately to reduce remote-cont
 crashes). That **breaks the netsh portproxy + `heal-ha.ps1` approach above** — there is no
 NAT-era `172.x` WSL IP for the proxy to target anymore. Use the following instead.
 
+> **Do NOT switch back to NAT mode to "fix" host access.** Mirrored is deliberate; the socat
+> forwarder handles exposure. Reverting requires a `wsl --shutdown` that bounces the entire
+> Docker Desktop backend (the whole app suite + media stack), and it is unnecessary.
+
+### Reboot recovery — the load-bearing piece is the WSL keepalive (added 2026-07-06)
+
+After a host reboot the whole chain (k3s → HA → Z-Wave, **and** `ha-forwarder.service`) only
+works while the **Dragonfly WSL2 instance stays running** — and it does **not** stay up on its
+own: the instance tears down ~15s after the last `wsl.exe` process exits, even with
+`systemd=true` and k3s enabled. (This was previously masked by the WSL Actions runner holding
+the instance open; after a reboot nothing did, so everything looked dead — pods, forwarder, and
+Z-Wave all gone at once.) `keep-wsl-alive.ps1` holds it up 24/7 and is registered as a logon
+task by `register-recovery-tasks.ps1`.
+
+**One-command setup (run once, elevated):**
+```powershell
+& 'C:\code\hawksnest-automation\windows\finalize-mirrored-recovery.ps1'
+```
+This (1) removes any stale netsh portproxy on `:8123`, (2) restarts + verifies
+`ha-forwarder.service`, and (3) registers the logon recovery tasks — `HA-KeepWSL-Alive`
+(keepalive, no time limit) and `Attach-ZWA2-WSL` (USB attach + heal). It deliberately does
+**not** register an `HA-PortProxy` task (dead under mirrored mode).
+
+**Two gotchas this setup handles (both bit us 2026-07-06):**
+- **netsh `:8123` vs socat.** Under mirrored mode WSL shares the host port space, so a leftover
+  NAT-era `netsh portproxy` on `0.0.0.0:8123` makes socat fail with
+  `bind(:8123): Address already in use` and HA host access silently breaks (socat had retried
+  67×). The finalizer deletes it. Don't re-create it; don't run `portproxy-ha.ps1` under
+  mirrored mode.
+- **`cdc_acm` not auto-loaded.** On a fresh WSL kernel the ZWA-2's CDC-ACM driver isn't loaded,
+  so the stick attaches (usbipd shows `Attached`) but never enumerates as `/dev/ttyACM0` and the
+  `by-id` symlink can't be built. `/etc/modules-load.d/cdc-acm.conf` loads it at boot;
+  `zwave-attach-heal.sh` also `modprobe`s it defensively.
+
 **HA host/LAN reachability — `ha-forwarder.service` (socat).** Mirrored mode only forwards the
 Windows host to *real listening sockets* in WSL; a K3s NodePort is nft DNAT with no socket, so
 the host can't reach `:30123`. A socat real-socket forwarder bridges it:
@@ -146,6 +180,21 @@ LAN/Tailscale access additionally needs a one-time (elevated) Hyper-V firewall a
 New-NetFirewallHyperVRule -Name 'HomeAssistant-8123' -DisplayName 'HomeAssistant-8123' `
   -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' `
   -Protocol TCP -LocalPorts 8123 -Action Allow
+```
+
+**go2rtc WebRTC media — `go2rtc-forwarder.service` (socat).** Same pattern for the two-way
+"talk" / low-latency live media port: socat `:8555` → the `go2rtc-webrtc` NodePort `30855`
+(the ICE candidate go2rtc advertises is `GO2RTC_HOST_IP:8555`). Install identically:
+
+```bash
+sudo cp windows/go2rtc-forwarder.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now go2rtc-forwarder.service
+```
+
+```powershell
+New-NetFirewallHyperVRule -Name 'Go2rtc-8555' -DisplayName 'Go2rtc-8555' `
+  -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' `
+  -Protocol TCP -LocalPorts 8555 -Action Allow
 ```
 
 **Z-Wave stick re-attach — logon task.** `usbipd attach` doesn't survive a reboot, and if

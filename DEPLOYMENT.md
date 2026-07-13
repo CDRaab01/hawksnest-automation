@@ -300,39 +300,51 @@ source. So we run a **dedicated go2rtc** (`kustomize/base/go2rtc/`) using go2rtc
 `ring:` source**, which supports two-way audio. (It also gives lower-latency live than the
 HA path, though live still works fine without any of this.)
 
-It ships **parked at `replicas: 0`** (opt-in): until you configure it, no go2rtc pod runs,
-so it can never fail a prod deploy. Staging keeps it parked permanently (it would collide
-with prod on host port 8555). Enabling it is the last step below.
+It runs at **`replicas: 1` in prod** (enabled 2026-07-13; it was parked at 0 while
+unconfigured). This is deploy-safe even before the real secret lands: `deploy.sh` falls back
+to the dummy example secret, go2rtc still boots and serves `/api/streams` (probes pass — the
+`ring:` streams just error until real creds arrive), and go2rtc is deliberately **not** in
+`deploy.sh`'s rollout-wait list, so it can never fail a lock-cluster deploy. Staging keeps it
+parked permanently via its overlay patch (and its `go2rtc-webrtc` Service is ClusterIP so the
+NodePort can't collide).
 
 The app talks to it as: browser/app → `/go2rtc/` nginx proxy → go2rtc API (`:1984`,
-signaling) → WebRTC **media** on the host at `GO2RTC_HOST_IP:8555/tcp`.
+signaling) → WebRTC **media** on the host at `GO2RTC_HOST_IP:8555/tcp` (socat →
+NodePort 30855).
 
 **Setup:**
 
 1. **Fill `kustomize/overlays/prod/secrets/go2rtc.env`** (copy from `go2rtc.env.example`).
-   Until this exists with real values, deploys fall back to the dummy template and go2rtc
-   stays parked.
+   Until this exists with real values, deploys fall back to the dummy template — go2rtc runs
+   but its `ring:` streams error (harmless).
    - `RING_REFRESH_TOKEN` — generate from a **separate** Ring login than ring-mqtt's
-     (two clients sharing one token rotate each other out). Easiest: temporarily set
-     `replicas: 1`, deploy, port-forward (`kubectl port-forward deploy/go2rtc 1984 -n
-     home-automation`), open `http://localhost:1984`, **Add > Ring**, sign in; copy the
-     resulting `device_id`s too.
+     (two clients sharing one token rotate each other out). Easiest: port-forward the
+     running pod (`kubectl port-forward deploy/go2rtc 1984 -n home-automation`), open
+     `http://localhost:1984`, **Add > Ring**, sign in; copy the resulting `device_id`s too.
    - `GO2RTC_HOST_IP` — the Windows host's **Tailscale** IP (or LAN IP) clients reach.
    - `RING_DEVICE_ID_*` — one per camera.
 2. **Edit `kustomize/base/go2rtc/configmap.yaml`** so each `streams:` entry is named
    **exactly the HA camera base** (`camera.<base>` → `<base>`); the app derives the go2rtc
    `src` from it. Add one line per camera.
-3. **Enable it:** set `replicas: 1` in `kustomize/base/go2rtc/deployment.yaml` (staging stays
-   parked via its overlay patch). Then `./scripts/deploy.sh` (or `kubectl apply -k
-   kustomize/overlays/prod/`); `kubectl rollout restart deploy/go2rtc` after any secret edit
-   — stable secret names don't auto-roll.
-4. **Windows portproxy for the media port** (WSL2, mirrors the HA `:30123` portproxy). In an
-   **admin** PowerShell on the host:
-   ```powershell
-   netsh interface portproxy add v4tov4 listenaddress=<GO2RTC_HOST_IP> listenport=8555 `
-     connectaddress=<WSL2-IP> connectport=8555 protocol=tcp
+3. **Deploy + roll:** `./scripts/deploy.sh` (or `kubectl apply -k kustomize/overlays/prod/`);
+   `kubectl rollout restart deploy/go2rtc` after any secret edit — stable secret names don't
+   auto-roll. (`replicas: 1` already ships in base; staging stays parked via its overlay patch.)
+4. **Media-port exposure — socat, NOT netsh portproxy** (portproxy is dead under WSL
+   mirrored networking: it targeted a NAT-era 172.x WSL IP, and a NodePort/hostPort is DNAT
+   with no listening socket, unreachable from Windows — same story as HA's
+   `ha-forwarder.service`). Install the systemd unit once in the Dragonfly distro:
+   ```bash
+   sudo cp windows/go2rtc-forwarder.service /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now go2rtc-forwarder.service
    ```
-   (`<WSL2-IP>` = `wsl hostname -I`.) Re-add on reboot like the other portproxies.
+   (socat `:8555` → the `go2rtc-webrtc` NodePort `30855`.) Plus a one-time (elevated)
+   Hyper-V firewall allow for LAN/Tailscale clients, mirroring `HomeAssistant-8123`:
+   ```powershell
+   New-NetFirewallHyperVRule -Name 'Go2rtc-8555' -DisplayName 'Go2rtc-8555' `
+     -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' `
+     -Protocol TCP -LocalPorts 8555 -Action Allow
+   ```
+   Survives reboots (systemd unit auto-starts) — no per-boot re-add like the old portproxies.
 5. **HTTPS for the browser mic:** browsers only grant microphone access in a **secure
    context** (HTTPS or `localhost`). If you open Hawksnest over plain `http://…:30123` the
    talk button can't get the mic. Reach it via a Tailscale HTTPS name (`tailscale cert` /
@@ -347,7 +359,7 @@ signaling) → WebRTC **media** on the host at `GO2RTC_HOST_IP:8555/tcp`.
       (two-way) — confirms the native `ring:` back-channel.
 - [ ] From the app over Tailscale, opening a camera and pressing **Talk** connects (ICE
       reaches `GO2RTC_HOST_IP:8555`); audio is heard from the Ring device.
-- [ ] After a host reboot + re-adding the portproxy, talk still connects with no re-auth.
+- [ ] After a host reboot, talk still connects with no re-auth (the socat unit auto-starts).
 
 > `go2rtc-config` is node-local (`local-path`), not backed up: it only caches the rotated
 > token, which re-seeds from `go2rtc.env` + the ConfigMap. Losing it just needs a
