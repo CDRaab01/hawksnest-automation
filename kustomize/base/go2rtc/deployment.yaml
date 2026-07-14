@@ -55,6 +55,15 @@ spec:
         - name: go2rtc
           image: alexxit/go2rtc:latest
           # The image defaults to -config /config/go2rtc.yaml, which is our PVC.
+          #
+          # THE MOUNT BELOW IS LOAD-BEARING: this container originally shipped with
+          # NO volumeMounts, so the seed-config init wrote the streams config to the
+          # PVC while go2rtc read /config from its own (empty) image filesystem —
+          # every stream change silently no-opped and /api/streams stayed {}. The
+          # init and main containers MUST share the `config` volume.
+          volumeMounts:
+            - name: config
+              mountPath: /config
           ports:
             - name: api
               containerPort: 1984
