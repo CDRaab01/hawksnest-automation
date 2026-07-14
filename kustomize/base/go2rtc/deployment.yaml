@@ -27,8 +27,16 @@ spec:
         app: go2rtc
     spec:
       initContainers:
-        # Seed /config/go2rtc.yaml on first boot only. go2rtc rewrites this file when
-        # it rotates the Ring refresh token, so we must NOT clobber an existing one.
+        # ALWAYS re-seed /config/go2rtc.yaml from the ConfigMap on every start.
+        # Why not "first boot only": go2rtc takes ownership of this file at runtime
+        # and drops ConfigMap stream changes made after first boot (and was observed
+        # clearing the file entirely on this cluster), so the operator's stream list
+        # never reached it. Overwriting on every start guarantees go2rtc loads all
+        # streams into memory at boot — what it does to the file afterward no longer
+        # matters. Trade-off: a rotated Ring refresh_token is NOT persisted across a
+        # restart; go2rtc re-reads ${RING_REFRESH_TOKEN} from the secret each boot.
+        # Fine for a fresh token — regenerate + update go2rtc.env if Ring invalidates
+        # it. To change the stream list, edit the ConfigMap and restart the pod.
         - name: seed-config
           image: busybox:1.36
           command:
@@ -36,10 +44,8 @@ spec:
             - -c
             - |
               set -eu
-              if [ ! -f /config/go2rtc.yaml ]; then
-                echo "seeding go2rtc.yaml"
-                cp /seed/go2rtc.yaml /config/go2rtc.yaml
-              fi
+              echo "re-seeding go2rtc.yaml from ConfigMap"
+              cp /seed/go2rtc.yaml /config/go2rtc.yaml
           volumeMounts:
             - name: config
               mountPath: /config
