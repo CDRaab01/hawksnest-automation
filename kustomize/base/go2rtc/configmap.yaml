@@ -47,5 +47,4 @@ data:
       # Fill in each camera's Ring device_id (find it in go2rtc's web UI: Add > Ring,
       # or in ring-mqtt). The refresh_token is shared via env. Duplicate per camera.
       front_door: "ring:?device_id=${RING_DEVICE_ID_FRONT_DOOR}&refresh_token=${RING_REFRESH_TOKEN}"
-      # back_door:  "ring:?device_id=${RING_DEVICE_ID_BACK_DOOR}&refresh_token=${RING_REFRESH_TOKEN}"
-      # front:      "ring:?device_id=${RING_DEVICE_ID_FRONT}&refresh_token=${RING_REFRESH_TOKEN}"
+      front_driveway: "ring:?device_id=${RING_DEVICE_ID_FRONT_DRIVEWAY}&refresh_token=${RING_REFRESH_TOKEN}"
