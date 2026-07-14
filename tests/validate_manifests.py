@@ -219,6 +219,20 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
             check("volumeName" not in pvc["spec"],
                   f"staging PVC '{pvc_name}' must not bind a (deleted) NFS PV by volumeName")
 
+    # 5b. go2rtc: the MAIN container must mount the config PVC at /config. It once
+    #     shipped without any volumeMounts — the seed init wrote streams to the PVC
+    #     while go2rtc read its own empty image /config, so every stream change
+    #     silently no-opped (/api/streams == {}). Never again.
+    g2 = next((d for d in deployments if name(d) == "go2rtc"), None)
+    if g2:
+        main = next((c for c in pod_spec(g2)["containers"] if c["name"] == "go2rtc"), None)
+        check(main is not None, "go2rtc Deployment has no 'go2rtc' container")
+        if main:
+            mounts = {(m["name"], m["mountPath"]) for m in main.get("volumeMounts", [])}
+            check(("config", "/config") in mounts,
+                  "go2rtc main container must mount the 'config' volume at /config "
+                  "(without it, seeded streams never reach go2rtc)")
+
     # 6. zwave-js-ui: always privileged; prod runs against a real device, staging parks.
     zwave = next((d for d in deployments if name(d) == "zwave-js-ui"), None)
     check(zwave is not None, "zwave-js-ui Deployment is missing")
