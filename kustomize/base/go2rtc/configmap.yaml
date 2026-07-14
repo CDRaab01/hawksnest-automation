@@ -46,6 +46,16 @@ data:
       #
       # Fill in each camera's Ring device_id (find it in go2rtc's web UI: Add > Ring,
       # or in ring-mqtt). The refresh_token is shared via env. Duplicate per camera.
+      # Stream name = the HA camera base (verify against Developer Tools -> States;
+      # rename if ring-mqtt slugged a name differently, e.g. first_floor_stairway).
       front_door: "ring:?device_id=${RING_DEVICE_ID_FRONT_DOOR}&refresh_token=${RING_REFRESH_TOKEN}"
-      # back_door:  "ring:?device_id=${RING_DEVICE_ID_BACK_DOOR}&refresh_token=${RING_REFRESH_TOKEN}"
-      # front:      "ring:?device_id=${RING_DEVICE_ID_FRONT}&refresh_token=${RING_REFRESH_TOKEN}"
+      front_driveway: "ring:?device_id=${RING_DEVICE_ID_FRONT_DRIVEWAY}&refresh_token=${RING_REFRESH_TOKEN}"
+      basement: "ring:?device_id=${RING_DEVICE_ID_BASEMENT}&refresh_token=${RING_REFRESH_TOKEN}"
+      puzzle_room: "ring:?device_id=${RING_DEVICE_ID_PUZZLE_ROOM}&refresh_token=${RING_REFRESH_TOKEN}"
+      bedroom: "ring:?device_id=${RING_DEVICE_ID_BEDROOM}&refresh_token=${RING_REFRESH_TOKEN}"
+      back_yard_patio: "ring:?device_id=${RING_DEVICE_ID_BACK_YARD_PATIO}&refresh_token=${RING_REFRESH_TOKEN}"
+      kitchen: "ring:?device_id=${RING_DEVICE_ID_KITCHEN}&refresh_token=${RING_REFRESH_TOKEN}"
+      pet_camera: "ring:?device_id=${RING_DEVICE_ID_PET_CAMERA}&refresh_token=${RING_REFRESH_TOKEN}"
+      back_side_yard: "ring:?device_id=${RING_DEVICE_ID_BACK_SIDE_YARD}&refresh_token=${RING_REFRESH_TOKEN}"
+      first_floor_stairway: "ring:?device_id=${RING_DEVICE_ID_FIRST_FLOOR_STAIRWAY}&refresh_token=${RING_REFRESH_TOKEN}"
+      big_room: "ring:?device_id=${RING_DEVICE_ID_BIG_ROOM}&refresh_token=${RING_REFRESH_TOKEN}"
