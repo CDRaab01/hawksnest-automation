@@ -19,13 +19,39 @@ That endpoint needs Ring account auth, which can't live in a browser or on a pho
 It is deliberately small: read-only, no writes to Ring, and **no media proxying** — clients fetch
 the signed URL straight from S3, so no footage flows through the cluster.
 
-## What it is not
+## 24/7 footage — where it actually lives
 
-Not 24/7 footage. Ring's continuous recording (CVR) needs a wired *Pro* camera; ours are Indoor
-Cams (`stickup_cam_mini_v2`) and an `lpd_v2` doorbell, none of which support it, and
-`getPeriodicalFootage` (the periodic-snapshot track) returns `403 AccessDeniedException` on this
-account. What this serves is every discrete recording, correctly timed — which is what the Ring app
-shows for these cameras too.
+An earlier version of this file said 24/7 was impossible here, because CVR needs a wired *Pro*
+camera and `getPeriodicalFootage` returns `403 AccessDeniedException`. Both facts are true and the
+conclusion was still wrong: **seven Indoor Cams on this account do record continuously**, and the
+Ring app's scrub bar never uses `video_search` for it. Captured off the live Ring web client, it
+calls the Event Video Manager timeline instead:
+
+```
+GET https://api.ring.com/evm/v2/timeline/24/devices/{id}
+    ?start_time=<ISO>&end_time=<ISO>&order=ASC&visualizations=cloud,local,footage
+```
+
+The web client hits this via `account.ring.com/api/cgw/…`, which authenticates with a session
+cookie plus a `csrf-token` header — no use to a server. The same route on Ring's bearer-token host
+answers instead: `api.ring.com/cgw/…` 404s while `api.ring.com/evm/v2/…` 401s, i.e. it exists there
+and only wants auth, so it goes through the same `restClient` bearer as everything else here.
+
+Ring stitches server-side: one request for an arbitrary window returns a **single** `CloudMedia`
+item spanning all of it (verified on a 12-hour window — one chunked H264/opus mp4), not a pile of
+chunks to concatenate. Four schemas come back and only the first is continuous video:
+
+| Schema | Meaning |
+|---|---|
+| `CloudMedia` | the stitched 24/7 track — the seven wired cameras only |
+| `Event` | motion/person markers, duplicating `/timeline` |
+| `Footage` | `ONLINE_PERIODICAL` — an hourly 10-second timelapse of ~20 periodic snapshots. What the battery cameras and doorbell have *instead* of 24/7, and reachable here despite `getPeriodicalFootage` 403ing. |
+| `Gap` | spans with no recording |
+
+`/footage` keeps only `CloudMedia`, so it means "continuous video" and nothing else. A non-24/7
+camera returns `200` with no `CloudMedia` (not an error), which surfaces as `continuous: false`.
+
+This route is undocumented and versioned (`X-API-VERSION: 1`); a Ring-side change can break it.
 
 ## API
 
@@ -33,9 +59,13 @@ shows for these cameras too.
 |---|---|
 | `GET /healthz` | `{ok:true}`. Deliberately does **not** call Ring — readiness means "process up"; a credential problem must surface as an honest error in the app, not an unschedulable pod. |
 | `GET /cameras` | `[{id, name, slug, battery, kind}]` — `slug` is ring-mqtt's slugging of the Ring device name, which is how Hawksnest matches a Ring camera to an HA entity. |
-| `GET /timeline?device_id=&from=&to=` | `{camera, fromMs, toMs, truncated, events[]}`, oldest-first. |
+| `GET /timeline?device_id=&from=&to=` | `{camera, fromMs, toMs, truncated, events[]}`, oldest-first. Discrete recordings only — a quiet window is legitimately empty. |
+| `GET /footage?device_id=&from=&to=` | `{camera, fromMs, toMs, continuous, truncated, segments[]}` — the 24/7 track. `continuous:false` (empty `segments`) for the battery cameras and the doorbell. `from` defaults to one hour back, not 24. |
 
 An event: `{id, startMs, endMs, durationSec, kind, person, url, urlExpiresAtMs, thumbnailUrl}`.
+
+A segment: `{startMs, endMs, url, urlExpiresAtMs, encrypted, chunked, dingId}`. `encrypted` marks an
+end-to-end-encrypted span, whose key this service does not hold — don't hand it to a player.
 
 Two behaviors worth knowing:
 

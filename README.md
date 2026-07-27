@@ -260,8 +260,24 @@ request then 502s with "Refresh token is not valid"). Rotations are persisted to
 `ring-timeline-data` PVC; losing it means minting a new token. Full details:
 [ring-timeline/README.md](ring-timeline/README.md).
 
-This is **not** 24/7 footage — Ring's continuous recording needs a wired *Pro* camera, and the
-periodic-snapshot API returns `403` on this account. It is every discrete recording, correctly timed.
+`GET /timeline` is **discrete recordings only** — that is all `video_search` returns, which is why a
+quiet 3–5 AM window comes back empty even on a camera that records continuously.
+
+`GET /footage` is the 24/7 continuous track, and it exists after all. The earlier note here said
+continuous recording needed a wired *Pro* camera and that the periodic-snapshot API 403s; the first
+half was wrong. Seven Indoor Cams (Basement, Basement Storage Room, Bedroom, Big Room, First Floor -
+Stairway, Kitchen, Puzzle Room) record 24/7, and the Ring app's scrub bar reads them through the
+Event Video Manager timeline, not `video_search`:
+
+```
+GET https://api.ring.com/evm/v2/timeline/24/devices/{id}?start_time&end_time&order&visualizations
+```
+
+Ring stitches the window server-side — one request for an arbitrary span returns a single
+pre-signed, chunked H264/opus mp4 covering all of it, so a client seeks anywhere with one URL.
+`getPeriodicalFootage` still 403s, but the same timeline serves that data too (`Footage` /
+`ONLINE_PERIODICAL`: hourly 10-second snapshot timelapses) for the battery cameras and the doorbell,
+which have no 24/7 track. Only the continuous `CloudMedia` items are served by `/footage`.
 
 ### Ring (official cloud integration — optional)
 

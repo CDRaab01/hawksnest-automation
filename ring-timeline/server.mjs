@@ -169,6 +169,87 @@ async function fetchTimeline(camera, fromMs, toMs) {
 
 const timelineCache = new Map(); // key -> { at, payload }
 
+// ── 24/7 continuous footage (CVR) ────────────────────────────────────────────
+
+/**
+ * `video_search` only ever returns discrete *events*, which is why a quiet 3-5 AM window comes
+ * back empty even on the seven cameras that record continuously. The Ring app's scrub bar does not
+ * use it — it calls the Event Video Manager timeline, captured off the live web client:
+ *
+ *   GET account.ring.com/api/cgw/evm/v2/timeline/24/devices/{id}?start_time&end_time&order&visualizations
+ *
+ * That host is the web BFF and authenticates with a session cookie + `csrf-token`, which a server
+ * cannot hold. The same path on Ring's bearer-token API host answers instead — `api.ring.com/cgw/…`
+ * 404s while `api.ring.com/evm/v2/…` 401s, i.e. the route exists there and only wants auth — so it
+ * goes through restClient, which attaches the same bearer the rest of this service uses.
+ *
+ * `getPeriodicalFootage` (the documented 24/7 call) 403s on this account; this one does not.
+ */
+const CVR_BASE = "https://api.ring.com/evm/v2/timeline/24/devices";
+
+/**
+ * Ring stitches the window server-side: a request for an arbitrary span returns ONE `CloudMedia`
+ * item covering all of it (verified against a 12-hour window — a single chunked H264/opus mp4),
+ * not a pile of chunks to concatenate. So a client can seek anywhere in the span with one URL.
+ *
+ * The response mixes four schemas and only `CloudMedia` is continuous video:
+ *   CloudMedia — the stitched 24/7 track (the seven wired cameras only)
+ *   Event      — motion/person markers, duplicating what /timeline already serves
+ *   Footage    — `ONLINE_PERIODICAL`: an hourly 10-second timelapse built from ~20 periodic
+ *                snapshots. It is what the battery cameras and the doorbell have INSTEAD of 24/7,
+ *                and notably it is reachable here even though getPeriodicalFootage 403s. Not
+ *                continuous video, so it is not served as such — a separate track if ever wanted.
+ *   Gap        — spans with no recording at all
+ * Only CloudMedia is kept, so /footage means "continuous video" and nothing else.
+ */
+function normalizeFootage(item) {
+  const startMs = Date.parse(item.start_time);
+  const endMs = Date.parse(item.end_time);
+  const url = item.url ?? null;
+  const meta = item.custom_metadata ?? {};
+  return {
+    startMs: Number.isFinite(startMs) ? startMs : null,
+    endMs: Number.isFinite(endMs) ? endMs : null,
+    url,
+    urlExpiresAtMs: url ? urlExpiresAtMs(url) : null,
+    // Ring can mark a segment end-to-end encrypted; those need a key this service does not hold,
+    // so say so rather than handing the player a URL it will fail to decode.
+    encrypted: Boolean(item.is_e2ee),
+    chunked: Boolean(meta.is_chunked),
+    dingId: meta.ding_id ? String(meta.ding_id) : null,
+  };
+}
+
+/** Continuous footage for one camera in `[fromMs, toMs]`, or [] if it isn't a 24/7 camera. */
+async function fetchFootage(deviceId, fromMs, toMs) {
+  const qs = new URLSearchParams({
+    start_time: new Date(fromMs).toISOString(),
+    end_time: new Date(toMs).toISOString(),
+    order: "ASC",
+    // `footage` is the layer that carries the continuous track; `cloud,local` match the web client.
+    visualizations: "cloud,local,footage",
+  });
+  const body = await api.restClient.request({
+    url: `${CVR_BASE}/${deviceId}?${qs}`,
+    method: "GET",
+    responseType: "json",
+    // The web client pins this; the endpoint is versioned and older shapes differ.
+    headers: { Accept: "application/json", "X-API-VERSION": "1" },
+  });
+  const slots = Array.isArray(body?.timeline) ? body.timeline : [];
+  const segments = slots
+    .flatMap((slot) => slot?.items ?? [])
+    .filter((i) => i?.schema === "CloudMedia" && i.url)
+    .map(normalizeFootage)
+    .filter((s) => Number.isFinite(s.startMs))
+    .sort((a, b) => a.startMs - b.startMs);
+  // A camera without 24/7 returns a slot with no CloudMedia rather than an error — an empty list
+  // is the honest answer for it, not a failure.
+  return { segments, truncated: Boolean(body?.pagination_key) };
+}
+
+const footageCache = new Map(); // key -> { at, payload }
+
 // ── http ─────────────────────────────────────────────────────────────────────
 
 function sendJson(res, status, body) {
@@ -231,6 +312,42 @@ const server = createServer(async (req, res) => {
       };
       timelineCache.set(key, { at: Date.now(), payload });
       if (timelineCache.size > 200) timelineCache.clear();
+      return sendJson(res, 200, payload);
+    }
+
+    if (url.pathname === "/footage") {
+      const deviceId = Number(url.searchParams.get("device_id"));
+      const toMs = Number(url.searchParams.get("to") ?? Date.now());
+      const fromMs = Number(url.searchParams.get("from") ?? toMs - 3600_000);
+      if (!Number.isFinite(deviceId) || !Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
+        return sendJson(res, 400, { error: "device_id, from and to must be numbers" });
+      }
+      if (toMs <= fromMs) {
+        return sendJson(res, 400, { error: "to must be after from" });
+      }
+
+      const key = `${deviceId}:${Math.floor(fromMs / CACHE_TTL_MS)}:${Math.floor(toMs / CACHE_TTL_MS)}`;
+      const hit = footageCache.get(key);
+      if (hit && Date.now() - hit.at < CACHE_TTL_MS) return sendJson(res, 200, hit.payload);
+
+      // Unlike /timeline this does not need the camera object, but resolving it keeps the 404 for
+      // an unknown device consistent between the two endpoints.
+      const camera = (await getCameras()).find((c) => c.id === deviceId);
+      if (!camera) return sendJson(res, 404, { error: `no Ring camera ${deviceId}` });
+
+      const { segments, truncated } = await fetchFootage(deviceId, fromMs, toMs);
+      const payload = {
+        camera: { id: camera.id, name: camera.name, slug: slugify(camera.name) },
+        fromMs,
+        toMs,
+        // False for the battery cameras and the doorbell: they record events only, so a client
+        // should keep showing the event timeline and no continuous track.
+        continuous: segments.length > 0,
+        truncated,
+        segments,
+      };
+      footageCache.set(key, { at: Date.now(), payload });
+      if (footageCache.size > 200) footageCache.clear();
       return sendJson(res, 200, payload);
     }
 
