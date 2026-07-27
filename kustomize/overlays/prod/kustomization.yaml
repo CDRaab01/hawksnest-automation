@@ -29,6 +29,9 @@ secretGenerator:
   - name: go2rtc-credentials
     envs:
       - secrets/go2rtc.env
+  - name: ring-timeline-credentials
+    envs:
+      - secrets/ring-timeline.env
 
 # Stable Secret names so Deployments can reference them directly. The trade-off is
 # that editing a secret does NOT trigger an automatic rollout — restart the pod

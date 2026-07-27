@@ -27,6 +27,28 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# `usbipd attach` requires a RUNNING distro; on a cold reboot it is Stopped, which is why
+# the attach fails after a restart. Boot it first and wait until WSL reports it running.
+# A short detached keepalive holds the distro up across the boot->k3s/systemd handoff so it
+# can't idle-shutdown in the window before the attach lands. Idempotent: no-op if running.
+function Ensure-DistroRunning {
+  param([string]$Distro)
+  # WSL emits UTF-16 with embedded NULs under PS 5.1; strip them for a reliable match.
+  $isRunning = { (wsl.exe --list --running --quiet) -replace "`0","" |
+                   Where-Object { $_.Trim() -eq $Distro } }
+  if (& $isRunning) { return }
+
+  Write-Host "WSL distro '$Distro' is not running; starting it before attach ..."
+  Start-Process -WindowStyle Hidden -FilePath 'wsl.exe' `
+    -ArgumentList @('-d', $Distro, '-u', 'root', '-e', 'sleep', '90')
+
+  for ($i = 0; $i -lt 40; $i++) {
+    Start-Sleep -Milliseconds 500
+    if (& $isRunning) { Write-Host "Distro '$Distro' is running."; return }
+  }
+  Write-Warning "Distro '$Distro' did not report running within ~20s; attempting attach anyway."
+}
+
 Write-Host "Looking for USB device with hardware id $HardwareId ..."
 $line = (usbipd list) | Select-String $HardwareId | Select-Object -First 1
 if (-not $line) {
@@ -43,6 +65,9 @@ Write-Host "Found ZWA-2 at bus id $busId"
 # column. Requires admin (enforced by #requires above).
 Write-Host "Binding $busId (idempotent) ..."
 usbipd bind --busid $busId
+
+# Make sure the target distro is up before attaching (see Ensure-DistroRunning above).
+Ensure-DistroRunning -Distro $Distribution
 
 # usbipd-win 5.x syntax: the distribution is the VALUE of --wsl (no --distribution flag).
 Write-Host "Attaching $busId to WSL distro '$Distribution' ..."

@@ -105,3 +105,21 @@ spec:
   resources:
     requests:
       storage: 256Mi
+---
+# ring-timeline's rotated Ring refresh token — a few hundred bytes, but it must survive a
+# pod restart: Ring rotates the token on every use, so the seed in the Secret is stale
+# after first boot and losing this file means re-authenticating with 2FA (a human step).
+# Node-local local-path rather than NFS: the file is tiny, written rarely, and read at
+# startup only, so NFS buys nothing here — but it DOES need a real backup story, so treat
+# `npx -y -p ring-client-api ring-auth-cli` as the recovery path rather than a restore.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ring-timeline-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 64Mi

@@ -1,0 +1,17 @@
+{
+  "name": "ring-timeline",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Read-only Ring recorded-footage timeline for Hawksnest (video_search/history)",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "ring-client-api": "14.3.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

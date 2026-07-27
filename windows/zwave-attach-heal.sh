@@ -11,6 +11,14 @@ set -u
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 DEV=/dev/serial/by-id/usb-Nabu_Casa_ZWA-2_9070690E14E4-if00
 
+# The ZWA-2 enumerates as a CDC-ACM device (/dev/ttyACM0). On a fresh WSL kernel (after
+# wsl --shutdown / reboot) the cdc_acm module is NOT auto-loaded, so a stick attached before
+# the module exists never creates ttyACM0 and the by-id symlink can't be built (bit us
+# 2026-07-06). Ensure the driver is present; /etc/modules-load.d/cdc-acm.conf makes systemd
+# load it at boot, this is the belt-and-suspenders for the logon-race case.
+modprobe cdc_acm 2>/dev/null || true
+udevadm settle 2>/dev/null || true
+
 # Wait up to ~60s for the cluster API (it may still be starting at logon).
 for _ in $(seq 1 30); do
   kubectl get ns home-automation >/dev/null 2>&1 && break

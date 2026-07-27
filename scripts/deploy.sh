@@ -187,7 +187,7 @@ optional_secret() {
 }
 mkdir -p "${SECRETS_DST}"
 if [ "${OVERLAY}" = "staging" ]; then
-  for s in mariadb.env mosquitto.passwd ring-mqtt.env; do
+  for s in mariadb.env mosquitto.passwd ring-mqtt.env ring-timeline.env; do
     [ -f "${SECRETS_DST}/${s}" ] \
       || install -m 0600 "${SECRETS_DST}/${s}.example" "${SECRETS_DST}/${s}"
   done
@@ -198,6 +198,11 @@ else
   need_secret "ring-mqtt.env"
 fi
 optional_secret "go2rtc.env"
+# ring-timeline is likewise non-fatal: without a real token the pod still starts and
+# serves honest 502s ("Refresh token is not valid"), which Hawksnest shows as a
+# timeline-unavailable state. A missing recorded-footage timeline must never be able to
+# block a deploy of the lock/alarm cluster.
+optional_secret "ring-timeline.env"
 
 # --- validate the build before touching the cluster ---------------------------
 log "Validating kustomize build"
