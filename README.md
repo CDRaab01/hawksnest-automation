@@ -18,6 +18,7 @@ start there if you're picking this up fresh.
 | `mosquitto`      | MQTT broker — used by `ring-mqtt`; also seam for future Ratgdo. | `mosquitto-data` (NFS)   |
 | `ring-mqtt`      | Bridges Ring cameras/doorbell/sensors to MQTT; on-demand live video via RTSP. | `ring-mqtt-data` (NFS) ⭐ |
 | `ntfy`           | Self-hosted push for Hawksnest doorbell + alarm alerts (tailnet-only). See [docs/ntfy-push.md](docs/ntfy-push.md). | `ntfy-cache` (local-path) |
+| `ring-timeline`  | Recorded-footage timeline for Hawksnest from Ring's own `video_search` API — real event times + directly playable URLs, which ring-mqtt cannot provide. The one image we build ourselves. See [ring-timeline/README.md](ring-timeline/README.md). | `ring-timeline-data` (local-path) |
 
 ⭐ = **must be backed up** (see [Backups](#backups)).
 
@@ -238,6 +239,29 @@ RTSP-capable camera exists.)
 
 > The token grants full access to the Ring account — it lives only on the backed-up
 > `ring-mqtt-data` PVC, never in git.
+
+### Ring recorded footage (`ring-timeline`)
+
+ring-mqtt gives HA a 40-slot event `select` with **no event times**, and its per-event URL lookup
+produces nothing at all for the wired cameras — they have 19–20 real recordings a day that HA can't
+play. `ring-timeline` serves that data from Ring's own `video_search/history` (real times,
+durations, thumbnails, pre-signed mp4 URLs), which is what Hawksnest's camera timeline reads.
+
+Setup is one secret — its **own** Ring refresh token, never ring-mqtt's (Ring rotates them on use,
+so a shared token drops the live integration):
+
+```bash
+npx -y -p ring-client-api ring-auth-cli          # real terminal: email, password, 2FA
+# paste into kustomize/overlays/prod/secrets/ring-timeline.env  (RING_REFRESH_TOKEN=…)
+```
+
+The token is ~1.2 KB on one line — terminals wrap it and a short copy silently truncates (every
+request then 502s with "Refresh token is not valid"). Rotations are persisted to the
+`ring-timeline-data` PVC; losing it means minting a new token. Full details:
+[ring-timeline/README.md](ring-timeline/README.md).
+
+This is **not** 24/7 footage — Ring's continuous recording needs a wired *Pro* camera, and the
+periodic-snapshot API returns `403` on this account. It is every discrete recording, correctly timed.
 
 ### Ring (official cloud integration — optional)
 

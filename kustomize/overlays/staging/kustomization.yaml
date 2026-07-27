@@ -29,6 +29,9 @@ secretGenerator:
   - name: go2rtc-credentials
     envs:
       - secrets/go2rtc.env
+  - name: ring-timeline-credentials
+    envs:
+      - secrets/ring-timeline.env
 
 generatorOptions:
   disableNameSuffixHash: true

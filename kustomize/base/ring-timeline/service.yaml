@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ring-timeline
+  labels:
+    app: ring-timeline
+spec:
+  # ClusterIP on purpose — NEVER a NodePort. This service hands out pre-signed Ring media
+  # URLs and holds a Ring account credential; the only way in is the Hawksnest nginx pod's
+  # /ring-timeline/ location, which is itself reachable only over the tailnet. Same posture
+  # as go2rtc's API.
+  type: ClusterIP
+  selector:
+    app: ring-timeline
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

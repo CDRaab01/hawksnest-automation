@@ -29,6 +29,7 @@ on:
     branches: [main]
     paths:
       - "kustomize/**"
+      - "ring-timeline/**"
       - "scripts/deploy.sh"
       - ".github/workflows/deploy.yml"
 
@@ -47,6 +48,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ring-timeline is the one workload here we build ourselves (everything else runs an
+      # upstream image). No registry: build on this runner and import straight into k3s
+      # containerd, the same way the Hawksnest web image ships. The Deployment pins
+      # imagePullPolicy: IfNotPresent so k3s uses this instead of hunting docker.io.
+      - name: Build ring-timeline image
+        run: docker build -t ring-timeline:local ring-timeline
+
+      - name: Import ring-timeline into K3s containerd
+        run: docker save ring-timeline:local | sudo k3s ctr -n k8s.io images import -
+
       - name: Deploy
         env:
           # push events have no inputs → deploy prod. Staging is only ever reached
@@ -62,3 +73,16 @@ jobs:
         run: |
           chmod +x scripts/deploy.sh
           ./scripts/deploy.sh
+
+      # The ring-timeline image tag is fixed, so `apply` alone can't see a code change —
+      # restart it to pick up the image imported above. Only this one workload: every other
+      # deployment here runs a pinned upstream image and must not be bounced (restarting
+      # ring-mqtt or zwave-js-ui drops cameras/locks for minutes).
+      - name: Roll ring-timeline to the new image
+        env:
+          OVERLAY: ${{ github.event.inputs.overlay || 'prod' }}
+        run: |
+          ns=home-automation
+          [ "${OVERLAY}" = "staging" ] && ns=home-automation-staging
+          sudo k3s kubectl -n "$ns" rollout restart deployment/ring-timeline
+          sudo k3s kubectl -n "$ns" rollout status deployment/ring-timeline --timeout=120s

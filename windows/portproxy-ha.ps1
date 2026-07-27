@@ -27,6 +27,14 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Resolve the current WSL2 IP (eth0 inside the distro).
+#
+# NOTE (2026-07-06): this NAT-mode logic only works when .wslconfig uses the default NAT
+# networking (a private vEthernet switch gives WSL a reachable 172.x IP). It is BROKEN under
+# networkingMode=mirrored: there is no vEthernet WSL adapter, `hostname -I` returns the
+# host's own shared IPs in unstable order, and the k3s NodePort (an iptables DNAT rule, not a
+# bound socket) is not reachable from the host by ANY of those addresses. If host/LAN/
+# Tailscale access to HA is broken, check that .wslconfig is NOT in mirrored mode. See
+# README-windows.md "Networking mode".
 $wslIp = (wsl -d $Distribution -- hostname -I).Trim().Split(" ")[0]
 if (-not $wslIp) { Write-Error "Could not determine WSL2 IP for '$Distribution'."; exit 1 }
 Write-Host "WSL2 ($Distribution) IP: $wslIp"

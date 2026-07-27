@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ring-timeline
+  labels:
+    app: ring-timeline
+spec:
+  replicas: 1
+  # Recreate: ring-timeline-data is RWO and this is a singleton — it owns its own Ring
+  # refresh token, which Ring rotates on use (two replicas would invalidate each other).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ring-timeline
+  template:
+    metadata:
+      labels:
+        app: ring-timeline
+    spec:
+      initContainers:
+        # The PVC mounts root-owned; the app runs as the image's unprivileged `node` user
+        # (uid 1000) and must be able to write the rotated refresh token.
+        - name: chown-data
+          image: busybox:1.36
+          command: ["sh", "-c", "chown -R 1000:1000 /data"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: ring-timeline
+          # Built by the deploy workflow on the WSL runner and imported straight into k3s
+          # containerd — there is no registry, so IfNotPresent is required (Always would
+          # send k3s looking for a docker.io/library/ring-timeline that does not exist).
+          image: ring-timeline:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: TZ
+              value: "America/New_York"
+            - name: TOKEN_PATH
+              value: /data/refresh-token
+          envFrom:
+            # RING_REFRESH_TOKEN — the SEED token, used only until the first rotation is
+            # written to /data. It must be its own Ring session, never ring-mqtt's: Ring
+            # rotates refresh tokens on use, so sharing one would break the live camera
+            # integration. Mint with `npx -y -p ring-client-api ring-auth-cli`.
+            - secretRef:
+                name: ring-timeline-credentials
+          # A dummy/expired token does not crash the pod — it serves 502s with the Ring
+          # error, which is why /healthz deliberately does NOT call Ring: readiness means
+          # "the process is up", and a credential problem surfaces as an honest error in
+          # the app rather than as an unschedulable pod.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ring-timeline-data
