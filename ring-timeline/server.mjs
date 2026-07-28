@@ -193,7 +193,8 @@ const CVR_BASE = "https://api.ring.com/evm/v2/timeline/24/devices";
  * not a pile of chunks to concatenate. So a client can seek anywhere in the span with one URL.
  *
  * The response mixes four schemas and only `CloudMedia` is continuous video:
- *   CloudMedia — the stitched 24/7 track (the seven wired cameras only)
+ *   CloudMedia — cloud-stored video. Only the ones flagged `recording_24x7_enabled` are the
+ *                stitched 24/7 track; the same schema also carries ordinary event clips.
  *   Event      — motion/person markers, duplicating what /timeline already serves
  *   Footage    — `ONLINE_PERIODICAL`: an hourly 10-second timelapse built from ~20 periodic
  *                snapshots. It is what the battery cameras and the doorbell have INSTEAD of 24/7,
@@ -239,7 +240,12 @@ async function fetchFootage(deviceId, fromMs, toMs) {
   const slots = Array.isArray(body?.timeline) ? body.timeline : [];
   const segments = slots
     .flatMap((slot) => slot?.items ?? [])
-    .filter((i) => i?.schema === "CloudMedia" && i.url)
+    // `CloudMedia` alone is NOT the 24/7 track — it means "cloud-stored video", which includes
+    // ordinary event clips. The doorbell returns 27-second CloudMedia items for its motion
+    // recordings, which would otherwise read as continuous footage and duplicate /timeline.
+    // `recording_24x7_enabled` is the flag that actually separates them: true on the stitched
+    // window (which comes back exactly as long as the request), false on an event clip.
+    .filter((i) => i?.schema === "CloudMedia" && i.url && i.custom_metadata?.recording_24x7_enabled === true)
     .map(normalizeFootage)
     .filter((s) => Number.isFinite(s.startMs))
     .sort((a, b) => a.startMs - b.startMs);

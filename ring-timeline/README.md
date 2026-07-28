@@ -43,7 +43,7 @@ chunks to concatenate. Four schemas come back and only the first is continuous v
 
 | Schema | Meaning |
 |---|---|
-| `CloudMedia` | the stitched 24/7 track — the seven wired cameras only |
+| `CloudMedia` | cloud-stored video. **Only items with `custom_metadata.recording_24x7_enabled: true` are the 24/7 track** — the same schema also carries ordinary event clips (the doorbell returns 27-second ones), so filtering on the schema alone reports every camera as continuous. |
 | `Event` | motion/person markers, duplicating `/timeline` |
 | `Footage` | `ONLINE_PERIODICAL` — an hourly 10-second timelapse of ~20 periodic snapshots. What the battery cameras and doorbell have *instead* of 24/7, and reachable here despite `getPeriodicalFootage` 403ing. |
 | `Gap` | spans with no recording |
