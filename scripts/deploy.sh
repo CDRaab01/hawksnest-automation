@@ -209,6 +209,44 @@ log "Validating kustomize build"
 kubectl kustomize "${KUSTOMIZE_DIR}" >/dev/null \
   || die "kustomize build failed — fix the manifests before deploying."
 
+# --- catch immutable-field drift before apply (Gate A2) -----------------------
+# A server-side dry run is read-only, so it is a free way to find the class of error
+# that made `apply` fail hard for four consecutive deploys in July 2026: the NAS was
+# renumbered, the PVs were recreated by hand at the new address, and the manifests
+# still carried the old one. `spec.nfs` is immutable, so every apply died on the PV
+# patch — which aborted the whole deploy and silently skipped the ring-timeline roll.
+# The generic failure was unreadable, so name the drifted objects and say what to do.
+#
+# Only the immutable-field case is fatal here. Any OTHER dry-run failure just WARNS:
+# a fresh cluster legitimately fails a server dry run (namespace/CRDs don't exist
+# yet), and the real apply below stays the authority on whether a deploy is good.
+immutable_drift_check() {
+  local out rc=0
+  out="$(kubectl apply -k "${KUSTOMIZE_DIR}" --dry-run=server 2>&1)" || rc=$?
+  [ "${rc}" -eq 0 ] && return 0
+
+  if printf '%s' "${out}" | grep -q 'is immutable after creation'; then
+    warn "Manifests disagree with the LIVE cluster on a field Kubernetes will not patch:"
+    printf '%s\n' "${out}" | grep -E 'is invalid:.*immutable' >&2
+    die "Immutable-field drift — 'kubectl apply' cannot reconcile this, so the deploy
+       would fail at apply and skip every step after it.
+
+       For a PersistentVolume this is almost always the NAS address or export path
+       having moved. reclaimPolicy is Retain, so DELETING THE PV OBJECT DOES NOT TOUCH
+       THE DATA on the NAS. To adopt the new value, for each object named above:
+           kubectl delete pv <name> --wait=false
+       then re-run this deploy — it recreates them from the manifests and the existing
+       PVCs re-bind. Confirm the address first:  showmount -e <nas-ip>"
+  fi
+
+  warn "Server-side dry run did not pass, but not for an immutable-field reason.
+       Continuing to the real apply, which is the authority. Dry-run output:"
+  printf '%s\n' "${out}" | tail -20 >&2
+  return 0
+}
+log "Pre-flight: server-side dry run against the live cluster"
+immutable_drift_check
+
 # --- validate the LIVE Home Assistant config (Gate B) before apply ------------
 if [ "${SKIP_HA_CONFIG_CHECK}" = "true" ]; then
   warn "SKIP_HA_CONFIG_CHECK=true — skipping the live HA config validation."

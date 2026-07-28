@@ -67,6 +67,13 @@ An event: `{id, startMs, endMs, durationSec, kind, person, url, urlExpiresAtMs, 
 A segment: `{startMs, endMs, url, urlExpiresAtMs, encrypted, chunked, dingId}`. `encrypted` marks an
 end-to-end-encrypted span, whose key this service does not hold — don't hand it to a player.
 
+Both routes are consumed by Hawksnest (`lib/ringTimeline.ts` + `lib/ringFootage.ts`, mirrored in
+`core/logic/RingTimeline.kt` + `core/logic/RingFootage.kt`). `/footage` draws the continuous lane
+under the event blocks on the timeline, and **plays in preference to an event clip wherever it
+covers the scrubbed moment** — one stitched URL for the window means scrubbing seeks instead of
+loading a new clip per block. A camera with `continuous:false` simply gets no lane. Encrypted spans
+are kept and drawn greyed rather than hidden: the footage exists, and a gap would be a lie.
+
 Two behaviors worth knowing:
 
 - **Signed URLs expire in ~15 minutes.** A timeline is perishable — clients must refetch rather

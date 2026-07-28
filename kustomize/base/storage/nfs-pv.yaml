@@ -4,6 +4,15 @@
 #   spec.nfs.server  -> the NAS IP or hostname (e.g. 192.168.1.10)
 #   spec.nfs.path    -> the exported share path (e.g. /volume1/home-automation/<name>)
 #
+# `spec.nfs` is IMMUTABLE once a PV exists. If the NAS moves, editing it here is not
+# enough — `kubectl apply` will fail with
+#   "spec.persistentvolumesource is immutable after creation"
+# and take the WHOLE deploy down with it (this is what silently blocked every deploy
+# between 2026-07-24 and 2026-07-28). Changing the NAS address is a two-step operation:
+#   1. delete the PV objects (reclaimPolicy: Retain -> the NAS data is untouched), and
+#   2. update this file and re-deploy so they are recreated at the new address.
+# deploy.sh pre-flights this drift and tells you exactly which PVs to delete.
+#
 # These use a dedicated `nfs-manual` StorageClass that disables dynamic provisioning;
 # each PVC binds to its PV by `volumeName`. ReclaimPolicy is Retain so deleting a PVC
 # never deletes data on the NAS.
@@ -33,7 +42,7 @@ spec:
     - noatime
     - nolock          # HA flock() needs local locking; NAS NLM unreliable -> ENOLCK
   nfs:
-    server: 192.168.5.78           # e.g. 192.168.1.10
+    server: 192.168.4.21        # Synology DS214 (LAN renumbered 5.x -> 4.x, 2026-07-24)
     path: /volume3/home-automation/ha-config
 ---
 apiVersion: v1
@@ -52,7 +61,7 @@ spec:
     - hard
     - noatime
   nfs:
-    server: 192.168.5.78                # e.g. 192.168.1.10
+    server: 192.168.4.21        # Synology DS214 (LAN renumbered 5.x -> 4.x, 2026-07-24)
     path: /volume3/home-automation/zwavejs-config
 ---
 apiVersion: v1
@@ -71,7 +80,7 @@ spec:
     - hard
     - noatime
   nfs:
-    server: 192.168.5.78                # e.g. 192.168.1.10
+    server: 192.168.4.21        # Synology DS214 (LAN renumbered 5.x -> 4.x, 2026-07-24)
     path: /volume3/home-automation/mosquitto-data
 ---
 apiVersion: v1
@@ -90,5 +99,5 @@ spec:
     - hard
     - noatime
   nfs:
-    server: 192.168.5.78                # e.g. 192.168.1.10
+    server: 192.168.4.21        # Synology DS214 (LAN renumbered 5.x -> 4.x, 2026-07-24)
     path: /volume3/home-automation/ring-mqtt-data

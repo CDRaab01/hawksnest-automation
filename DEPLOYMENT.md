@@ -42,7 +42,7 @@ config-validation gates — see §11). Original V1 bring-up was 2026-06-22.
 | Other WSL distros (ignore) | `Ubuntu` (default, unrelated), `docker-desktop`, `Pi-hole` (WSL1) |
 | K3s | `v1.35.5+k3s1`, single node named `dragonfly`, containerd |
 | kubeconfig | `~/.kube/config` on Dragonfly (`export KUBECONFIG=~/.kube/config` in `~/.bashrc`) |
-| **NAS** | Synology DS214 at **`192.168.5.78`** (DSM web UI on `:5000`/`http`) |
+| **NAS** | Synology DS214 at **`192.168.4.21`** (DSM web UI on `:5000`/`http`). Was `192.168.5.78` until the LAN was renumbered; see §"Moving the NAS" — the PVs pin this and cannot be patched in place |
 | **NFS** | **v3 only** — the DS214 does *not* support NFSv4.1 (mount returns "Protocol not supported") |
 | NFS export | **`/volume3/home-automation`** (chosen over the near-full Volume 1) |
 | NFS export rule | allow **`192.168.4.0/24`**, Read/Write, **Map all users to admin**, async, non-privileged ports allowed |
@@ -115,7 +115,7 @@ by service name. Remote access is **Tailscale only**; no public internet ports.
    NFS rule `192.168.4.0/24` RW, map-all-to-admin, async, non-priv ports; create the
    four subfolders (`ha-config`, `zwavejs-config`, `mosquitto-data`, `ring-mqtt-data`).
    Verify from the node:
-   `sudo mount -t nfs -o vers=3 192.168.5.78:/volume3/home-automation /mnt/x`.
+   `sudo mount -t nfs -o vers=3 192.168.4.21:/volume3/home-automation /mnt/x`.
 7. **Repo + secrets:**
    ```bash
    git clone https://github.com/CDRaab01/hawksnest-automation.git ~/hawksnest-automation
@@ -156,6 +156,21 @@ by service name. Remote access is **Tailscale only**; no public internet ports.
   `wait-for-mariadb` initContainers are separate: add `-c <name>`).
 - **After a host reboot:** logon triggers `C:\ha\boot.ps1` -> portproxy (and USB attach).
   If HA is unreachable, check the portproxy table: `netsh interface portproxy show v4tov4`.
+- **Moving the NAS (or renumbering the LAN):** `spec.nfs` on a PersistentVolume is **immutable**.
+  Editing `kustomize/base/storage/nfs-pv.yaml` alone is not enough — `kubectl apply` fails with
+  `spec.persistentvolumesource is immutable after creation`, and because that aborts the whole
+  apply, *every step after it in the deploy is skipped*. That is exactly how four consecutive
+  deploys silently stopped rolling `ring-timeline` in July 2026: the NAS moved from `192.168.5.78`
+  to `192.168.4.21`, the PVs were recreated by hand at the new address, and the manifests kept the
+  old one. `deploy.sh` now pre-flights this with a server-side dry run and names the offending
+  objects. The procedure:
+  ```bash
+  showmount -e <new-nas-ip>                       # confirm the address before touching anything
+  # reclaimPolicy is Retain: deleting the PV object does NOT delete data on the NAS
+  kubectl delete pv ha-config zwavejs-config mosquitto-data ring-mqtt-data --wait=false
+  # update spec.nfs.server in kustomize/base/storage/nfs-pv.yaml, then:
+  ./scripts/deploy.sh                             # recreates the PVs; the existing PVCs re-bind
+  ```
 
 ---
 
