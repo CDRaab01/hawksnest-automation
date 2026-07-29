@@ -112,9 +112,12 @@ data:
       # is IGNORED for the openai provider — the endpoint comes from the
       # OPENAI_BASE_URL environment variable (set in deployment.yaml). Putting a
       # base_url here instead would silently send camera snapshots to
-      # api.openai.com. That is a real privacy failure, not a config typo, and it
-      # matters more than usual because one of these cameras is in a bedroom.
+      # api.openai.com. That is a real privacy failure, not a config typo: these
+      # are interior cameras and a BEDROOM one is planned for a later phase.
       # 0.18 is expected to honour base_url directly; re-check on upgrade.
+      #
+      # The endpoint itself is NOT the host's LAN IP — it goes through the
+      # lmstudio-fwd socat unit. See plan.md before changing OPENAI_BASE_URL.
       provider: openai
       api_key: "{FRIGATE_GENAI_API_KEY}"
       model: "{FRIGATE_GENAI_MODEL}"
