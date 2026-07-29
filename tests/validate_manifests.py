@@ -54,6 +54,8 @@ OVERLAYS = {
         "ntfy_nodeport": 30081,      # the Tailscale Serve :8444 forwarder target
         "go2rtc_webrtc_service_type": "NodePort",
         "go2rtc_webrtc_nodeport": 30855,  # the :8555 socat forwarder target
+        "frigate_ui_service_type": "NodePort",
+        "frigate_ui_nodeport": 30897,  # the :8971 socat forwarder / Serve :8447 target
         "require_nfs": True,         # 4 NFS PVs present, v3, real server/path
         "zwave_device_real": True,   # privileged + real /dev by-id path, running
     },
@@ -65,6 +67,8 @@ OVERLAYS = {
         "ntfy_nodeport": None,       # ClusterIP: no NodePort (no 30081 collision)
         "go2rtc_webrtc_service_type": "ClusterIP",
         "go2rtc_webrtc_nodeport": None,  # ClusterIP: no NodePort (no 30855 collision)
+        "frigate_ui_service_type": "ClusterIP",
+        "frigate_ui_nodeport": None,  # ClusterIP: no NodePort (no 30897 collision)
         "require_nfs": False,        # NFS PVs deleted; PVCs on local-path
         "zwave_device_real": False,  # parked at replicas:0 (never claims the stick)
     },
@@ -337,6 +341,33 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
             check(expected["go2rtc_webrtc_nodeport"] in g2w_node_ports,
                   f"go2rtc-webrtc NodePort must stay {expected['go2rtc_webrtc_nodeport']} "
                   "(the :8555 socat forwarder target)")
+    # frigate-ui: the admin UI's external front. Two invariants, and the second one
+    # is a security boundary rather than a stability one.
+    fui_svc = next((s for s in services if name(s) == "frigate-ui"), None)
+    check(fui_svc is not None, "frigate-ui Service is missing (Frigate admin UI front)")
+    if fui_svc:
+        check(fui_svc["spec"].get("type") == expected["frigate_ui_service_type"],
+              f"frigate-ui Service must be {expected['frigate_ui_service_type']}")
+        fui_node_ports = [p.get("nodePort") for p in fui_svc["spec"]["ports"]]
+        if expected["frigate_ui_nodeport"] is None:
+            check(all(np is None for np in fui_node_ports),
+                  "staging frigate-ui Service must not set a nodePort (ClusterIP)")
+        else:
+            check(expected["frigate_ui_nodeport"] in fui_node_ports,
+                  f"frigate-ui NodePort must stay {expected['frigate_ui_nodeport']} "
+                  "(the :8971 socat forwarder / Tailscale Serve :8447 target)")
+        # A NodePort is reachable on every node IP, so what rides on this Service is
+        # a security boundary: 8971 is Frigate's AUTHENTICATED UI, 5000 is its
+        # UNAUTHENTICATED API. Adding 5000 here — or "simplifying" the two Services
+        # back into one — would publish an unauthenticated API to the host network
+        # and, through the socat forwarder, to the whole tailnet.
+        fui_ports = {p.get("port") for p in fui_svc["spec"]["ports"]}
+        check(5000 not in fui_ports,
+              "frigate-ui must NOT expose port 5000 — that is Frigate's unauthenticated "
+              "API, and this Service is the tailnet-facing front. Keep :5000 on the "
+              "ClusterIP `frigate` Service only")
+        check(fui_ports == {8971},
+              f"frigate-ui must expose exactly {{8971}} (the authenticated UI), got {fui_ports}")
     zwave_svc = next((s for s in services if name(s) == "zwave-js-ui"), None)
     if zwave_svc:
         zports = {p["port"] for p in zwave_svc["spec"]["ports"]}

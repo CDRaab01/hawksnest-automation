@@ -248,6 +248,47 @@ looking for the GUI toggle — it's easily confused with **"Enable Local LLM Ser
 in App Settings, which is a different setting and does nothing for binding.
 
 
+**Frigate admin UI — `frigate-forwarder.service` (socat) + Tailscale Serve `:8447`.** Motion masks,
+zones and object filters are drawn on a live frame in Frigate's own UI, and an untuned camera fires
+on a TV or a ceiling fan — every false alert is another junk CLIP embedding in the semantic search
+index. Same forwarder pattern as HA and go2rtc:
+
+```
+Tailscale Serve https://dragonfly.tail2ce561.ts.net:8447
+  -> 127.0.0.1:8971   (frigate-forwarder.service, socat)
+    -> NodePort 30897 (Service frigate-ui)
+```
+
+```bash
+# in the Dragonfly distro
+sudo cp windows/frigate-forwarder.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now frigate-forwarder.service
+```
+
+```powershell
+# one-time, and RUN `tailscale serve status` FIRST — see the warning below
+tailscale serve --bg --https=8447 http://127.0.0.1:8971
+```
+
+No Hyper-V firewall rule is needed for tailnet access; Tailscale Serve terminates on the host.
+
+> **⚠️ Check `tailscale serve status` before adding any Serve mapping.** Serve ports are a shared
+> namespace across the whole suite and `tailscale serve --https=<port>` **silently overwrites** an
+> existing mapping — this is what broke Hawksnest's HA path when Remnant took `:8443`. The map as
+> measured 2026-07-29 was `:443`→Magpie(8005), `:8443`→Hawksnest(8090), `:8444`→ntfy(8391),
+> `:8445`→Remnant(8006), `:8446`→(8007, **nothing listening — dangling**). `:8447` was verified free
+> before being claimed. Note the root `CLAUDE.md` map was already stale when checked: it did not
+> list `:8446` at all. Trust `tailscale serve status`, not the doc.
+
+> **8971 is the AUTHENTICATED UI. Never repoint the forwarder at 5000.** Frigate's `:5000` API has
+> no authentication at all, and this forwarder is reachable from the whole tailnet. That is why
+> `frigate-ui` is a second Service rather than a nodePort bolted onto the existing `frigate` one,
+> which also carries `:5000`. `tests/validate_manifests.py` enforces that `frigate-ui` exposes
+> exactly `{8971}` and rejects `5000` outright; both invariants were negative-tested.
+
+Interim access without any of the above: `kubectl -n home-automation port-forward svc/frigate 8971:8971`.
+
+
 **Z-Wave stick re-attach — headless watchdog task.** `usbipd attach` doesn't survive a reboot,
 and if zwave-js-ui starts before the stick is attached, containerd masks the device path with a
 directory (`/dev/zwave: Is a directory`) and the locks drop to Unavailable. Register the task once
