@@ -57,8 +57,14 @@ data:
 
     record:
       enabled: true
-      # 24/7 continuous. ~5.3 GB/camera/day on the Reolink sub stream, so 14 days
-      # is ~75 GB for one camera.
+      # 24/7 continuous. ~5.3 GB/camera/day on the Reolink sub stream, so 3 days
+      # is ~16 GB for one camera.
+      #
+      # Deliberately 3, not 14: the first camera is in a BEDROOM. This keeps a
+      # scrubbable recent window without two weeks of bedroom footage sitting on
+      # disk. Retention is per-camera, so an outdoor camera added later can carry a
+      # longer continuous window without changing this one — set it under that
+      # camera rather than raising the global default.
       #
       # THIS IS THE REAL DISK GUARDRAIL, not the PVC size: frigate-media is on k3s
       # local-path, which is hostPath-backed with NO quota enforcement. Filling the
@@ -66,7 +72,7 @@ data:
       # with it. Raise these numbers deliberately, and only after the DS925+
       # migration gives the media volume somewhere of its own to grow.
       continuous:
-        days: 14
+        days: 3
       alerts:
         retain:
           days: 30

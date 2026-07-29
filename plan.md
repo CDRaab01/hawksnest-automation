@@ -89,9 +89,10 @@ public API. `tests/validate_manifests.py` asserts it is present. **Do not "tidy"
 quota enforcement**. It will grow past 200Gi and fill the Dragonfly virtual disk, taking
 k3s, Home Assistant and the **door locks** down with it.
 
-The actual guardrail is `record.continuous.days` in the Frigate seed (currently `14`,
-≈75 GB for one camera at ~5.3 GB/day on the sub stream). Raise it deliberately, and
-preferably not before the DS925+ migration. Add a `df -h` check to the routine.
+The actual guardrail is `record.continuous.days` in the Frigate seed (`3` — ≈16 GB for one
+camera at ~5.3 GB/day on the sub stream; set to 3 rather than 14 because the first camera is
+in a bedroom, decided 2026-07-29). Raise it deliberately, and preferably not before the
+DS925+ migration. Add a `df -h` check to the routine.
 
 ---
 
@@ -182,9 +183,10 @@ every false alert is another junk embedding in the search index. That needs comm
 
 - `switch.bedroom_privacy_mode` (Reolink integration) physically parks the lens. Commit 6
   is promoted ahead of the search work for this reason.
-- Consider whether 14 days of *continuous* is right for this room specifically, or whether
-  it should be alerts-only (`continuous.days: 0`). Retention is per-camera, so
-  differentiating costs nothing — worth deciding before it accumulates two weeks.
+- ~~Consider whether 14 days of *continuous* is right for this room~~ — **decided 2026-07-29:
+  `continuous.days: 3`** (≈16 GB), a scrubbable recent window without two weeks of bedroom
+  footage on disk. Alerts stay at 30 days. Retention is per-camera, so a later outdoor camera
+  can carry a longer continuous window set under *that* camera, not by raising this one.
 - `frigate-config` (the SQLite index, descriptions, embeddings) is on `local-path` and is
   **not** covered by the NFS backup story. Losing it loses all search history.
 
@@ -221,6 +223,15 @@ The web half hinges on one boolean. `CameraPlayer.tsx:78`
 (`const isRing = camera.eventSelectId !== null`) gates eight behaviours that are really
 three separate capabilities; `CameraPlayer.kt:75` is the identical line gating nine.
 
+**Verified against `main` @ `ffacfc1` on 2026-07-29** — every file/line claim below held except
+the token one above. One correction to the framing: the Frigate **event** path is not merely a
+seam, it is wired end-to-end on both platforms already (web `CameraPlayer.tsx:114-118` calls
+`fetchCameraEvents` in the `!isRing` branch; Android as above). A Frigate camera has no
+`eventSelectId`, so it is already `!isRing` and already takes the correct events branch. What
+actually breaks for it is narrower than "eight behaviours": `go2rtcSrc` is `undefined` (no live
+video at all), `loop={!isRing}` is `true` (recorded playback loops), and `onError`/`onDuration`
+are `undefined` (the dead-playlist gap bug). Item 8 is correspondingly smaller than scoped.
+
 - **New `src/lib/frigate.ts`**, mirroring `src/lib/go2rtc.ts` — `primeFrigateCameras()`
   caching `/api/frigate/config`, `frigateHasCamera(name)` with the same circuit-breaker
   semantics. *Verify `/api/frigate/config` proxies through first; the other three routes
@@ -245,10 +256,13 @@ three separate capabilities; `CameraPlayer.kt:75` is the identical line gating n
    `canGo2rtc = isRing && Go2rtcHealth.maybeAvailable()` — a circuit-breaker only, no
    `/go2rtc/api/streams` check. Dropping the `isRing` gate without porting that check
    gives every camera an 8-second watchdog stall on first open. Same commit, not after.
-2. **Android has no token accessor.** `RingTimelineClient` sends no `Authorization` (the
-   service doesn't authenticate). Frigate goes through **HA** and needs `Bearer`, but
-   `ConnectionManager` exposes `baseUrl` and no token. Route through `Source` rather than
-   inventing a second credential path.
+2. ~~**Android has no token accessor.**~~ **Already solved — verified 2026-07-29 against
+   `main` @ `ffacfc1`.** `HaSource.kt:166-178` already does an authenticated
+   `/api/frigate/events` read (`Bearer $token`), it is on the `Source` interface
+   (`Source.kt:109`), and `CameraPlayerViewModel.kt:133` already calls it through
+   `ConnectionManager.fetchCameraEvents`. It went in via the routing-through-`Source` path this
+   plan was about to recommend. `RingTimelineClient` still sends no `Authorization`, but that's
+   correct — the ring-timeline service doesn't authenticate. **No credential work needed.**
 
 **Lockstep:** `chooseRecordedSource` exists in both `lib/ringFootage.ts` and
 `core/logic/RingFootage.kt`. `ARCHITECTURE.md:88-104` states the 1:1 port is deliberate
