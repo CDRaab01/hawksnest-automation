@@ -197,6 +197,57 @@ New-NetFirewallHyperVRule -Name 'Go2rtc-8555' -DisplayName 'Go2rtc-8555' `
   -Protocol TCP -LocalPorts 8555 -Action Allow
 ```
 
+> **Note (2026-07-29): the `Go2rtc-8555` rule above does not actually exist** on this host —
+> `Get-NetFirewallHyperVRule` lists only `HomeAssistant-8123` (plus the WSL defaults and the two
+> `WSL-*` mirrored rules). go2rtc works anyway via the socat forwarder. Create it if you need
+> LAN/Tailscale WebRTC; just don't assume it's already there.
+
+**LM Studio for Frigate — `lmstudio-fwd.service` (socat, and it runs the OTHER way).** The two
+forwarders above expose a *pod* to the Windows host. This one exposes a *Windows service to the
+pods*, for Frigate's GenAI event descriptions. It exists because under mirrored networking there
+is otherwise **no path at all**, and the reason is worth reading before you debug it:
+
+- The Dragonfly VM **owns** the host address. Inside the distro, `ip route get 192.168.4.34`
+  returns `local … dev lo`, so a pod dialing `192.168.4.34` reaches the VM, not Windows — and
+  nothing listens on 1234 there.
+- **This is not a firewall problem.** Several firewall rules were tried first (a scoped
+  `New-NetFirewallRule`, then a `New-NetFirewallHyperVRule` on the WSL `VMCreatorId`) and none of
+  them could have worked, because the packets never leave the VM. If you find those rules lying
+  around, they're inert; that's why.
+- The VM *does* reach Windows, on `127.0.0.1` (mirrored loopback). A pod can't use that, because
+  its `127.0.0.1` is the pod. socat is the only bridge.
+
+```
+pod -> 10.42.0.1:21234 -> lmstudio-fwd -> 127.0.0.1:1234 -> LM Studio on Windows
+```
+
+```bash
+# in the Dragonfly distro
+sudo cp windows/lmstudio-fwd.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now lmstudio-fwd.service
+```
+
+Two constraints that look arbitrary and are not:
+
+- **Port 21234, not 1234.** Mirrored networking mirrors every Windows *listening* socket into the
+  VM, so `bind()` on 1234 fails with `Address already in use` while `ss` shows nothing bound.
+  11434 collides the same way (Ollama on Windows). A replacement port must be free **on Windows**.
+- **`bind=10.42.0.1` (cni0) is the access control.** The LM Studio API is unauthenticated;
+  widening this to `0.0.0.0` would publish a free GPU to the whole LAN.
+
+No Hyper-V firewall rule is needed — the traffic never crosses that boundary.
+
+Requires LM Studio bound to all interfaces on the Windows side:
+
+```powershell
+& "$env:USERPROFILE\.lmstudio\bin\lms.exe" server start --bind 0.0.0.0 --port 1234
+```
+
+That persists in `~/.lmstudio/.internal/http-server-config.json` as `"networkInterface"`. Don't go
+looking for the GUI toggle — it's easily confused with **"Enable Local LLM Service (headless)"**
+in App Settings, which is a different setting and does nothing for binding.
+
+
 **Z-Wave stick re-attach — headless watchdog task.** `usbipd attach` doesn't survive a reboot,
 and if zwave-js-ui starts before the stick is attached, containerd masks the device path with a
 directory (`/dev/zwave: Is a directory`) and the locks drop to Unavailable. Register the task once
