@@ -1,0 +1,141 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frigate-seed
+data:
+  # Seed config for Frigate — the NVR + object detection behind Hawksnest's
+  # recorded timeline and AI event search. Copied to the PVC at /config/config.yml
+  # on FIRST BOOT ONLY (see the seed-config initContainer): Frigate's own UI writes
+  # this file when you draw motion masks and zones, and that must not be clobbered
+  # on every restart. (Contrast go2rtc, which re-seeds every boot because it drops
+  # ConfigMap stream changes.) To change something here after first boot you must
+  # edit the live file too — same dual-write ritual as HA's configuration.yaml.
+  #
+  # SCHEMA IS VERSION-SPECIFIC AND WAS VERIFIED AGAINST 0.17.2. Notably `record`
+  # has NO top-level `retain:` block in 0.17 (it was `record.retain.days` through
+  # 0.16) — it is now continuous/motion/alerts/detections. Re-verify against the
+  # release notes before bumping the pinned image in deployment.yaml.
+  #
+  # ${VARS} are NOT used here — Frigate does its own substitution and requires the
+  # FRIGATE_ prefix on any env var referenced as {FRIGATE_FOO}.
+  config.yml: |
+    mqtt:
+      host: mosquitto.home-automation.svc.cluster.local
+      port: 1883
+      user: frigate
+      password: "{FRIGATE_MQTT_PASSWORD}"
+      # Frigate's MQTT user is SEPARATE from ring-mqtt's `ring` user in the same
+      # mosquitto passwd file. That file must only ever be APPENDED to — rewriting
+      # it drops `ring` and takes every Ring camera offline at once.
+
+    detectors:
+      ov:
+        type: openvino
+        # CPU is the committed default and is genuinely adequate for one camera at
+        # 640x360/5fps. Flip to GPU only after the /dev/dri probe in README §Frigate
+        # actually finds a render node: WSL2 exposes /dev/dxg rather than a normal
+        # DRI render node, and there is no GPU precedent anywhere in this cluster,
+        # so GPU here is unproven rather than merely unconfigured. Flipping it also
+        # means uncommenting the device mounts in deployment.yaml.
+        device: CPU
+
+    # OpenVINO does not auto-select a model — the path, geometry and labelmap are
+    # all required. These files ship inside the image.
+    model:
+      width: 300
+      height: 300
+      input_tensor: nhwc
+      input_pixel_format: bgr
+      path: /openvino-model/ssdlite_mobilenet_v2.xml
+      labelmap_path: /openvino-model/coco_91cl_bkgr.txt
+
+    birdseye:
+      # OFF deliberately. The HA integration surfaces birdseye as a standalone
+      # `camera.birdseye` entity, which Hawksnest's resolveCameras() would treat as
+      # a real camera and render as an unscrubbable tile on the camera wall.
+      enabled: false
+
+    record:
+      enabled: true
+      # 24/7 continuous. ~5.3 GB/camera/day on the Reolink sub stream, so 14 days
+      # is ~75 GB for one camera.
+      #
+      # THIS IS THE REAL DISK GUARDRAIL, not the PVC size: frigate-media is on k3s
+      # local-path, which is hostPath-backed with NO quota enforcement. Filling the
+      # Dragonfly virtual disk takes down k3s, Home Assistant and the door locks
+      # with it. Raise these numbers deliberately, and only after the DS925+
+      # migration gives the media volume somewhere of its own to grow.
+      continuous:
+        days: 14
+      alerts:
+        retain:
+          days: 30
+          mode: all
+      detections:
+        retain:
+          days: 30
+          mode: all
+
+    snapshots:
+      enabled: true
+      retain:
+        default: 30
+
+    semantic_search:
+      # CLIP embeddings over event thumbnails — this is what makes natural-language
+      # search work ("person carrying a box") rather than just label/zone filters.
+      # `small` runs on CPU; `large` wants a GPU and is only worth revisiting if the
+      # OpenVINO GPU path lands.
+      enabled: true
+      model: jinav2
+      model_size: small
+      reindex: false
+
+    genai:
+      # Points at LM Studio on the Windows host, NOT at OpenAI.
+      #
+      # READ THIS BEFORE EDITING: in Frigate 0.17 the `base_url` key under `genai`
+      # is IGNORED for the openai provider — the endpoint comes from the
+      # OPENAI_BASE_URL environment variable (set in deployment.yaml). Putting a
+      # base_url here instead would silently send camera snapshots to
+      # api.openai.com. That is a real privacy failure, not a config typo, and it
+      # matters more than usual because one of these cameras is in a bedroom.
+      # 0.18 is expected to honour base_url directly; re-check on upgrade.
+      provider: openai
+      api_key: "{FRIGATE_GENAI_API_KEY}"
+      model: "{FRIGATE_GENAI_MODEL}"
+
+    cameras:
+      bedroom:
+        ffmpeg:
+          inputs:
+            # The camera's SUB stream, read directly rather than through go2rtc.
+            # go2rtc serves the MAIN stream for live view on its own connection, so
+            # recording and live view have independent failure domains — a go2rtc
+            # restart must never punch a hole in the 24/7 timeline.
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BEDROOM}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          # MUST match what the camera actually sends — confirm with
+          # `ffprobe rtsp://…/h264Preview_01_sub` before first deploy. A mismatch
+          # here shows up as bad bounding boxes rather than an obvious error.
+          width: 640
+          height: 360
+          fps: 5
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          genai:
+            # Per-camera, and deliberately narrower than `track`: a description for
+            # every passing cat is noise in the search index and needless VLM load.
+            enabled: true
+            objects:
+              - person
+        # No `motion:` mask committed — masks and zones are drawn in Frigate's own
+        # UI against a live frame and land in the live /config/config.yml. Tune them
+        # early: an untuned camera fires on a TV or a ceiling fan, and every false
+        # alert is another junk embedding in the semantic search index.

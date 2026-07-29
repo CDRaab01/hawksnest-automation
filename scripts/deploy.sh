@@ -187,7 +187,7 @@ optional_secret() {
 }
 mkdir -p "${SECRETS_DST}"
 if [ "${OVERLAY}" = "staging" ]; then
-  for s in mariadb.env mosquitto.passwd ring-mqtt.env ring-timeline.env; do
+  for s in mariadb.env mosquitto.passwd ring-mqtt.env ring-timeline.env frigate.env; do
     [ -f "${SECRETS_DST}/${s}" ] \
       || install -m 0600 "${SECRETS_DST}/${s}.example" "${SECRETS_DST}/${s}"
   done
@@ -203,6 +203,14 @@ optional_secret "go2rtc.env"
 # timeline-unavailable state. A missing recorded-footage timeline must never be able to
 # block a deploy of the lock/alarm cluster.
 optional_secret "ring-timeline.env"
+# Frigate is likewise non-fatal. With the dummy example secret it still starts and
+# serves its API; the camera stream just errors and no recordings accumulate.
+# An NVR must never be able to block a deploy of the lock/alarm cluster — same rule
+# as go2rtc and ring-timeline above.
+#
+# Note the dummy OPENAI_BASE_URL in the example is a LOCAL address on purpose: the
+# fallback must not be a path that ships camera snapshots to a public API.
+optional_secret "frigate.env"
 
 # --- validate the build before touching the cluster ---------------------------
 log "Validating kustomize build"
@@ -298,6 +306,10 @@ fi  # end OVERLAY=staging wrapper
 # ring-mqtt is handled separately (best-effort) below: its readiness depends on the
 # Ring cloud API + per-camera setup, which can take minutes, so a slow or unhealthy
 # ring-mqtt must NEVER fail the deploy that also rolls the lock-critical workloads.
+# DO NOT ADD frigate, go2rtc, ntfy OR ring-timeline HERE. They are camera/notification
+# services on a cluster that controls physical door locks: a wedged NVR must not be
+# able to fail the deploy that also rolls zwave-js-ui and Home Assistant. Frigate in
+# particular can take minutes to load its detector and embedding models.
 WORKLOADS=(mariadb mosquitto home-assistant)
 [ "${zwave_should_run}" = "true" ] && WORKLOADS+=(zwave-js-ui)
 

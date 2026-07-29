@@ -32,6 +32,9 @@ secretGenerator:
   - name: ring-timeline-credentials
     envs:
       - secrets/ring-timeline.env
+  - name: frigate-credentials
+    envs:
+      - secrets/frigate.env
 
 # Stable Secret names so Deployments can reference them directly. The trade-off is
 # that editing a secret does NOT trigger an automatic rollout — restart the pod

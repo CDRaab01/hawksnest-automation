@@ -1,0 +1,13 @@
+# Staging parks Frigate permanently. There is exactly ONE physical Reolink camera,
+# and a second Frigate would open its own RTSP session to it, run a second detector
+# on the same shared node, and write a second copy of 24/7 video to the same host
+# disk. Staging exists to prove the manifests render and come up — not to record.
+#
+# (Same reasoning as go2rtc-replicas-0, which is parked because prod owns the
+# WebRTC media port on this single-node cluster.)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frigate
+spec:
+  replicas: 0

@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: frigate
+  labels:
+    app: frigate
+spec:
+  type: ClusterIP
+  selector:
+    app: frigate
+  ports:
+    # Frigate's internal, UNAUTHENTICATED API. In-cluster only — Hawksnest never
+    # talks to this directly. The app reaches Frigate through Home Assistant's
+    # frigate-hass-integration proxy at /api/frigate/..., which is authenticated by
+    # the HA token the app already holds. Same posture as go2rtc's :1984.
+    - name: api
+      port: 5000
+      targetPort: api
+    # Frigate's own authenticated UI. Needed for real work — motion masks, zones
+    # and object filters are drawn on a live frame here, and an untuned camera
+    # fires on a TV or a ceiling fan and fills the semantic search index with
+    # junk. Reaching it from a device needs a NodePort + socat forwarder +
+    # Hyper-V rule (the ntfy :8444 pattern); until that lands, port-forward:
+    #   kubectl -n home-automation port-forward svc/frigate 8971:8971
+    - name: ui
+      port: 8971
+      targetPort: ui

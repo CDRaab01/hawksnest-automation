@@ -28,6 +28,9 @@ resources:
   - go2rtc/deployment.yaml
   - go2rtc/service.yaml
   - go2rtc/service-webrtc.yaml
+  - frigate/configmap.yaml
+  - frigate/deployment.yaml
+  - frigate/service.yaml
   - ring-timeline/deployment.yaml
   - ring-timeline/service.yaml
   - ntfy/configmap.yaml
