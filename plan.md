@@ -104,8 +104,22 @@ Commits 1-3 cannot deploy until these exist. All are Phase 0, all need the camer
       WS-Discovery probe found nothing. Recent Reolink firmware ships these disabled. Turn RTSP on
       in the camera's settings (Reolink app or web UI → Network → Advanced → Port Settings); the
       `ffprobe` step and Frigate both depend on it and will fail identically until then.
-- [ ] **Dedicated non-admin RTSP user** on the camera. Password must be URL-safe
-      (no `/ @ : # ?`) — it goes into an `rtsp://` URL unencoded in two configs.
+- [ ] **Dedicated non-admin RTSP user, created ON THE CAMERA.** Two traps here, both hit
+      2026-07-29:
+      - **The Reolink CLOUD account is not a camera account.** Handing RTSP the cloud login
+        email (`…@gmail.com`) fails with `401 Unauthorized`, and the local HTTP API rejects it
+        too (`"detail": "login failed", "rspCode": -7`) — proving it's a credential problem, not
+        URL parsing. Reolink cameras keep their own local user database; the app's cloud identity
+        has no standing with RTSP or `/cgi-bin/api.cgi`. Create the user in the camera's own
+        **User Management** (web UI at `http://<ip>` now that HTTP is on, or the app), logging in
+        as the local `admin` with the device password set during camera setup.
+      - **The USERNAME must be URL-safe too, not just the password.** An earlier version of this
+        line only warned about the password. Both halves land in `rtsp://user:pass@ip:554/…`
+        unencoded, so an `@` in the *username* — which any email address has — breaks the URL
+        exactly the same way. Use a plain alphanumeric name like `frigate`.
+      - Password rules unchanged: no `/ @ : # ?`.
+      - **Do not brute-force this.** The API returns `auth_warning_info.remain_times` (10 at the
+        time of writing) and an `unlock_time` — repeated wrong guesses lock the account out.
 - [ ] **UID / cloud disabled** in the Reolink app, and the camera blocked from WAN egress
       at the router. The UID is Reolink's P2P relay identity; turning it off is most of
       the point of leaving Ring.
