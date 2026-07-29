@@ -38,6 +38,32 @@ its own `isRing`. Item 10 closes that and should not be left to drift.
 
 Retention decision (2026-07-29): bedroom is `continuous.days: 3`, not 14 — see below.
 
+### Resume state — re-verified 2026-07-29 after a host restart
+
+The restart cost nothing. Everything below was measured, not assumed:
+
+- **Cluster healthy.** All 9 pods Running in `home-automation`; `zwave-js-ui` self-recreated ~2 min
+  after boot (the S4U watchdog worked — locks were never at risk).
+- **Nothing from this branch is deployed, as expected.** Live go2rtc still lists `bedroom` as a
+  **Ring** stream, and all **11 Ring cameras are present and healthy**. Commit 1 (retiring the Ring
+  bedroom camera) has not landed on the cluster.
+- **Both overlays render and validate clean** — prod 47 resources, staging 43, all invariants hold.
+  (Checked with `kubectl kustomize`, embedded v5.7.1; CI pins standalone **v5.4.3** — the render
+  agreed, but CI remains the authority.)
+- **Secrets state unchanged and matches the warnings below.** `mosquitto.passwd` still has exactly
+  `ring` + `ratgdo`; `go2rtc.env` still has `RING_REFRESH_TOKEN` + 11 `RING_DEVICE_ID_*` and **no**
+  `REOLINK_*`; `frigate.env` still absent. Append, don't regenerate.
+- **The camera is not on the network.** A full sweep of `192.168.4.0/24` found no host with **554 or
+  8000** open, and no Reolink OUI in the neighbour table. Phase A steps 1-4 (DHCP reservation, RTSP
+  user, UID/cloud off, `ffprobe`) are hard-blocked until the E1 Pro is powered on and onboarded.
+- **The `ffprobe` measurement is still the one that matters.** `detect:` is `640x360 @ 5fps` from the
+  spec sheet and has *not* been confirmed against the real stream. A mismatch misplaces every
+  bounding box silently.
+
+Unrelated: `windows/README-windows.md` has an **uncommitted** edit parked on this branch (the Z-Wave
+S4U watchdog write-up). It is correct and worth keeping, but it belongs to the Z-Wave work, not the
+Reolink migration — commit it separately so it isn't dragged into this PR.
+
 ---
 
 ## Blocked on physical setup
@@ -54,7 +80,12 @@ Commits 1-3 cannot deploy until these exist. All are Phase 0, all need the camer
       resolution and fps. `detect:` in the Frigate seed is currently `640x360 @ 5fps` from
       the E1 Pro's nominal spec. A mismatch doesn't error; it silently misplaces every
       bounding box.
-- [ ] **iGPU probe**, which decides `device:` (see "OpenVINO" below).
+- [x] **iGPU probe** — **done 2026-07-29, answer is CPU.** `/dev/dri` does not exist in the
+      Dragonfly distro; only `/dev/dxg` plus the WSL d3d12 shims (`libd3d12.so`,
+      `libd3d12core.so`, `libdxcore.so`). OpenVINO's GPU plugin needs a real render node, so
+      the container probe can't even bind `--device /dev/dri`. **Stay on `device: CPU`** — which
+      is already the committed default, so *no config change is needed*. Leave the `/dev/dri` +
+      `/usr/lib/wsl` mounts in `deployment.yaml` commented and `hwaccel_args` unset.
 - [ ] **`frigate.env` created** at `/home/sonic/hawksnest-secrets/` (it does not exist yet) and
       **`go2rtc.env` APPENDED to** — verified 2026-07-29, the live file already holds
       `RING_REFRESH_TOKEN` + 11 `RING_DEVICE_ID_*` and has none of the `REOLINK_*` keys. Rewriting
@@ -62,11 +93,13 @@ Commits 1-3 cannot deploy until these exist. All are Phase 0, all need the camer
       regenerate hazard as the mosquitto file below. (It also still carries a now-unused
       `RING_DEVICE_ID_BEDROOM` from before commit 1 retired that camera — harmless, leave it.)
 - [ ] **`frigate` MQTT user appended** to the mosquitto passwd file — see the warning below.
-- [ ] **LM Studio model id** and a Hyper-V firewall rule for its port.
+- [ ] **LM Studio: bind it to the network first — a firewall rule alone will not work.**
+      Verified 2026-07-29 (see "4. LM Studio is loopback-only" below). Model id is settled;
+      the binding is not.
 
 ---
 
-## Three things that will bite
+## Four things that will bite
 
 ### 1. The mosquitto password file is append-only
 
@@ -115,6 +148,43 @@ in a bedroom, decided 2026-07-29). Raise it deliberately, and preferably not bef
 DS925+ migration. Add a `df -h` check to the routine.
 
 ---
+
+### 4. LM Studio is loopback-only — the firewall rule is not the fix
+
+**Verified on the host 2026-07-29.** LM Studio listens on **`127.0.0.1:1234` only**:
+
+```
+LocalAddress LocalPort OwningProcess
+127.0.0.1         1234         21684
+```
+
+The plan previously said "you'll also need a Hyper-V firewall rule for port 1234". That is
+necessary but **not sufficient, and on its own does nothing** — no firewall rule can expose a
+socket bound to loopback. Measured reachability:
+
+| From | `1234` |
+|---|---|
+| Windows host | reachable |
+| Dragonfly distro (mirrored WSL maps host loopback) | reachable |
+| **A k3s pod** (`exec` into `go2rtc`, tried `127.0.0.1`, `192.168.4.34`, `10.42.0.1`) | **all blocked** |
+
+A pod has its own netns, so it never inherits mirrored-WSL's loopback mapping — `127.0.0.1`
+inside the pod is the pod. **Frigate is a pod.** Order of operations:
+
+1. LM Studio → Developer → **enable "Serve on Local Network"** (binds `0.0.0.0`). Without this,
+   steps 2-3 are wasted.
+2. Then the Hyper-V rule, same shape as `HomeAssistant-8123` (that rule exists on
+   `VMCreatorId {40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`; note **`Go2rtc-8555` does not actually
+   exist** despite `windows/README-windows.md` claiming it — go2rtc gets by via the socat units).
+3. `OPENAI_BASE_URL` then points at the host's LAN IP (`192.168.4.34`), **not** `127.0.0.1` or
+   `host.docker.internal` — both measured blocked from a pod.
+
+Re-verify from a pod, not from the distro, or you will get a false pass.
+
+**Model id is settled.** All three vision models report `"type": "vlm"` via `/api/v0/models`:
+`google/gemma-4-31b-qat`, `google/gemma-4-26b-a4b-qat`, `google/gemma-4-e4b` (all `not-loaded`;
+LM Studio JIT-loads on first request). The `qwen3-coder-30b*` models are text-only and would fail
+on every event. Pick one of the gemma-4 ids.
 
 ## Architecture
 
@@ -190,6 +260,12 @@ docker run --rm --device /dev/dri openvino/ubuntu22_runtime \
 `/usr/lib/wsl` mounts in `deployment.yaml` (they're commented together on purpose).
 Anything else → stay on CPU and move on. `hwaccel_args` is deliberately unset for the
 same reason; both flip together if the probe passes.
+
+> **Probe run 2026-07-29 — the answer is CPU; this is closed.** `/dev/dri` does not exist in the
+> distro (only `/dev/dxg` + the WSL d3d12 shims), so the `docker run --device /dev/dri` step can't
+> even start. The WSL2 iGPU path is now *disproven*, not merely unproven. **No change required** —
+> `device: CPU` is already committed, the mounts stay commented, `hwaccel_args` stays unset. Don't
+> re-litigate this without a real render node appearing.
 
 ### Search quality
 
