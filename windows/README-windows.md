@@ -266,11 +266,22 @@ sudo systemctl daemon-reload && sudo systemctl enable --now frigate-forwarder.se
 ```
 
 ```powershell
-# one-time, and RUN `tailscale serve status` FIRST — see the warning below
-tailscale serve --bg --https=8447 http://127.0.0.1:8971
+# one-time, and RUN `tailscale serve status` FIRST — see the warning below.
+# NOTE the scheme: https+insecure, NOT http. See the TLS note below.
+tailscale serve --bg --https=8447 https+insecure://127.0.0.1:8971
 ```
 
 No Hyper-V firewall rule is needed for tailnet access; Tailscale Serve terminates on the host.
+
+> **Frigate's `:8971` is HTTPS with a self-signed cert — `http://` gets you a 400.** Verified
+> 2026-07-29: the cert is `O=FRIGATE DEFAULT CERT, CN=*`, plain HTTP returns
+> `400 Bad Request — The plain HTTP request was sent to an HTTPS port`, and HTTPS returns 200.
+> The Serve target must therefore be **`https+insecure://`** — `insecure` because the backend
+> cert is self-signed and Tailscale would otherwise refuse it. This is only about the
+> host→container hop; the tailnet side is still real Tailscale TLS.
+>
+> The socat forwarder itself is unaffected — it is a TCP proxy and neither knows nor cares that
+> the bytes are TLS.
 
 > **⚠️ Check `tailscale serve status` before adding any Serve mapping.** Serve ports are a shared
 > namespace across the whole suite and `tailscale serve --https=<port>` **silently overwrites** an
