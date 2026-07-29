@@ -55,7 +55,12 @@ Commits 1-3 cannot deploy until these exist. All are Phase 0, all need the camer
       the E1 Pro's nominal spec. A mismatch doesn't error; it silently misplaces every
       bounding box.
 - [ ] **iGPU probe**, which decides `device:` (see "OpenVINO" below).
-- [ ] **`frigate.env` and `go2rtc.env`** filled in on the runner at `~/hawksnest-secrets/`.
+- [ ] **`frigate.env` created** at `/home/sonic/hawksnest-secrets/` (it does not exist yet) and
+      **`go2rtc.env` APPENDED to** — verified 2026-07-29, the live file already holds
+      `RING_REFRESH_TOKEN` + 11 `RING_DEVICE_ID_*` and has none of the `REOLINK_*` keys. Rewriting
+      it from the example costs the Ring refresh token and every device id. Same append-don't-
+      regenerate hazard as the mosquitto file below. (It also still carries a now-unused
+      `RING_DEVICE_ID_BEDROOM` from before commit 1 retired that camera — harmless, leave it.)
 - [ ] **`frigate` MQTT user appended** to the mosquitto passwd file — see the warning below.
 - [ ] **LM Studio model id** and a Hyper-V firewall rule for its port.
 
@@ -70,10 +75,19 @@ passwd file sourced from `~/hawksnest-secrets/mosquitto.passwd`. **Regenerating 
 file instead of appending drops ring-mqtt's `ring` user and takes every remaining Ring
 camera offline at once.**
 
+**The file has TWO existing users, not one** — verified on the runner 2026-07-29: `ring` AND
+`ratgdo` (the garage opener). An earlier version of this guard only checked for `ring` and would
+have passed a file that had silently dropped `ratgdo`.
+
 ```sh
-mosquitto_passwd -b ~/hawksnest-secrets/mosquitto.passwd frigate '<password>'
-grep -q '^ring:' ~/hawksnest-secrets/mosquitto.passwd \
-  || echo "STOP — the ring user is gone, do not deploy"
+# -b appends (or updates just that user); it does NOT rewrite the file.
+mosquitto_passwd -b /home/sonic/hawksnest-secrets/mosquitto.passwd frigate '<password>'
+
+# Every pre-existing user must still be there.
+for u in ring ratgdo frigate; do
+  grep -q "^$u:" /home/sonic/hawksnest-secrets/mosquitto.passwd \
+    || echo "STOP — '$u' is gone, do not deploy"
+done
 ```
 
 ### 2. GenAI would have leaked snapshots to OpenAI
