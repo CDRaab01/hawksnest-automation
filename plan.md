@@ -24,13 +24,19 @@ Spans two repos:
 | 4 | automation | Frigate admin UI exposure (NodePort + socat + firewall rule) | ⬜ |
 | 5 | HA | HACS + frigate-hass-integration + Reolink integration | ⬜ manual |
 | 6 | Hawksnest | PTZ / IR / **privacy mode** controls | ⬜ |
-| 7 | Hawksnest | Dev proxy for `/go2rtc/` + `/ring-timeline/` | ⬜ |
-| 8 | Hawksnest | Backend-capability refactor + footage generalization + tests | ⬜ |
+| 7 | Hawksnest | Dev proxy for `/go2rtc/` + `/ring-timeline/` | ✅ `4a56ef2` |
+| 8a | Hawksnest | Backend-capability refactor (`recordedBackend.ts`, `frigate.ts`) + tests | ✅ `4a56ef2` |
+| 8b | Hawksnest | Footage generalization — Frigate `/recordings` → `ringFootage` segments | ⬜ |
+| 6 | Hawksnest | PTZ / IR / **privacy mode** controls | ⬜ needs #5 |
 | 9 | Hawksnest | AI search screen, mock-ha fixtures, E2E | ⬜ |
-| 10 | Hawksnest | Android parity | ⬜ |
+| 10 | Hawksnest | Android parity (`RecordedBackend.kt`, go2rtc stream-list gate) | ⬜ |
 | — | both | Remove the Ring bedroom camera from the Ring account for good | ⬜ after verify |
 
-Nothing is deployed. The branch has never been applied to a cluster.
+Nothing is deployed. The branch has never been applied to a cluster. **The two repos are now
+knowingly out of lockstep on one point:** web derives its recorded backend, Android still gates on
+its own `isRing`. Item 10 closes that and should not be left to drift.
+
+Retention decision (2026-07-29): bedroom is `continuous.days: 3`, not 14 — see below.
 
 ---
 
