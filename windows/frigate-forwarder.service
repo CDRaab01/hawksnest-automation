@@ -1,0 +1,31 @@
+[Unit]
+# Makes Frigate's authenticated admin UI reachable from the Windows host, and via
+# Tailscale Serve from a phone/laptop on the tailnet.
+#
+# Same shape and same reason as ha-forwarder / go2rtc-forwarder: under WSL mirrored
+# networking the Windows host can only reach REAL LISTENING SOCKETS inside the VM.
+# A K3s NodePort is nft DNAT with no socket behind it, so the host cannot reach
+# :30897 directly. socat provides the real socket.
+#
+#   Tailscale Serve https://dragonfly.tail2ce561.ts.net:8447
+#     -> 127.0.0.1:8971   (this unit)
+#       -> 127.0.0.1:30897 (frigate-ui NodePort)
+#
+# NOT to be confused with lmstudio-fwd.service, which runs the opposite direction
+# (a Windows service exposed to pods). This one is the normal direction.
+Description=Forward host :8971 to the Frigate admin UI NodePort
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 8971 is Frigate's AUTHENTICATED UI. Do NOT repoint this at 5000 — that is
+# Frigate's unauthenticated API, and this forwarder is reachable from the tailnet.
+ExecStart=/usr/bin/socat TCP-LISTEN:8971,fork,reuseaddr TCP:127.0.0.1:30897
+# The NodePort does not exist until k3s is up, so early boot starts fail by design.
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

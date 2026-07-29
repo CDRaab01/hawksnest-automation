@@ -1,0 +1,44 @@
+# Frigate's AUTHENTICATED admin UI, exposed for real tuning work.
+#
+# Deliberately a SECOND Service rather than adding a nodePort to the existing
+# `frigate` one. That Service also carries :5000 — Frigate's UNAUTHENTICATED API —
+# and a NodePort is reachable on every node IP. Putting both on one NodePort
+# Service would publish the unauthenticated API to the host network alongside the
+# authenticated UI, which is exactly the mistake this split avoids. Same shape as
+# go2rtc: `go2rtc` stays ClusterIP for :1984, `go2rtc-webrtc` carries the NodePort.
+#
+# Why this is needed at all: motion masks, zones and object filters are drawn on a
+# LIVE FRAME in this UI, and an untuned camera fires on a TV or a ceiling fan.
+# Every false alert is another junk CLIP embedding in the semantic search index,
+# and embeddings are not easily un-poisoned — so tuning wants to happen early
+# rather than after the room has been busy for a week.
+#
+# Reached from a device as:
+#   Tailscale Serve https://dragonfly.tail2ce561.ts.net:8447
+#     -> host 127.0.0.1:8971  (frigate-forwarder.service, socat, in the distro)
+#       -> NodePort 30897
+#         -> this Service :8971
+#
+# Port 8971 is Frigate's authenticated UI, NOT 5000. Do not point the forwarder at
+# 5000 to "make login easier" — 5000 has no auth at all.
+apiVersion: v1
+kind: Service
+metadata:
+  name: frigate-ui
+  labels:
+    app: frigate
+spec:
+  # NodePort in base = prod's external front. NodePorts are cluster-unique, so the
+  # staging overlay patches this to ClusterIP (same as home-assistant, ntfy and
+  # go2rtc-webrtc) to avoid a 30897 collision on the shared K3s cluster.
+  type: NodePort
+  selector:
+    app: frigate
+  ports:
+    - name: ui
+      port: 8971
+      targetPort: ui
+      # Fixed so the socat forwarder and Tailscale Serve front stay stable across
+      # redeploys. Verified free against the live cluster 2026-07-29 — note 30898
+      # is plex/sonarr, so this sits one below a neighbour and must not drift.
+      nodePort: 30897
