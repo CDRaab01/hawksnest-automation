@@ -293,6 +293,50 @@ Re-verify from a pod, not from the distro, or you will get a false pass.
 LM Studio JIT-loads on first request). The `qwen3-coder-30b*` models are text-only and would fail
 on every event. Pick one of the gemma-4 ids.
 
+## Going back to 4K later (deliberately deferred, 2026-07-29)
+
+**The camera is 4K-capable (3840×2160, 8MP) and is currently running its main stream at
+2560×1440.** That is a downgrade, made knowingly, and it is reversible. Recording this so the
+choice doesn't calcify into an unexamined default.
+
+**Why it was downgraded:** on this camera 4K is **H.265-only**, and browser WebRTC support for
+HEVC is absent-to-marginal (Chrome/Edge especially). 4K therefore meant either no web live view
+at all, or go2rtc transcoding 4K HEVC on the same CPU as Frigate's detector — not viable, and
+there is no GPU path (the OpenVINO probe found no `/dev/dri`).
+
+**What it actually costs:** *live view sharpness only.* Frigate reads the **sub** stream for both
+`detect` and `record`, so 24/7 footage, detection, snapshots, search embeddings and event clips
+are all completely unaffected by the main stream's resolution. 1440p is also already more than a
+phone display resolves.
+
+**To revert** (needs the camera's **admin** account — `frigate` is read-only):
+
+```sh
+# vType MUST be h265; 4K+h264 is silently ignored, see the trap below
+curl -X POST "http://192.168.4.37/cgi-bin/api.cgi?cmd=SetEnc&user=admin&password=<pw>" \
+  -H "Content-Type: application/json" \
+  -d '[{"cmd":"SetEnc","param":{"Enc":{"channel":0,"audio":1,
+       "mainStream":{"size":"3840*2160","frameRate":20,"bitRate":4096,
+                     "profile":"High","vType":"h265","gop":2},
+       "subStream":{"size":"640*360","frameRate":10,"bitRate":256,
+                    "profile":"High","vType":"h264","gop":4}}}}]'
+# then WAIT ~20s (the encoder restarts; the HTTP API 502s meanwhile) and VERIFY with GetEnc
+```
+
+**Revisit it when any of these becomes true** — don't just flip it and hope:
+
+1. **Chrome/Edge ship usable WebRTC HEVC.** This is the real unblock; support has been landing
+   incrementally behind flags. Test in the actual Hawksnest web view, not a codec-support table.
+2. **Live view moves off WebRTC** to MSE/HLS in go2rtc. Browser HEVC support in MSE is better
+   than in WebRTC, though still not universal — worth measuring before committing.
+3. **Android-only 4K.** ExoPlayer handles HEVC fine, so the Android app could take a 4K H.265
+   stream today while web stays on 1440p. That means two go2rtc stream entries for one camera and
+   a client-side choice — real complexity, only worth it if 4K on the phone actually matters.
+4. **A GPU appears** for transcoding. Currently disproven — see the OpenVINO section.
+
+Whatever the route, **re-verify with `ffprobe` afterwards**, because `SetEnc` reports success on
+changes it silently declines (below).
+
 ## Architecture
 
 ```

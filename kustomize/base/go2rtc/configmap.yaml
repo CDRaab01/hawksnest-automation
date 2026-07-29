@@ -64,11 +64,19 @@ data:
       # — `SetEnc` to 2560x1440/h264 — NOT a go2rtc transcode, which would have meant
       # 4K HEVC transcoding on the same CPU as Frigate's detector.
       #
-      # DO NOT raise this back to 4K. On this camera 4K is H.265-only, and reverting
-      # silently breaks live view again. The trap: `SetEnc` with 4K+h264 returns
-      # `code: 0, rspCode: 200` — a success — and simply keeps h265. It does not error
-      # on an unsupported combination, so ALWAYS re-read `GetEnc` (or ffprobe) after
-      # changing encode settings rather than trusting the 200.
+      # This is a DELIBERATE DOWNGRADE from the camera's native 4K (3840x2160), not the
+      # camera's limit — 4K is H.265-only here. It costs live-view sharpness ONLY:
+      # Frigate reads the SUB stream for both detect and record, so recordings,
+      # detection and search are untouched by this number.
+      #
+      # Raising it back to 4K silently breaks live view again (4K forces h265). The
+      # conditions under which that becomes worth revisiting are written up in
+      # plan.md, "Going back to 4K later" — read it before changing this.
+      #
+      # The trap: `SetEnc` with 4K+h264 returns `code: 0, rspCode: 200` — a success —
+      # and simply keeps h265. It does not error on an unsupported combination, so
+      # ALWAYS re-read `GetEnc` (or ffprobe) after changing encode settings rather
+      # than trusting the 200. The encoder also restarts (~20s of HTTP 502s).
       #
       # 2560x1440 is what this design assumed all along, so nothing downstream changes.
       big_room: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
