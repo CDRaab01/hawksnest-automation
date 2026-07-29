@@ -53,9 +53,17 @@ The restart cost nothing. Everything below was measured, not assumed:
 - **Secrets state unchanged and matches the warnings below.** `mosquitto.passwd` still has exactly
   `ring` + `ratgdo`; `go2rtc.env` still has `RING_REFRESH_TOKEN` + 11 `RING_DEVICE_ID_*` and **no**
   `REOLINK_*`; `frigate.env` still absent. Append, don't regenerate.
-- **The camera is not on the network.** A full sweep of `192.168.4.0/24` found no host with **554 or
-  8000** open, and no Reolink OUI in the neighbour table. Phase A steps 1-4 (DHCP reservation, RTSP
+- **The camera is not on the network.** All 35 live hosts on `192.168.4.0/24` were port-scanned; none
+  has **554 or 8000** open, and no Reolink OUI appears. (One host, `.56`, has `443` open but speaks
+  neither TLS nor HTTP and has no 554/8000 — not a camera.) Phase A steps 1-4 (DHCP reservation, RTSP
   user, UID/cloud off, `ffprobe`) are hard-blocked until the E1 Pro is powered on and onboarded.
+
+  > **Scan from Windows, not from WSL.** A ping sweep run *inside* the Dragonfly distro under
+  > mirrored networking silently missed **12 live hosts** that the same sweep from the Windows host
+  > found — WSL left them `INCOMPLETE` in `ip neigh` rather than reporting them. Scanning only the
+  > WSL-visible subset would have produced a confident "not on the network" off an incomplete host
+  > list. Enumerate hosts with `arp -a` on the **host**, then port-scan; don't trust `ip neigh` in
+  > the distro for discovery.
 - **The `ffprobe` measurement is still the one that matters.** `detect:` is `640x360 @ 5fps` from the
   spec sheet and has *not* been confirmed against the real stream. A mismatch misplaces every
   bounding box silently.
