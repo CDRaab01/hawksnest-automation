@@ -123,10 +123,31 @@ Commits 1-3 cannot deploy until these exist. All are Phase 0, all need the camer
 - [ ] **UID / cloud disabled** in the Reolink app, and the camera blocked from WAN egress
       at the router. The UID is Reolink's P2P relay identity; turning it off is most of
       the point of leaving Ring.
-- [ ] **`ffprobe rtsp://<user>:<pw>@<ip>:554/h264Preview_01_sub`** — record the real
-      resolution and fps. `detect:` in the Frigate seed is currently `640x360 @ 5fps` from
-      the E1 Pro's nominal spec. A mismatch doesn't error; it silently misplaces every
-      bounding box.
+- [x] **`ffprobe` done 2026-07-29.** Confirmed by two independent sources (ffprobe through the
+      go2rtc pod, and the camera's own `GetEnc`). Device: **E1 Zoom, itemNo E340**, firmware
+      `v3.2.0.4741`, already named "Big Room" on the device.
+
+      | | Configured | Actual | Verdict |
+      |---|---|---|---|
+      | sub resolution | 640×360 | **640×360** | ✅ matches — bounding boxes are safe |
+      | sub codec | h264 | **h264** High | ✅ |
+      | sub fps | 5 | **10** | ⚠️ deliberate split, see below |
+      | sub bitrate | (assumed) | **256 kbps** → ~2.8 GB/day | disk budget was ~2× too pessimistic |
+      | main resolution | 2560×1440 | **3840×2160** | ❌ wrong assumption |
+      | main codec | assumed h264 | **h265 / HEVC** | ❌ **breaks WebRTC live view** |
+
+      `detect.fps: 5` against a 10 fps stream is **kept on purpose**: `detect.fps` is the rate
+      Frigate runs detection at, not a claim about the stream, and Frigate decimates to it. The
+      same sub stream also carries the `record` role, so 10 fps makes the 24/7 timeline smoother
+      to scrub while detection gains nothing from the extra frames.
+- [ ] **Switch the camera's main stream to H.264 — blocks live view, not recording.** The main
+      stream is H.265, and browser WebRTC support for HEVC is absent-to-marginal (Chrome/Edge
+      especially). go2rtc would have to transcode 4K HEVC on a CPU already running Frigate's
+      detector, which is not viable. The path name `h264Preview_01_main` is misleading — it is
+      H.265 regardless of what it is called. Reolink generally offers 4K only under H.265 and
+      caps H.264 at 2560×1440, **which is exactly what this plan assumed all along**, so the
+      switch converges the design instead of compromising it. Frigate is unaffected either way:
+      it reads the h264 sub stream.
 - [x] **iGPU probe** — **done 2026-07-29, answer is CPU.** `/dev/dri` does not exist in the
       Dragonfly distro; only `/dev/dxg` plus the WSL d3d12 shims (`libd3d12.so`,
       `libd3d12core.so`, `libdxcore.so`). OpenVINO's GPU plugin needs a real render node, so

@@ -55,6 +55,22 @@ data:
       # scoped for the bedroom; it now takes the `big_room` slug instead, so the Ring
       # big_room entry below is the one retired and the Ring `bedroom` entry stays
       # live until a second Reolink arrives for that room in a later phase.
+      #
+      # !! UNRESOLVED — the main stream is H.265, and WebRTC largely is not.
+      # Measured 2026-07-29 (ffprobe + the camera's GetEnc): main is
+      # **3840x2160 @ 20fps, vType h265, 4096 kbps** — NOT the 2560x1440 h264 this
+      # design assumed. The path is still named `h264Preview_01_main`; the name lies.
+      #
+      # Browser WebRTC support for HEVC is absent-to-marginal (Chrome/Edge in
+      # particular), so go2rtc must either fail to play this in Hawksnest's web view
+      # or transcode it — and transcoding 4K H.265 on this CPU is not viable next to
+      # Frigate's detector.
+      #
+      # Fix at the CAMERA, not here: set the main stream to H.264 in the Reolink
+      # encode settings. Reolink typically only offers 4K under H.265 and caps H.264
+      # at 2560x1440 — which is exactly the resolution this plan assumed all along,
+      # so that switch converges the design rather than compromising it.
+      # Do not paper over this with go2rtc transcoding.
       big_room: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
 
       # --- Ring (cloud) ---------------------------------------------------------

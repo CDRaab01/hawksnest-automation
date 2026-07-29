@@ -57,8 +57,10 @@ data:
 
     record:
       enabled: true
-      # 24/7 continuous. ~5.3 GB/camera/day on the Reolink sub stream, so 3 days
-      # is ~16 GB for one camera.
+      # 24/7 continuous. The old ~5.3 GB/day figure was a guess; the camera's own
+      # GetEnc reports the sub stream at **256 kbps**, which is ~2.8 GB/day, so 3 days
+      # is **~8 GB** for this camera — half what was budgeted. Still verify with
+      # `df -h` after 24h rather than trusting arithmetic on a nominal bitrate.
       #
       # Retargeted 2026-07-29: the first camera is the BIG ROOM, not a bedroom. The
       # original `3` was chosen specifically to avoid two weeks of bedroom footage on
@@ -133,17 +135,24 @@ data:
                 - detect
                 - record
         detect:
-          # MUST match what the camera actually sends — confirm with
-          # `ffprobe rtsp://…/h264Preview_01_sub` before first deploy. A mismatch
-          # here shows up as bad bounding boxes rather than an obvious error.
+          # VERIFIED against the real camera 2026-07-29 (E1 Zoom, itemNo E340,
+          # firmware v3.2.0.4741) by ffprobe AND by the camera's own GetEnc:
+          #   subStream: 640*360, h264, High profile, 10 fps, 256 kbps, gop 4
           #
-          # STILL UNVERIFIED, and now doubly suspect: these numbers came from the
-          # spec sheet of an E1 Pro (E330), but the camera actually on hand is an
-          # **E1 Zoom**, a different model with a 5MP main stream and different
-          # sub-stream defaults. Treat 640x360@5 as a placeholder until ffprobe
-          # says otherwise — do not deploy on the assumption it is right.
+          # width/height MUST match what the camera sends — a mismatch there
+          # silently misplaces every bounding box rather than erroring. They match.
           width: 640
           height: 360
+          # fps is DIFFERENT: the camera sends 10, this asks for 5, and that is
+          # deliberate — not an oversight to "fix" later.
+          #
+          # detect.fps is the rate Frigate runs DETECTION at, not an assertion about
+          # the stream; Frigate decimates to it. Leaving the camera at 10 while
+          # detecting at 5 is the better split here because this same sub stream also
+          # carries the `record` role — 10 fps makes the 24/7 timeline noticeably
+          # smoother to scrub, while detection gains nothing from the extra frames.
+          # Dropping the camera to 5 would degrade recordings to save decode work
+          # that is negligible at 640x360.
           fps: 5
         objects:
           track:
