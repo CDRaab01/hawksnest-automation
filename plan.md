@@ -140,14 +140,30 @@ Commits 1-3 cannot deploy until these exist. All are Phase 0, all need the camer
       Frigate runs detection at, not a claim about the stream, and Frigate decimates to it. The
       same sub stream also carries the `record` role, so 10 fps makes the 24/7 timeline smoother
       to scrub while detection gains nothing from the extra frames.
-- [ ] **Switch the camera's main stream to H.264 — blocks live view, not recording.** The main
-      stream is H.265, and browser WebRTC support for HEVC is absent-to-marginal (Chrome/Edge
-      especially). go2rtc would have to transcode 4K HEVC on a CPU already running Frigate's
-      detector, which is not viable. The path name `h264Preview_01_main` is misleading — it is
-      H.265 regardless of what it is called. Reolink generally offers 4K only under H.265 and
-      caps H.264 at 2560×1440, **which is exactly what this plan assumed all along**, so the
-      switch converges the design instead of compromising it. Frigate is unaffected either way:
-      it reads the h264 sub stream.
+- [x] **Main stream switched to H.264 — done 2026-07-29, ffprobe-verified.** It shipped as
+      3840×2160 **h265**, which WebRTC largely cannot play. Fixed at the camera via `SetEnc`
+      (not a go2rtc transcode — 4K HEVC transcoding alongside Frigate's detector was never
+      viable). Final state, confirmed by ffprobe *after* the change:
+
+      | stream | codec | resolution | fps | bitrate |
+      |---|---|---|---|---|
+      | main (go2rtc live view) | **h264** High | **2560×1440** | 20 | 4096 kbps |
+      | sub (Frigate detect+record) | h264 High | 640×360 | 10 | 256 kbps |
+
+      2560×1440 is what the design assumed from the start, so nothing downstream changed.
+
+      > **Two traps, both worth remembering.**
+      >
+      > 1. **`SetEnc` lies about unsupported combinations.** Asking for 4K + h264 returned
+      >    `code: 0, rspCode: 200` — a clean success — and left the camera on h265. It does not
+      >    reject invalid combos, it ignores them. **Always re-read `GetEnc` or ffprobe after
+      >    writing encode settings; never trust the 200.** On this camera 4K is H.265-only, so
+      >    raising the resolution back to 4K silently breaks live view again.
+      > 2. **The RTSP path name is not the codec.** `h264Preview_01_main` served H.265 quite
+      >    happily. The path is a fixed label, not a description.
+
+      Requires **admin**; the read-only `frigate` account gets `enc: permit 4` and cannot write
+      (`permit` is a bitmask — 4 = read, 6 = read+write).
 - [x] **iGPU probe** — **done 2026-07-29, answer is CPU.** `/dev/dri` does not exist in the
       Dragonfly distro; only `/dev/dxg` plus the WSL d3d12 shims (`libd3d12.so`,
       `libd3d12core.so`, `libdxcore.so`). OpenVINO's GPU plugin needs a real render node, so

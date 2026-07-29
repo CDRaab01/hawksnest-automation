@@ -56,21 +56,21 @@ data:
       # big_room entry below is the one retired and the Ring `bedroom` entry stays
       # live until a second Reolink arrives for that room in a later phase.
       #
-      # !! UNRESOLVED — the main stream is H.265, and WebRTC largely is not.
-      # Measured 2026-07-29 (ffprobe + the camera's GetEnc): main is
-      # **3840x2160 @ 20fps, vType h265, 4096 kbps** — NOT the 2560x1440 h264 this
-      # design assumed. The path is still named `h264Preview_01_main`; the name lies.
+      # RESOLVED 2026-07-29 — main stream is now **2560x1440 h264 @ 20fps, 4096 kbps**,
+      # verified by ffprobe after the change, not just by the camera's own report.
       #
-      # Browser WebRTC support for HEVC is absent-to-marginal (Chrome/Edge in
-      # particular), so go2rtc must either fail to play this in Hawksnest's web view
-      # or transcode it — and transcoding 4K H.265 on this CPU is not viable next to
-      # Frigate's detector.
+      # It shipped as 3840x2160 **h265**, which WebRTC largely cannot play (browser HEVC
+      # support is absent-to-marginal, Chrome/Edge especially). The fix was at the CAMERA
+      # — `SetEnc` to 2560x1440/h264 — NOT a go2rtc transcode, which would have meant
+      # 4K HEVC transcoding on the same CPU as Frigate's detector.
       #
-      # Fix at the CAMERA, not here: set the main stream to H.264 in the Reolink
-      # encode settings. Reolink typically only offers 4K under H.265 and caps H.264
-      # at 2560x1440 — which is exactly the resolution this plan assumed all along,
-      # so that switch converges the design rather than compromising it.
-      # Do not paper over this with go2rtc transcoding.
+      # DO NOT raise this back to 4K. On this camera 4K is H.265-only, and reverting
+      # silently breaks live view again. The trap: `SetEnc` with 4K+h264 returns
+      # `code: 0, rspCode: 200` — a success — and simply keeps h265. It does not error
+      # on an unsupported combination, so ALWAYS re-read `GetEnc` (or ffprobe) after
+      # changing encode settings rather than trusting the 200.
+      #
+      # 2560x1440 is what this design assumed all along, so nothing downstream changes.
       big_room: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
 
       # --- Ring (cloud) ---------------------------------------------------------
