@@ -40,6 +40,19 @@ data:
         - "${GO2RTC_HOST_IP}:8555"
 
     streams:
+      # --- Reolink (local RTSP) -------------------------------------------------
+      # The MAIN stream only. Frigate is NOT fed from here — it opens its own
+      # connection to the camera's SUB stream. Two independent paths on purpose:
+      # routing 24/7 recording through this pod would make a go2rtc restart a hole
+      # in the timeline, and go2rtc's RTSP listener stays disabled (see `rtsp:`
+      # above). main vs sub are different streams on the camera, so there is no
+      # contention to avoid by sharing one connection.
+      #
+      # Live view therefore runs at full sensor resolution over WebRTC while
+      # Frigate detects and records the cheap sub stream.
+      bedroom: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BEDROOM}:554/h264Preview_01_main"
+
+      # --- Ring (cloud) ---------------------------------------------------------
       # ONE entry per Ring camera you want to talk through. The stream NAME MUST
       # match the Home Assistant camera base (`camera.<base>`) so the Hawksnest app
       # can find it (e.g. HA `camera.front_door_live` -> base `front_door` -> here).
