@@ -429,6 +429,14 @@ are `undefined` (the dead-playlist gap bug). Item 8 is correspondingly smaller t
 `core/logic/RingFootage.kt`. `ARCHITECTURE.md:88-104` states the 1:1 port is deliberate
 so the platforms can't drift. Generalize both in the same PR.
 
+**Carry the `big_room` rename into Hawksnest when items 8b-10 start.** Checked 2026-07-29: the
+only coupled file is `src/components/camera/__tests__/CameraPlayerFrigate.test.tsx`, whose fixture
+uses `camera.bedroom` as the Frigate camera. It is **not broken** — the fixture defines both the
+Frigate config and the go2rtc stream list as `bedroom`, so it is self-consistent and passes. But it
+now describes a camera that won't exist, so rename it with that work rather than leaving a test that
+documents the wrong room. Every other `bedroom` hit in Hawksnest is unrelated (room icons,
+`fan.bedroom` fixtures).
+
 **The Ring regression gate:** `CameraPlayerRing.test.tsx` (356 lines, 3 scenarios) and
 `e2e/ha/camera-recording.spec.ts` must pass **unedited**. If a Ring test needs changing to
 make Frigate pass, the refactor is wrong.
