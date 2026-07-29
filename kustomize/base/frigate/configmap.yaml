@@ -60,11 +60,17 @@ data:
       # 24/7 continuous. ~5.3 GB/camera/day on the Reolink sub stream, so 3 days
       # is ~16 GB for one camera.
       #
-      # Deliberately 3, not 14: the first camera is in a BEDROOM. This keeps a
-      # scrubbable recent window without two weeks of bedroom footage sitting on
-      # disk. Retention is per-camera, so an outdoor camera added later can carry a
-      # longer continuous window without changing this one — set it under that
-      # camera rather than raising the global default.
+      # Retargeted 2026-07-29: the first camera is the BIG ROOM, not a bedroom. The
+      # original `3` was chosen specifically to avoid two weeks of bedroom footage on
+      # disk; that reasoning does not apply to a living space. Kept at 3 anyway for
+      # now — NOT for privacy, but because this is the first Frigate camera on an
+      # unquotaed hostPath volume and the disk-growth rate is still unmeasured
+      # (see the guardrail note below). Revisit once `df -h` after 24h gives a real
+      # number; 14 is reasonable for this room once the rate is known.
+      #
+      # Retention is per-camera. The bedroom Reolink planned for a later phase should
+      # carry its own SHORTER window set under that camera — do not raise this one and
+      # assume it covers both.
       #
       # THIS IS THE REAL DISK GUARDRAIL, not the PVC size: frigate-media is on k3s
       # local-path, which is hostPath-backed with NO quota enforcement. Filling the
@@ -112,14 +118,17 @@ data:
       model: "{FRIGATE_GENAI_MODEL}"
 
     cameras:
-      bedroom:
+      # Name must match the go2rtc stream, the HA entity object id and
+      # Hawksnest's overrides.ts exactly — `cameraNameOf()` is
+      # `camera.id.split(".")[1]`. Retargeted from `bedroom` 2026-07-29.
+      big_room:
         ffmpeg:
           inputs:
             # The camera's SUB stream, read directly rather than through go2rtc.
             # go2rtc serves the MAIN stream for live view on its own connection, so
             # recording and live view have independent failure domains — a go2rtc
             # restart must never punch a hole in the 24/7 timeline.
-            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BEDROOM}:554/h264Preview_01_sub"
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BIG_ROOM}:554/h264Preview_01_sub"
               roles:
                 - detect
                 - record
@@ -127,6 +136,12 @@ data:
           # MUST match what the camera actually sends — confirm with
           # `ffprobe rtsp://…/h264Preview_01_sub` before first deploy. A mismatch
           # here shows up as bad bounding boxes rather than an obvious error.
+          #
+          # STILL UNVERIFIED, and now doubly suspect: these numbers came from the
+          # spec sheet of an E1 Pro (E330), but the camera actually on hand is an
+          # **E1 Zoom**, a different model with a 5MP main stream and different
+          # sub-stream defaults. Treat 640x360@5 as a placeholder until ffprobe
+          # says otherwise — do not deploy on the assumption it is right.
           width: 640
           height: 360
           fps: 5

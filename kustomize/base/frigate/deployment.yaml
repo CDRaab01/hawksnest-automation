@@ -85,7 +85,7 @@ spec:
             # and deliberately NOT `optional: true`: a missing key then fails the
             # container at creation instead of letting Frigate fall back to the
             # public OpenAI endpoint. Fail closed — the failure mode this guards
-            # is bedroom snapshots leaving the house.
+            # is interior-camera snapshots leaving the house.
             - name: OPENAI_BASE_URL
               valueFrom:
                 secretKeyRef:

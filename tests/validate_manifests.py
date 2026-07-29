@@ -253,8 +253,9 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
         if main:
             # (a) The GenAI endpoint MUST be pinned by env. Frigate 0.17 ignores
             #     `genai.base_url` for the openai provider, so a config that looks
-            #     local silently posts camera snapshots to api.openai.com. One of
-            #     these cameras is in a bedroom; this is a privacy invariant.
+            #     local silently posts camera snapshots to api.openai.com. These are
+            #     indoor cameras and a bedroom one is planned for a later phase; this
+            #     is a privacy invariant, not a tidiness one.
             env_names = {e["name"] for e in main.get("env", [])}
             check("OPENAI_BASE_URL" in env_names,
                   "frigate must set OPENAI_BASE_URL explicitly — Frigate 0.17 ignores "

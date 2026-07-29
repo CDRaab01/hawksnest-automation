@@ -50,7 +50,12 @@ data:
       #
       # Live view therefore runs at full sensor resolution over WebRTC while
       # Frigate detects and records the cheap sub stream.
-      bedroom: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BEDROOM}:554/h264Preview_01_main"
+      #
+      # This is the BIG ROOM (decided 2026-07-29). The first Reolink was originally
+      # scoped for the bedroom; it now takes the `big_room` slug instead, so the Ring
+      # big_room entry below is the one retired and the Ring `bedroom` entry stays
+      # live until a second Reolink arrives for that room in a later phase.
+      big_room: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
 
       # --- Ring (cloud) ---------------------------------------------------------
       # ONE entry per Ring camera you want to talk through. The stream NAME MUST
@@ -70,4 +75,8 @@ data:
       pet_camera: "ring:?device_id=${RING_DEVICE_ID_PET_CAMERA}&refresh_token=${RING_REFRESH_TOKEN}"
       back_side_yard: "ring:?device_id=${RING_DEVICE_ID_BACK_SIDE_YARD}&refresh_token=${RING_REFRESH_TOKEN}"
       first_floor_stairway: "ring:?device_id=${RING_DEVICE_ID_FIRST_FLOOR_STAIRWAY}&refresh_token=${RING_REFRESH_TOKEN}"
-      big_room: "ring:?device_id=${RING_DEVICE_ID_BIG_ROOM}&refresh_token=${RING_REFRESH_TOKEN}"
+      bedroom: "ring:?device_id=${RING_DEVICE_ID_BEDROOM}&refresh_token=${RING_REFRESH_TOKEN}"
+      # NOTE: no `big_room` entry here on purpose — the Reolink above claims that slug.
+      # The Ring big_room camera is the one being retired. `RING_DEVICE_ID_BIG_ROOM` is
+      # now the unused key in go2rtc.env (it was RING_DEVICE_ID_BEDROOM before the
+      # 2026-07-29 retarget); leave it in place, it is harmless.

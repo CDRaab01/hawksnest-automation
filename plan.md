@@ -4,9 +4,27 @@
 **Started:** 2026-07-29 · **Status:** automation side landed, Hawksnest side not started
 
 Replacing Ring with Reolink + Frigate: local RTSP, 24/7 recording, and AI event search,
-all on-prem. Phase 1 is the indoor cameras; the first is a **Reolink E1 Pro (E330)**
-taking over the **bedroom**. Design rationale lives in the personal camera-plan doc —
-this file is the executable version and the source of truth for status.
+all on-prem. Phase 1 is the indoor cameras; the first is a **Reolink E1 Zoom** taking
+over the **big room**. Design rationale lives in the personal camera-plan doc — this
+file is the executable version and the source of truth for status.
+
+> **Retargeted 2026-07-29 — read this before trusting older notes below.** Two of the
+> founding assumptions were wrong, and both were caught from a photo of the Reolink app
+> rather than from anything in the repo:
+>
+> - **The room is the BIG ROOM, not the bedroom.** A bedroom Reolink is still planned, but
+>   for a later phase. The Reolink therefore claims the `big_room` slug, the **Ring big_room**
+>   camera is the one retired, and the **Ring bedroom camera stays live** until its
+>   replacement arrives. Commit 1's original direction is inverted.
+> - **The camera is an E1 Zoom, not an E1 Pro (E330).** Different model: 5MP main stream
+>   (2560×1920, not 2560×1440) and different sub-stream defaults. Every `detect:` number in
+>   the seed came from the *E1 Pro* spec sheet and is now doubly unverified.
+>
+> Consequences that are easy to miss: the `continuous.days: 3` retention was chosen
+> *specifically* so two weeks of bedroom footage wouldn't sit on disk. That rationale no
+> longer applies to this camera — it stays at 3 for now only because the disk-growth rate
+> on an unquotaed volume is still unmeasured. The privacy-mode work (item 6) was promoted
+> ahead of search *for the bedroom*, so it can drop back down the order.
 
 Spans two repos:
 - **`hawksnest-automation`** (this one) — the cluster: go2rtc, Frigate, storage, secrets.
@@ -18,7 +36,7 @@ Spans two repos:
 
 | # | Repo | Commit | State |
 |---|---|---|---|
-| 1 | automation | Retire Ring bedroom camera, free the `bedroom` slug | ✅ `dfee869` |
+| 1 | automation | ~~Retire Ring bedroom camera~~ → **retire Ring `big_room`**, free that slug | ✅ `dfee869`, inverted 2026-07-29 |
 | 2 | automation | Reolink main stream via go2rtc (live view) | ✅ `98e411d` |
 | 3 | automation | Frigate deployment, PVCs, config seed, staging park, invariants | ✅ `d7d7321` |
 | 4 | automation | Frigate admin UI exposure (NodePort + socat + firewall rule) | ⬜ |
@@ -78,7 +96,14 @@ Reolink migration — commit it separately so it isn't dragged into this PR.
 
 Commits 1-3 cannot deploy until these exist. All are Phase 0, all need the camera in hand.
 
-- [ ] **DHCP reservation** for the E1 Pro; note the IP.
+- [x] **Camera is on the LAN — `192.168.4.37`** (MAC `14:14:16:f8:4b:e1`), confirmed 2026-07-29.
+      Still needs a **DHCP reservation** so it can't drift.
+- [ ] **Enable RTSP (and HTTP) on the camera — it is currently reachable but mute.** Port scan of
+      `.37` shows **only port 9000 open** (Reolink's proprietary app protocol). `554` (RTSP), `80`,
+      `443` and `8000` (ONVIF) are all **closed**, which is why every discovery sweep and the ONVIF
+      WS-Discovery probe found nothing. Recent Reolink firmware ships these disabled. Turn RTSP on
+      in the camera's settings (Reolink app or web UI → Network → Advanced → Port Settings); the
+      `ffprobe` step and Frigate both depend on it and will fail identically until then.
 - [ ] **Dedicated non-admin RTSP user** on the camera. Password must be URL-safe
       (no `/ @ : # ?`) — it goes into an `rtsp://` URL unencoded in two configs.
 - [ ] **UID / cloud disabled** in the Reolink app, and the camera blocked from WAN egress
@@ -101,9 +126,15 @@ Commits 1-3 cannot deploy until these exist. All are Phase 0, all need the camer
       regenerate hazard as the mosquitto file below. (It also still carries a now-unused
       `RING_DEVICE_ID_BEDROOM` from before commit 1 retired that camera — harmless, leave it.)
 - [ ] **`frigate` MQTT user appended** to the mosquitto passwd file — see the warning below.
-- [ ] **LM Studio: bind it to the network first — a firewall rule alone will not work.**
-      Verified 2026-07-29 (see "4. LM Studio is loopback-only" below). Model id is settled;
-      the binding is not.
+- [x] **LM Studio bound to `0.0.0.0:1234`** — done 2026-07-29 via
+      `lms server start --bind 0.0.0.0 --port 1234`. The GUI toggle is hard to find; the CLI
+      flag is the reliable route, and it persists in
+      `~/.lmstudio/.internal/http-server-config.json` as `"networkInterface"`.
+- [ ] **Firewall rule for 1234 — now the actual blocker.** With the bind fixed, the host firewall
+      is what's left: `192.168.4.34:1234` is still refused from both the distro and a pod. Needs an
+      **elevated** shell (see "4. LM Studio" below for the exact command). Scope it to
+      `192.168.4.0/22` + `10.42.0.0/16` rather than Any — the LM Studio API has **no
+      authentication**, so a wide-open 1234 hands every device on the LAN a free GPU.
 
 ---
 
@@ -179,11 +210,28 @@ socket bound to loopback. Measured reachability:
 A pod has its own netns, so it never inherits mirrored-WSL's loopback mapping — `127.0.0.1`
 inside the pod is the pod. **Frigate is a pod.** Order of operations:
 
-1. LM Studio → Developer → **enable "Serve on Local Network"** (binds `0.0.0.0`). Without this,
-   steps 2-3 are wasted.
-2. Then the Hyper-V rule, same shape as `HomeAssistant-8123` (that rule exists on
-   `VMCreatorId {40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`; note **`Go2rtc-8555` does not actually
-   exist** despite `windows/README-windows.md` claiming it — go2rtc gets by via the socat units).
+1. ✅ **Done 2026-07-29.** Don't hunt for the GUI toggle — it is easy to confuse with
+   "Enable Local LLM Service (headless)" in App Settings, which is a *different* setting and does
+   nothing for binding. Use the CLI:
+   ```powershell
+   & "$env:USERPROFILE\.lmstudio\bin\lms.exe" server start --bind 0.0.0.0 --port 1234
+   ```
+   It persists to `~/.lmstudio/.internal/http-server-config.json` (`"networkInterface": "0.0.0.0"`),
+   so it survives restarts. Revert with `--bind 127.0.0.1`.
+2. **Then the firewall rule — still outstanding, and now the only thing in the way.** Re-measured
+   after the rebind: `192.168.4.34:1234` is *still* refused from the distro and from a pod, so the
+   host firewall is genuinely blocking. Needs an **elevated** PowerShell:
+   ```powershell
+   New-NetFirewallRule -DisplayName "LMStudio-1234" -Name "LMStudio-1234" `
+     -Direction Inbound -Action Allow -Protocol TCP -LocalPort 1234 `
+     -RemoteAddress @("192.168.4.0/22","10.42.0.0/16") -Profile Any
+   ```
+   **Scope it, don't use `-RemoteAddress Any`.** The LM Studio API is unauthenticated; an open
+   1234 is a free GPU for anything on the LAN. Note the LAN is a **/22**, not a /24.
+   May also need the Hyper-V rule, same shape as `HomeAssistant-8123` (on
+   `VMCreatorId {40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`) — add it only if the plain rule
+   isn't enough. Note **`Go2rtc-8555` does not actually exist** despite
+   `windows/README-windows.md` claiming it; go2rtc gets by via the socat units.
 3. `OPENAI_BASE_URL` then points at the host's LAN IP (`192.168.4.34`), **not** `127.0.0.1` or
    `host.docker.internal` — both measured blocked from a pod.
 
@@ -283,14 +331,23 @@ disappoints, the knob is moving `detect` to the main stream — measure before a
 And **tune masks/zones early**: an untuned camera fires on a TV or a ceiling fan, and
 every false alert is another junk embedding in the search index. That needs commit 4.
 
-### Bedroom-specific
+### Room-specific
 
-- `switch.bedroom_privacy_mode` (Reolink integration) physically parks the lens. Commit 6
-  is promoted ahead of the search work for this reason.
-- ~~Consider whether 14 days of *continuous* is right for this room~~ — **decided 2026-07-29:
-  `continuous.days: 3`** (≈16 GB), a scrubbable recent window without two weeks of bedroom
-  footage on disk. Alerts stay at 30 days. Retention is per-camera, so a later outdoor camera
-  can carry a longer continuous window set under *that* camera, not by raising this one.
+**Superseded by the 2026-07-29 retarget — this camera is the big room.** Kept because all of
+it applies to the bedroom Reolink planned for a later phase:
+
+- `switch.<camera>_privacy_mode` (Reolink integration) physically parks the lens. Commit 6 was
+  promoted ahead of the search work *because the first camera was going in a bedroom*. With the
+  big room first, that urgency is gone — **it can drop back behind the search work**. It becomes
+  a hard prerequisite again when the bedroom camera lands.
+- ~~Consider whether 14 days of *continuous* is right for this room~~ — the `continuous.days: 3`
+  decision was made for a **bedroom**, and that reasoning does not transfer to a living space.
+  It stays at 3 for now purely as a disk guardrail (first Frigate camera, unquotaed hostPath,
+  growth rate still unmeasured), **not** for privacy. Once `df -h` after 24h gives a real number,
+  14 days is reasonable for this room. Retention is per-camera, so the future bedroom camera
+  should carry its own shorter window set under *that* camera — don't raise this one and assume
+  it covers both.
+- Alerts/detections stay at 30 days either way.
 - `frigate-config` (the SQLite index, descriptions, embeddings) is on `local-path` and is
   **not** covered by the NFS backup story. Losing it loses all search history.
 
