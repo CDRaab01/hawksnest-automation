@@ -181,11 +181,10 @@ Commits 1-3 cannot deploy until these exist. All are Phase 0, all need the camer
       `lms server start --bind 0.0.0.0 --port 1234`. The GUI toggle is hard to find; the CLI
       flag is the reliable route, and it persists in
       `~/.lmstudio/.internal/http-server-config.json` as `"networkInterface"`.
-- [ ] **Firewall rule for 1234 — now the actual blocker.** With the bind fixed, the host firewall
-      is what's left: `192.168.4.34:1234` is still refused from both the distro and a pod. Needs an
-      **elevated** shell (see "4. LM Studio" below for the exact command). Scope it to
-      `192.168.4.0/22` + `10.42.0.0/16` rather than Any — the LM Studio API has **no
-      authentication**, so a wide-open 1234 hands every device on the LAN a free GPU.
+- [x] **Pods can reach LM Studio — done 2026-07-29 via `lmstudio-fwd.service`**, a socat bridge in
+      the distro (`10.42.0.1:21234` → `127.0.0.1:1234`). **Not** a firewall fix; firewall rules
+      were a dead end, see "4. LM Studio" below. Verified end-to-end from a pod with a real
+      chat-completion call.
 
 ---
 
@@ -269,20 +268,40 @@ inside the pod is the pod. **Frigate is a pod.** Order of operations:
    ```
    It persists to `~/.lmstudio/.internal/http-server-config.json` (`"networkInterface": "0.0.0.0"`),
    so it survives restarts. Revert with `--bind 127.0.0.1`.
-2. **Then the firewall rule — still outstanding, and now the only thing in the way.** Re-measured
-   after the rebind: `192.168.4.34:1234` is *still* refused from the distro and from a pod, so the
-   host firewall is genuinely blocking. Needs an **elevated** PowerShell:
-   ```powershell
-   New-NetFirewallRule -DisplayName "LMStudio-1234" -Name "LMStudio-1234" `
-     -Direction Inbound -Action Allow -Protocol TCP -LocalPort 1234 `
-     -RemoteAddress @("192.168.4.0/22","10.42.0.0/16") -Profile Any
+2. ~~Firewall rules.~~ **A DEAD END — do not repeat this.** Several hours went into firewall
+   rules (a scoped `New-NetFirewallRule`, then a `New-NetFirewallHyperVRule` on the WSL
+   `VMCreatorId`) on the theory that `192.168.4.34:1234` was being blocked. **Nothing was ever
+   being blocked.** Under WSL **mirrored** networking the Dragonfly VM *owns* `192.168.4.34` —
+   `ip route get 192.168.4.34` inside the distro returns `local … dev lo`. A pod connecting to
+   that address is talking to the VM itself, where nothing listens on 1234. The packets never
+   reached Windows, so no firewall rule could ever have helped. Both rules are harmless; delete
+   them if you like.
+
+   The tell, if this shape recurs: Caddy on 80/443 *was* reachable from WSL while everything else
+   was not — because Caddy actually listens **inside** the VM's reachable path, not because its
+   firewall rules were better. Comparing rule configurations sent me the wrong way for a while.
+
+3. **The bridge — `lmstudio-fwd.service`, the actual solution.** Installed and enabled in the
+   Dragonfly distro 2026-07-29, on disk at `/etc/systemd/system/lmstudio-fwd.service` (**not**
+   `systemd-run` — transient units do not survive a reboot, the same lesson as the Hawksnest
+   forwarders).
+
    ```
-   **Scope it, don't use `-RemoteAddress Any`.** The LM Studio API is unauthenticated; an open
-   1234 is a free GPU for anything on the LAN. Note the LAN is a **/22**, not a /24.
-   May also need the Hyper-V rule, same shape as `HomeAssistant-8123` (on
-   `VMCreatorId {40E0AC32-46A5-438A-A0B2-2B479E8F2E90}`) — add it only if the plain rule
-   isn't enough. Note **`Go2rtc-8555` does not actually exist** despite
-   `windows/README-windows.md` claiming it; go2rtc gets by via the socat units.
+   pod -> 10.42.0.1:21234 -> socat -> 127.0.0.1:1234 -> LM Studio on Windows
+   ```
+
+   - The distro *can* reach Windows on `127.0.0.1` (mirrored loopback, `LoopbackEnabled: True`).
+     A pod cannot, because its `127.0.0.1` is the pod. socat is the only bridge.
+   - **Port 21234, not 1234.** Mirrored networking mirrors every Windows *listening* socket into
+     the VM, so `bind()` on 1234 fails with `Address already in use` even though `ss` shows
+     nothing. 11434 fails too — that is Ollama's port on Windows. Pick a port free **on Windows**.
+   - **Bound to `10.42.0.1` (cni0) only**, so it is unreachable from the LAN. That is a better
+     answer to the unauthenticated-API problem than the firewall scoping ever was.
+   - `Restart=always`, because cni0 does not exist until k3s is up and early starts fail by design.
+
+   Verified end-to-end from a pod: `/v1/models` lists the models, and a real
+   `/v1/chat/completions` against `google/gemma-4-e4b` returned correctly (LM Studio JIT-loads
+   the model). Confirmed *not* reachable on `192.168.4.34:21234`.
 3. `OPENAI_BASE_URL` then points at the host's LAN IP (`192.168.4.34`), **not** `127.0.0.1` or
    `host.docker.internal` — both measured blocked from a pod.
 
