@@ -11,6 +11,11 @@
 #     -> 127.0.0.1:8971   (this unit)
 #       -> 127.0.0.1:30897 (frigate-ui NodePort)
 #
+# Frigate's :8971 speaks HTTPS with a self-signed cert (O=FRIGATE DEFAULT CERT), so
+# the Serve target must be `https+insecure://127.0.0.1:8971` — plain http:// returns
+# 400. That matters for the Serve command, not for this unit: socat is a TCP proxy
+# and is indifferent to the payload being TLS.
+#
 # NOT to be confused with lmstudio-fwd.service, which runs the opposite direction
 # (a Windows service exposed to pods). This one is the normal direction.
 Description=Forward host :8971 to the Frigate admin UI NodePort
