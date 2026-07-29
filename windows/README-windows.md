@@ -197,12 +197,20 @@ New-NetFirewallHyperVRule -Name 'Go2rtc-8555' -DisplayName 'Go2rtc-8555' `
   -Protocol TCP -LocalPorts 8555 -Action Allow
 ```
 
-**Z-Wave stick re-attach — logon task.** `usbipd attach` doesn't survive a reboot, and if
-zwave-js-ui starts before the stick is attached, containerd masks the device path with a
-directory (`/dev/zwave: Is a directory`) and the locks drop to Unavailable. Register the logon
-task once (elevated): `& 'C:\code\hawksnest-automation\windows\register-zwa2-task.ps1'`. It runs
-`attach-zwa2-logon.ps1` (attach by VID:PID — needs no admin) then `zwave-attach-heal.sh` (clears
-any directory mask and bounces zwave-js-ui).
+**Z-Wave stick re-attach — headless watchdog task.** `usbipd attach` doesn't survive a reboot,
+and if zwave-js-ui starts before the stick is attached, containerd masks the device path with a
+directory (`/dev/zwave: Is a directory`) and the locks drop to Unavailable. Register the task once
+(elevated): `& 'C:\code\hawksnest-automation\windows\register-zwa2-task.ps1'` (or the combined
+`register-recovery-tasks.ps1`). It runs `attach-zwa2-logon.ps1` (attach by VID:PID) then
+`zwave-attach-heal.sh` (clears any directory mask and bounces zwave-js-ui).
+
+> **Headless-capable (changed 2026-07-20).** The task runs **S4U** ("run whether logged on or
+> not") and triggers on **logon + startup + every 3 min**, not logon-only. It used to be a plain
+> `-AtLogon`/Interactive one-shot, so the host's *headless* RAM-fault reboots (nobody logs in)
+> never re-attached the stick and the Schlage locks sat dead until a human ran the script — once
+> for 41h (2026-07-20). The 3-min repetition also covers a first post-boot attempt that races
+> WSL/k3s startup, and a mid-session USB drop. `HA-KeepWSL-Alive` was likewise moved to S4U +
+> logon/startup so the WSL instance itself comes up without an interactive logon.
 
 **HA on NFS:** the `ha-config` PV needs `nolock` in its mountOptions (already in
 `kustomize/base/storage/nfs-pv.yaml`) — without it HA's `flock()` fails `ENOLCK` and crash-loops.

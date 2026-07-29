@@ -1,0 +1,168 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frigate
+  labels:
+    app: frigate
+spec:
+  replicas: 1
+  # Recreate: frigate-config and frigate-media are RWO, and Frigate is a singleton
+  # (it owns the SQLite event index and the recording segmenter).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: frigate
+  template:
+    metadata:
+      labels:
+        app: frigate
+    spec:
+      initContainers:
+        # Don't start Frigate until the broker is reachable, so first-boot logs
+        # aren't full of MQTT connection retries. Copied from ring-mqtt.
+        - name: wait-for-mqtt
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "waiting for mosquitto:1883 ..."
+              until nc -w2 mosquitto 1883 </dev/null >/dev/null 2>&1; do
+                sleep 2
+              done
+              echo "mosquitto is up"
+        # FIRST BOOT ONLY. Frigate's UI rewrites /config/config.yml when you save a
+        # motion mask or a zone, and that work must survive a restart — so unlike
+        # go2rtc's seed (which overwrites every boot) this one never clobbers an
+        # existing file. Consequence: ConfigMap edits after first boot do NOT reach
+        # the running Frigate; edit the live file too.
+        - name: seed-config
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              if [ ! -f /config/config.yml ]; then
+                echo "seeding config.yml"
+                cp /seed/config.yml /config/config.yml
+              else
+                echo "config.yml exists — leaving Frigate's own edits alone"
+              fi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: seed
+              mountPath: /seed
+      containers:
+        - name: frigate
+          # PINNED, not :stable. Frigate's config schema moves between minor
+          # releases — 0.17 removed `record.retain` in favour of
+          # continuous/motion/alerts/detections, and `genai.base_url` is still not
+          # honoured for the openai provider. A floating tag would roll forward on
+          # any pod recreate and wedge the pod on a config it can no longer parse.
+          # Re-read the release notes AND re-verify configmap.yaml before bumping.
+          # OpenVINO ships in this base image; -tensorrt / -rocm are separate tags.
+          image: ghcr.io/blakeblackshear/frigate:0.17.2
+          ports:
+            - name: api
+              containerPort: 5000
+            - name: ui
+              containerPort: 8971
+          env:
+            # Without this the container runs UTC and every event timestamp,
+            # recording boundary and search time-filter is off by 4-5 hours —
+            # which presents as "search is broken", not as a timezone problem.
+            - name: TZ
+              value: "America/New_York"
+            # THE GENAI ENDPOINT LIVES HERE, NOT IN config.yml. Frigate 0.17
+            # ignores `genai.base_url` for the openai provider; without this env
+            # var it would send camera snapshots to api.openai.com. Keep these
+            # two facts together — see the genai block in configmap.yaml.
+            #
+            # Declared explicitly even though envFrom below already imports it,
+            # and deliberately NOT `optional: true`: a missing key then fails the
+            # container at creation instead of letting Frigate fall back to the
+            # public OpenAI endpoint. Fail closed — the failure mode this guards
+            # is interior-camera snapshots leaving the house.
+            - name: OPENAI_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: frigate-credentials
+                  key: OPENAI_BASE_URL
+                  optional: false
+          envFrom:
+            - secretRef:
+                name: frigate-credentials
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: media
+              mountPath: /media/frigate
+            # Recording segments are staged here before being muxed to /media.
+            # Frigate expects this to be tmpfs; on disk it thrashes the volume.
+            - name: cache
+              mountPath: /tmp/cache
+            # ffmpeg/detector shared memory. The image's default /dev/shm is 64MB,
+            # which is too small once detect frames are in flight.
+            - name: dshm
+              mountPath: /dev/shm
+            # --- OpenVINO GPU path (commented until the probe passes) -----------
+            # Uncomment TOGETHER with flipping `device: CPU` -> `GPU` in the
+            # frigate-seed ConfigMap. WSL2 exposes /dev/dxg rather than a normal
+            # DRI render node, so verify first from inside Dragonfly:
+            #   ls -l /dev/dri /dev/dxg && ls /usr/lib/wsl/lib
+            # - name: dri
+            #   mountPath: /dev/dri
+            # - name: wsl-lib
+            #   mountPath: /usr/lib/wsl
+          # Readiness ONLY — deliberately no liveness probe, for the same reason
+          # ring-mqtt has none: a liveness probe on a camera service that is slow
+          # to initialise produces an inescapable kill-loop, and a wedged NVR is
+          # far less bad than one that restarts forever. Generous thresholds: the
+          # semantic-search embedding model loads before the API serves.
+          readinessProbe:
+            httpGet:
+              path: /api/version
+              port: api
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 40
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            # The limit exists to protect its NEIGHBOURS, not Frigate. ring-mqtt
+            # sits at a 1Gi limit with no liveness probe on the same single node;
+            # an unbounded Frigate (detector + ffmpeg + CLIP embeddings) evicting
+            # it would take every Ring camera offline. Raise deliberately if
+            # semantic_search model_size is ever moved to `large`.
+            limits:
+              memory: 4Gi
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: frigate-config
+        - name: media
+          persistentVolumeClaim:
+            claimName: frigate-media
+        - name: seed
+          configMap:
+            name: frigate-seed
+        - name: cache
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+        # --- OpenVINO GPU path (see the volumeMounts note above) ---------------
+        # - name: dri
+        #   hostPath:
+        #     path: /dev/dri
+        # - name: wsl-lib
+        #   hostPath:
+        #     path: /usr/lib/wsl

@@ -40,6 +40,48 @@ data:
         - "${GO2RTC_HOST_IP}:8555"
 
     streams:
+      # --- Reolink (local RTSP) -------------------------------------------------
+      # The MAIN stream only. Frigate is NOT fed from here — it opens its own
+      # connection to the camera's SUB stream. Two independent paths on purpose:
+      # routing 24/7 recording through this pod would make a go2rtc restart a hole
+      # in the timeline, and go2rtc's RTSP listener stays disabled (see `rtsp:`
+      # above). main vs sub are different streams on the camera, so there is no
+      # contention to avoid by sharing one connection.
+      #
+      # Live view therefore runs at full sensor resolution over WebRTC while
+      # Frigate detects and records the cheap sub stream.
+      #
+      # This is the BIG ROOM (decided 2026-07-29). The first Reolink was originally
+      # scoped for the bedroom; it now takes the `big_room` slug instead, so the Ring
+      # big_room entry below is the one retired and the Ring `bedroom` entry stays
+      # live until a second Reolink arrives for that room in a later phase.
+      #
+      # RESOLVED 2026-07-29 — main stream is now **2560x1440 h264 @ 20fps, 4096 kbps**,
+      # verified by ffprobe after the change, not just by the camera's own report.
+      #
+      # It shipped as 3840x2160 **h265**, which WebRTC largely cannot play (browser HEVC
+      # support is absent-to-marginal, Chrome/Edge especially). The fix was at the CAMERA
+      # — `SetEnc` to 2560x1440/h264 — NOT a go2rtc transcode, which would have meant
+      # 4K HEVC transcoding on the same CPU as Frigate's detector.
+      #
+      # This is a DELIBERATE DOWNGRADE from the camera's native 4K (3840x2160), not the
+      # camera's limit — 4K is H.265-only here. It costs live-view sharpness ONLY:
+      # Frigate reads the SUB stream for both detect and record, so recordings,
+      # detection and search are untouched by this number.
+      #
+      # Raising it back to 4K silently breaks live view again (4K forces h265). The
+      # conditions under which that becomes worth revisiting are written up in
+      # plan.md, "Going back to 4K later" — read it before changing this.
+      #
+      # The trap: `SetEnc` with 4K+h264 returns `code: 0, rspCode: 200` — a success —
+      # and simply keeps h265. It does not error on an unsupported combination, so
+      # ALWAYS re-read `GetEnc` (or ffprobe) after changing encode settings rather
+      # than trusting the 200. The encoder also restarts (~20s of HTTP 502s).
+      #
+      # 2560x1440 is what this design assumed all along, so nothing downstream changes.
+      big_room: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
+
+      # --- Ring (cloud) ---------------------------------------------------------
       # ONE entry per Ring camera you want to talk through. The stream NAME MUST
       # match the Home Assistant camera base (`camera.<base>`) so the Hawksnest app
       # can find it (e.g. HA `camera.front_door_live` -> base `front_door` -> here).
@@ -52,10 +94,13 @@ data:
       front_driveway: "ring:?device_id=${RING_DEVICE_ID_FRONT_DRIVEWAY}&refresh_token=${RING_REFRESH_TOKEN}"
       basement: "ring:?device_id=${RING_DEVICE_ID_BASEMENT}&refresh_token=${RING_REFRESH_TOKEN}"
       puzzle_room: "ring:?device_id=${RING_DEVICE_ID_PUZZLE_ROOM}&refresh_token=${RING_REFRESH_TOKEN}"
-      bedroom: "ring:?device_id=${RING_DEVICE_ID_BEDROOM}&refresh_token=${RING_REFRESH_TOKEN}"
       back_yard_patio: "ring:?device_id=${RING_DEVICE_ID_BACK_YARD_PATIO}&refresh_token=${RING_REFRESH_TOKEN}"
       kitchen: "ring:?device_id=${RING_DEVICE_ID_KITCHEN}&refresh_token=${RING_REFRESH_TOKEN}"
       pet_camera: "ring:?device_id=${RING_DEVICE_ID_PET_CAMERA}&refresh_token=${RING_REFRESH_TOKEN}"
       back_side_yard: "ring:?device_id=${RING_DEVICE_ID_BACK_SIDE_YARD}&refresh_token=${RING_REFRESH_TOKEN}"
       first_floor_stairway: "ring:?device_id=${RING_DEVICE_ID_FIRST_FLOOR_STAIRWAY}&refresh_token=${RING_REFRESH_TOKEN}"
-      big_room: "ring:?device_id=${RING_DEVICE_ID_BIG_ROOM}&refresh_token=${RING_REFRESH_TOKEN}"
+      bedroom: "ring:?device_id=${RING_DEVICE_ID_BEDROOM}&refresh_token=${RING_REFRESH_TOKEN}"
+      # NOTE: no `big_room` entry here on purpose — the Reolink above claims that slug.
+      # The Ring big_room camera is the one being retired. `RING_DEVICE_ID_BIG_ROOM` is
+      # now the unused key in go2rtc.env (it was RING_DEVICE_ID_BEDROOM before the
+      # 2026-07-29 retarget); leave it in place, it is harmless.

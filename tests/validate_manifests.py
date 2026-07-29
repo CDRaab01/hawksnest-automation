@@ -175,14 +175,25 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
     # 4. The must-back-up PVCs exist (losing zwavejs-config = re-pair everything;
     #    losing ring-mqtt-data = re-authenticate the Ring account with 2FA).
     for required in ("ha-config", "zwavejs-config", "mosquitto-data",
-                     "mariadb-data", "ring-mqtt-data"):
+                     "mariadb-data", "ring-mqtt-data",
+                     "frigate-config", "frigate-media"):
         check(required in pvcs, f"required PVC '{required}' is missing")
-    # mariadb datadir must stay node-local, never NFS (file-locking risk) — both envs.
-    if "mariadb-data" in pvcs:
-        check(
-            pvcs["mariadb-data"]["spec"].get("storageClassName") == "local-path",
-            "mariadb-data must use the node-local 'local-path' StorageClass, not NFS",
-        )
+    # Datadirs that must stay node-local, never NFS — both envs. mariadb because a
+    # database server's datadir over NFS reintroduces the file-locking risk we moved
+    # off SQLite to avoid; frigate-config for the same reason (it IS a SQLite index,
+    # written on every detection); frigate-media because 24/7 video is the most
+    # write-heavy thing in the cluster and the DS214 is an aging NFSv3-only box.
+    for local_only, why in (
+        ("mariadb-data", "a database datadir over NFS reintroduces file-locking risk"),
+        ("frigate-config", "Frigate's SQLite event index must not live on NFS"),
+        ("frigate-media", "24/7 recordings must not be written over NFS to the DS214"),
+    ):
+        if local_only in pvcs:
+            check(
+                pvcs[local_only]["spec"].get("storageClassName") == "local-path",
+                f"{local_only} must use the node-local 'local-path' StorageClass, "
+                f"not NFS ({why})",
+            )
 
     # 5. Storage shape depends on the environment.
     if expected["require_nfs"]:
@@ -232,6 +243,42 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
             check(("config", "/config") in mounts,
                   "go2rtc main container must mount the 'config' volume at /config "
                   "(without it, seeded streams never reach go2rtc)")
+
+    # 5c. Frigate: three invariants that each guard a failure we can't see at deploy
+    #     time — a leaked snapshot, a wedged pod, and an evicted neighbour.
+    fr = next((d for d in deployments if name(d) == "frigate"), None)
+    if fr:
+        main = next((c for c in pod_spec(fr)["containers"] if c["name"] == "frigate"), None)
+        check(main is not None, "frigate Deployment has no 'frigate' container")
+        if main:
+            # (a) The GenAI endpoint MUST be pinned by env. Frigate 0.17 ignores
+            #     `genai.base_url` for the openai provider, so a config that looks
+            #     local silently posts camera snapshots to api.openai.com. These are
+            #     indoor cameras and a bedroom one is planned for a later phase; this
+            #     is a privacy invariant, not a tidiness one.
+            env_names = {e["name"] for e in main.get("env", [])}
+            check("OPENAI_BASE_URL" in env_names,
+                  "frigate must set OPENAI_BASE_URL explicitly — Frigate 0.17 ignores "
+                  "genai.base_url and would send camera snapshots to api.openai.com")
+            # (b) Pinned image. The config schema moves between minor releases (0.17
+            #     removed record.retain), so a floating tag rolls forward on any pod
+            #     recreate and wedges Frigate on a config it can no longer parse.
+            image = main.get("image", "")
+            check(not image.endswith((":stable", ":latest")) and ":" in image,
+                  f"frigate image must be pinned to an exact version, got '{image}' "
+                  "(the config schema is version-specific)")
+            # (c) A memory limit, to protect ring-mqtt. It sits at a 1Gi limit with no
+            #     liveness probe on this same single node; an unbounded Frigate
+            #     (detector + ffmpeg + CLIP embeddings) evicting it drops every Ring
+            #     camera at once.
+            check("memory" in main.get("resources", {}).get("limits", {}),
+                  "frigate must declare a memory limit so it cannot evict ring-mqtt")
+        # (d) Frigate's SQLite index and 24/7 video must never reach the Synology.
+        claims = {v["persistentVolumeClaim"]["claimName"]
+                  for v in pod_spec(fr).get("volumes", [])
+                  if "persistentVolumeClaim" in v}
+        for needed in ("frigate-config", "frigate-media"):
+            check(needed in claims, f"frigate must mount the '{needed}' PVC")
 
     # 6. zwave-js-ui: always privileged; prod runs against a real device, staging parks.
     zwave = next((d for d in deployments if name(d) == "zwave-js-ui"), None)

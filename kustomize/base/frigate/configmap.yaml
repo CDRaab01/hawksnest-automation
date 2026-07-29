@@ -1,0 +1,174 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frigate-seed
+data:
+  # Seed config for Frigate — the NVR + object detection behind Hawksnest's
+  # recorded timeline and AI event search. Copied to the PVC at /config/config.yml
+  # on FIRST BOOT ONLY (see the seed-config initContainer): Frigate's own UI writes
+  # this file when you draw motion masks and zones, and that must not be clobbered
+  # on every restart. (Contrast go2rtc, which re-seeds every boot because it drops
+  # ConfigMap stream changes.) To change something here after first boot you must
+  # edit the live file too — same dual-write ritual as HA's configuration.yaml.
+  #
+  # SCHEMA IS VERSION-SPECIFIC AND WAS VERIFIED AGAINST 0.17.2. Notably `record`
+  # has NO top-level `retain:` block in 0.17 (it was `record.retain.days` through
+  # 0.16) — it is now continuous/motion/alerts/detections. Re-verify against the
+  # release notes before bumping the pinned image in deployment.yaml.
+  #
+  # ${VARS} are NOT used here — Frigate does its own substitution and requires the
+  # FRIGATE_ prefix on any env var referenced as {FRIGATE_FOO}.
+  config.yml: |
+    mqtt:
+      host: mosquitto.home-automation.svc.cluster.local
+      port: 1883
+      user: frigate
+      password: "{FRIGATE_MQTT_PASSWORD}"
+      # Frigate's MQTT user is SEPARATE from ring-mqtt's `ring` user in the same
+      # mosquitto passwd file. That file must only ever be APPENDED to — rewriting
+      # it drops `ring` and takes every Ring camera offline at once.
+
+    detectors:
+      ov:
+        type: openvino
+        # CPU is the committed default and is genuinely adequate for one camera at
+        # 640x360/5fps. Flip to GPU only after the /dev/dri probe in README §Frigate
+        # actually finds a render node: WSL2 exposes /dev/dxg rather than a normal
+        # DRI render node, and there is no GPU precedent anywhere in this cluster,
+        # so GPU here is unproven rather than merely unconfigured. Flipping it also
+        # means uncommenting the device mounts in deployment.yaml.
+        device: CPU
+
+    # OpenVINO does not auto-select a model — the path, geometry and labelmap are
+    # all required. These files ship inside the image.
+    model:
+      width: 300
+      height: 300
+      input_tensor: nhwc
+      input_pixel_format: bgr
+      path: /openvino-model/ssdlite_mobilenet_v2.xml
+      labelmap_path: /openvino-model/coco_91cl_bkgr.txt
+
+    birdseye:
+      # OFF deliberately. The HA integration surfaces birdseye as a standalone
+      # `camera.birdseye` entity, which Hawksnest's resolveCameras() would treat as
+      # a real camera and render as an unscrubbable tile on the camera wall.
+      enabled: false
+
+    record:
+      enabled: true
+      # 24/7 continuous. The old ~5.3 GB/day figure was a guess; the camera's own
+      # GetEnc reports the sub stream at **256 kbps**, which is ~2.8 GB/day, so 3 days
+      # is **~8 GB** for this camera — half what was budgeted. Still verify with
+      # `df -h` after 24h rather than trusting arithmetic on a nominal bitrate.
+      #
+      # Retargeted 2026-07-29: the first camera is the BIG ROOM, not a bedroom. The
+      # original `3` was chosen specifically to avoid two weeks of bedroom footage on
+      # disk; that reasoning does not apply to a living space. Kept at 3 anyway for
+      # now — NOT for privacy, but because this is the first Frigate camera on an
+      # unquotaed hostPath volume and the disk-growth rate is still unmeasured
+      # (see the guardrail note below). Revisit once `df -h` after 24h gives a real
+      # number; 14 is reasonable for this room once the rate is known.
+      #
+      # Retention is per-camera. The bedroom Reolink planned for a later phase should
+      # carry its own SHORTER window set under that camera — do not raise this one and
+      # assume it covers both.
+      #
+      # THIS IS THE REAL DISK GUARDRAIL, not the PVC size: frigate-media is on k3s
+      # local-path, which is hostPath-backed with NO quota enforcement. Filling the
+      # Dragonfly virtual disk takes down k3s, Home Assistant and the door locks
+      # with it. Raise these numbers deliberately, and only after the DS925+
+      # migration gives the media volume somewhere of its own to grow.
+      continuous:
+        days: 3
+      alerts:
+        retain:
+          days: 30
+          mode: all
+      detections:
+        retain:
+          days: 30
+          mode: all
+
+    snapshots:
+      enabled: true
+      retain:
+        default: 30
+
+    semantic_search:
+      # CLIP embeddings over event thumbnails — this is what makes natural-language
+      # search work ("person carrying a box") rather than just label/zone filters.
+      # `small` runs on CPU; `large` wants a GPU and is only worth revisiting if the
+      # OpenVINO GPU path lands.
+      enabled: true
+      model: jinav2
+      model_size: small
+      reindex: false
+
+    genai:
+      # Points at LM Studio on the Windows host, NOT at OpenAI.
+      #
+      # READ THIS BEFORE EDITING: in Frigate 0.17 the `base_url` key under `genai`
+      # is IGNORED for the openai provider — the endpoint comes from the
+      # OPENAI_BASE_URL environment variable (set in deployment.yaml). Putting a
+      # base_url here instead would silently send camera snapshots to
+      # api.openai.com. That is a real privacy failure, not a config typo: these
+      # are interior cameras and a BEDROOM one is planned for a later phase.
+      # 0.18 is expected to honour base_url directly; re-check on upgrade.
+      #
+      # The endpoint itself is NOT the host's LAN IP — it goes through the
+      # lmstudio-fwd socat unit. See plan.md before changing OPENAI_BASE_URL.
+      provider: openai
+      api_key: "{FRIGATE_GENAI_API_KEY}"
+      model: "{FRIGATE_GENAI_MODEL}"
+
+    cameras:
+      # Name must match the go2rtc stream, the HA entity object id and
+      # Hawksnest's overrides.ts exactly — `cameraNameOf()` is
+      # `camera.id.split(".")[1]`. Retargeted from `bedroom` 2026-07-29.
+      big_room:
+        ffmpeg:
+          inputs:
+            # The camera's SUB stream, read directly rather than through go2rtc.
+            # go2rtc serves the MAIN stream for live view on its own connection, so
+            # recording and live view have independent failure domains — a go2rtc
+            # restart must never punch a hole in the 24/7 timeline.
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BIG_ROOM}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          # VERIFIED against the real camera 2026-07-29 (E1 Zoom, itemNo E340,
+          # firmware v3.2.0.4741) by ffprobe AND by the camera's own GetEnc:
+          #   subStream: 640*360, h264, High profile, 10 fps, 256 kbps, gop 4
+          #
+          # width/height MUST match what the camera sends — a mismatch there
+          # silently misplaces every bounding box rather than erroring. They match.
+          width: 640
+          height: 360
+          # fps is DIFFERENT: the camera sends 10, this asks for 5, and that is
+          # deliberate — not an oversight to "fix" later.
+          #
+          # detect.fps is the rate Frigate runs DETECTION at, not an assertion about
+          # the stream; Frigate decimates to it. Leaving the camera at 10 while
+          # detecting at 5 is the better split here because this same sub stream also
+          # carries the `record` role — 10 fps makes the 24/7 timeline noticeably
+          # smoother to scrub, while detection gains nothing from the extra frames.
+          # Dropping the camera to 5 would degrade recordings to save decode work
+          # that is negligible at 640x360.
+          fps: 5
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          genai:
+            # Per-camera, and deliberately narrower than `track`: a description for
+            # every passing cat is noise in the search index and needless VLM load.
+            enabled: true
+            objects:
+              - person
+        # No `motion:` mask committed — masks and zones are drawn in Frigate's own
+        # UI against a live frame and land in the live /config/config.yml. Tune them
+        # early: an untuned camera fires on a TV or a ceiling fan, and every false
+        # alert is another junk embedding in the semantic search index.

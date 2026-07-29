@@ -32,6 +32,9 @@ secretGenerator:
   - name: ring-timeline-credentials
     envs:
       - secrets/ring-timeline.env
+  - name: frigate-credentials
+    envs:
+      - secrets/frigate.env
 
 generatorOptions:
   disableNameSuffixHash: true
@@ -41,6 +44,8 @@ patches:
   - path: patches/zwave-replicas-0.yaml
   # Park go2rtc (binds host port 8555; prod owns it on the shared node).
   - path: patches/go2rtc-replicas-0.yaml
+  # Park Frigate (one physical camera, shared node, and 24/7 writes to the host disk).
+  - path: patches/frigate-replicas-0.yaml
   # HA Service -> ClusterIP (NodePort 30123 is cluster-unique). A JSON 6902 patch
   # is used so the nodePort field is genuinely removed — a strategic-merge null on
   # a list item does not delete it, and a ClusterIP Service with a nodePort is

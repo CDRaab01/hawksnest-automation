@@ -123,3 +123,43 @@ spec:
   resources:
     requests:
       storage: 64Mi
+---
+# Frigate's config + SQLite event index (events, GenAI descriptions, and the CLIP
+# embeddings behind semantic search). local-path, NEVER NFS — the same file-locking
+# argument that keeps mariadb-data off the Synology applies to any SQLite datadir,
+# and this one is written on every detection.
+#
+# NOT covered by the NFS backup story that protects ha-config and zwavejs-config.
+# Losing it loses all search history: the recordings survive but nothing is
+# findable, and re-embedding costs real CPU. Back it up separately (README §Backups).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: frigate-config
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+# Frigate's recordings and snapshots. local-path for now — 24/7 video is the most
+# write-heavy thing in this cluster and the DS214 is NFSv3-only and explicitly
+# "treat as replaceable". Migrates to the DS925+ once those drives are burned in.
+#
+# THE SIZE HERE IS NOT A LIMIT. k3s local-path is hostPath-backed with no quota
+# enforcement, so this will happily grow past 200Gi and fill the Dragonfly virtual
+# disk — which takes k3s, Home Assistant and the door locks down with it. The
+# actual guardrail is `record.continuous.days` in the frigate-seed ConfigMap.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: frigate-media
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 200Gi

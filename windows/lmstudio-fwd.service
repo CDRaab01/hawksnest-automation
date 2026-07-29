@@ -1,0 +1,47 @@
+[Unit]
+# Bridges k3s pods to LM Studio running on the Windows host.
+#
+# This forwarder runs the OPPOSITE direction to ha-forwarder / go2rtc-forwarder.
+# Those expose a pod TO the Windows host. This one exposes a WINDOWS service to
+# the pods, and it exists because under mirrored networking there is otherwise no
+# path at all:
+#
+#   * The Dragonfly VM OWNS the host address 192.168.4.34. Inside the distro,
+#     `ip route get 192.168.4.34` returns `local ... dev lo`, so a pod connecting
+#     there reaches the VM, not Windows, and nothing listens on 1234 there.
+#     This is NOT a firewall problem. Several firewall rules were tried first and
+#     none of them could have worked — the packets never leave the VM.
+#   * The VM itself DOES reach Windows, on 127.0.0.1 (mirrored loopback).
+#   * A pod cannot use 127.0.0.1, because that is the pod.
+#
+# So: pod -> 10.42.0.1:21234 -> here -> 127.0.0.1:1234 -> LM Studio on Windows.
+#
+# Consumed by Frigate as OPENAI_BASE_URL=http://10.42.0.1:21234/v1 for GenAI event
+# descriptions. Requires LM Studio bound to 0.0.0.0 on the Windows side:
+#   & "$env:USERPROFILE\.lmstudio\bin\lms.exe" server start --bind 0.0.0.0 --port 1234
+# That persists in ~/.lmstudio/.internal/http-server-config.json as
+# "networkInterface". Do not go hunting for the GUI toggle: it is easily confused
+# with "Enable Local LLM Service (headless)" in App Settings, which is unrelated.
+Description=Bridge k3s pods to LM Studio on the Windows host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Port 21234, NOT 1234: mirrored networking mirrors every Windows *listening*
+# socket into the VM, so bind() on 1234 fails with EADDRINUSE while `ss` shows
+# nothing bound at all. 11434 collides the same way (Ollama on Windows). Any
+# replacement port must be free on WINDOWS, not merely unused in the distro.
+#
+# bind=10.42.0.1 is cni0, reachable only by pods. Do NOT widen this to 0.0.0.0:
+# the LM Studio API is UNAUTHENTICATED, so 0.0.0.0 would publish a free GPU to
+# the whole LAN. This bind is the access control.
+ExecStart=/usr/bin/socat TCP-LISTEN:21234,bind=10.42.0.1,fork,reuseaddr TCP:127.0.0.1:1234
+# cni0 does not exist until k3s is up, so early boot starts fail by design and
+# Restart carries it through rather than the unit needing an ordering dependency.
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
