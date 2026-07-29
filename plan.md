@@ -563,6 +563,66 @@ only)"*, both of which this work makes false. Also `CLAUDE.md`'s camera bullet a
 
 ---
 
+## Deployed to prod 2026-07-29 — what the rollout actually taught us
+
+Merged as PR #22 (`9111202`); prod deploy green. Verified against the cluster, not the workflow's
+green tick. Two things the plan did not predict:
+
+### The mosquitto passwd file needs a POD RESTART, not just a deploy
+
+This is the sharp one, and the plan's whole append-don't-regenerate section missed it. Appending
+`frigate` to `~/hawksnest-secrets/mosquitto.passwd` and deploying is **not sufficient**: Frigate came
+up and sat in a reconnect loop logging `Unable to connect to MQTT server: MQTT Not authorized`.
+
+The Secret was correct the whole time — `kubectl get secret mosquitto-credentials` showed
+`frigate ratgdo ring`. The problem is the mount:
+
+```
+passwd  path=/mosquitto/config/passwd  subPath=passwd
+```
+
+**Kubernetes never propagates updates to `subPath`-mounted Secrets.** The running pod kept the old
+two-user file indefinitely. `kubectl rollout restart deployment/mosquitto` fixed it immediately.
+There is no reload path — mosquitto can SIGHUP-reload a passwd file, but it cannot reload one the
+kubelet has not updated. **Any future MQTT user change needs the same restart.** Cost is small:
+ring-mqtt and HA reconnect within seconds, and the locks are Z-Wave so they are untouched.
+
+Note the check order that made this quick to find: Secret contents first, *then* the pod's mounted
+copy. They disagreed, which pointed straight at the mount rather than at the deploy or the append.
+
+### `ratgdo` is a placeholder account, not a live device
+
+The plan (and the guard script) warn that dropping `ratgdo` takes "the garage opener offline at
+once". **There is no garage opener.** No retained `ratgdo/#` topics exist, no ratgdo client has ever
+connected, and CLAUDE.md defers Ratgdo from V1. Keep preserving the account — it costs nothing and
+the guard is still correct — but the stated consequence was overstated, and overstated warnings get
+ignored.
+
+### Verified end state
+
+| | |
+|---|---|
+| go2rtc streams | 11 — `big_room` → **rtsp** (Reolink), `bedroom` → **ring**, no duplicate slug |
+| Frigate | camera + capture process up, **no ffmpeg restart loop**, no MQTT errors |
+| Detector | OpenVINO CPU, **10.0 ms inference**, camera_fps 5.0 — CPU is comfortably adequate |
+| Recording | mp4 segments writing; 44 MB in the first minutes |
+| Disk | 55 G used of 1007 G, **902 G available** — the fill-the-disk risk is remote at 3-day retention |
+| mosquitto | `frigate ratgdo ring` all intact |
+| Locks / Ring | unaffected; every other pod's restart count unchanged by the deploy |
+
+### Unrelated: the host crashed mid-verification
+
+The suite went down during this rollout and it was **not Frigate** — it was unexpected shutdown #22
+from the known RAM fault (see the host-RAM-fault memory + `HARDWARE-RMA.md`). Symptom was
+`wsl.exe … 0x8007274c` with the VM alive but workloads unresponsive. Worth stating plainly because
+the timing invites the wrong conclusion: Frigate was suspected first, and the host was *not*
+resource-starved at the time (CPU 55%, 7 GB RAM free, 686 GB disk free). Everything came back on its
+own after recovery, restart counts +1 across the board.
+
+One real contribution from this work, though: verifying GenAI made LM Studio JIT-load a model that
+stayed resident, pushing host memory to 93%. **Consider a TTL on the GenAI model** so an idle
+description model does not hold ~6 GB indefinitely on a box that also hosts an 18 GB coding model.
+
 ## Verifying
 
 Locally, without a cluster:
