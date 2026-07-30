@@ -217,21 +217,29 @@ data:
           # Frigate 0.17 defaults this to FALSE when absent — see the long note on
           # big_room. Without it this camera would record and detect nothing.
           enabled: true
-          # !! UNVERIFIED — copied from big_room, NOT measured on this camera.
-          # These MUST be confirmed with
-          #   ffprobe rtsp://<user>:<pw>@192.168.4.53:554/h264Preview_01_sub
-          # before this is deployed. A width/height mismatch does not error; it
-          # silently misplaces every bounding box. Same physical model as big_room
-          # (E1 Zoom), so 640x360 is likely — "likely" is not "measured".
+          # VERIFIED 2026-07-29 against 192.168.4.53 by ffprobe (as the `frigate`
+          # account, not admin) AND the camera's own GetEnc. Identical hardware and
+          # firmware to big_room — E1 Zoom, itemNo E340, v3.2.0.4741 — and the sub
+          # stream matches exactly: 640x360 h264 High, 10 fps, 256 kbps, gop 4.
+          #
+          # It was worth measuring anyway. The MAIN stream shipped as 3840x2160
+          # h265, the same WebRTC-breaking default big_room had, and had to be
+          # switched to 2560x1440 h264. "Same model so same settings" held for the
+          # sub stream and was wrong for the main one.
           width: 640
           height: 360
+          # Same 10-sends / 5-detects split as big_room, for the same reason: this
+          # stream also carries the `record` role.
           fps: 5
         motion:
-          # !! UNVERIFIED — the timestamp OSD box is copied from big_room and assumes
-          # the same OSD position and detect resolution. Confirm with
-          # /api/first_floor_stairway/latest.jpg?motion=1 that the box actually covers
-          # the clock. A mask that misses it leaves detection running on every frame
-          # 24/7; a mask that is too large silently suppresses real detections.
+          # Same OSD timestamp mask as big_room. Same camera model, same firmware and
+          # the same 640x360 detect frame, so the clock sits in the same place — but
+          # CONFIRM IT ONCE the camera is live:
+          #   /api/first_floor_stairway/latest.jpg?motion=1
+          # should show no motion box on the clock in an empty stairway, and
+          # /api/stats should read detection_fps 0.0 rather than a constant 5.0.
+          # A mask that misses the clock leaves detection running on every frame
+          # 24/7; one that is too large silently suppresses real detections.
           mask:
             - 0.26,0.015,0.72,0.015,0.72,0.11,0.26,0.11
         objects:
