@@ -70,6 +70,26 @@ data:
         value_template: "{{ value_json.record.continuous.days }}"
         scan_interval: 3600
 
+    # Household policy for camera object alerts, toggled from Hawksnest's Settings
+    # (added 2026-07-30). Server-side ON PURPOSE rather than filtered on the phone:
+    # this stops the push being *generated*, so it applies to every device and
+    # never wakes a radio for an alert nobody wants. Distinct from the app's own
+    # "Push alerts" switch, which is that one phone's ntfy subscription.
+    #
+    # NO `initial:` — it would reset these on every HA restart and silently
+    # override whatever the user chose, which is the fastest way to make a
+    # settings screen untrustworthy. Without it the state restores across
+    # restarts. Consequence: on FIRST creation a helper is `off`, so turning
+    # `hawksnest_alert_person` on once is a required rollout step (the
+    # automation's fail-open covers a MISSING helper, not a genuinely-off one).
+    input_boolean:
+      hawksnest_alert_person:
+        name: Person alerts
+        icon: mdi:walk
+      hawksnest_alert_pets:
+        name: Pet alerts
+        icon: mdi:dog-side
+
     # Modular config splits so automations/scripts/scenes can grow independently
     # (WLED, Zigbee, Plex, presence/auto-lock all slot in here later).
     automation: !include automations.yaml
@@ -170,6 +190,122 @@ data:
     # PVC: a PVC restore or camera re-discovery silently reverts them to Auto.
     # Entity-ID-free, like the push automations above. Battery cost is the
     # accepted trade-off; tune per-camera via the number entity if drain bites.
+    # Camera object alerts — "There is a person at your Kitchen", with a picture.
+    #
+    # The repo's FIRST MQTT-triggered automation. That is deliberate and it beats
+    # the `state_changed` + template pattern the three above use: it is inherently
+    # entity-ID-free (it reads Frigate's own payload, not entity ids) AND it skips
+    # the global state_changed firehose entirely.
+    #
+    # TRIGGERS ON `frigate/reviews`, NOT `frigate/events` — this is the dedup.
+    # Frigate tracks each object separately, and one person crossing a room
+    # produces SEVERAL concurrent tracked objects (measured: three at once on the
+    # kitchen camera). Triggering on events meant three pushes for one person.
+    # A "review segment" is Frigate's own coalescing of a burst of activity on one
+    # camera into a single reviewable item, so `type: new` on reviews = one alert
+    # per camera per burst of activity. That is upstream-maintained dedup rather
+    # than a hand-rolled cooldown with helpers writing state on every event, on a
+    # cluster that also runs the door locks.
+    #
+    # NOT filtered on `severity == 'alert'`, which is the obvious-looking thing to
+    # do and would be wrong here: Frigate scores person/car as `alert` and
+    # everything else as `detection`, so a severity filter would silently kill dog
+    # and cat alerts. The object toggles below do that job properly instead.
+    #
+    # The payload is {type, before, after} (frigate/review/maintainer.py), where
+    # `after.data.objects` is the DEDUPED LIST of labels in the segment — hence the
+    # list handling rather than a single `label`.
+    #
+    # WHY the picture is the camera's `entity_picture` and NOT Frigate's
+    # /api/frigate/notifications/<id>/thumbnail.jpg: Frigate writes both the
+    # thumbnail and the snapshot to disk in end(), so at `new` NEITHER file is
+    # guaranteed to exist yet — the attach would race and usually lose, and a
+    # failed image silently degrades the notification to text-only. The camera
+    # entity's signed entity_picture is always available, is the wide room view
+    # (what the Ring notification shows), and is the same mechanism the doorbell
+    # push above already uses in production. It is a LIVE frame, so on a slow
+    # detection it can lag the event by a second — accepted; an always-present
+    # near-frame beats an exact frame that is usually missing.
+    #
+    # The URL must be the https://…:8443 Tailscale front: Android ships with
+    # cleartext disabled, and PushNotifier fetches the image with NO auth headers
+    # (hence the *signed* token in entity_picture doing the authenticating).
+    - id: hawksnest_push_camera_object
+      alias: "Hawksnest push: camera object detected"
+      mode: parallel
+      max: 10
+      trigger:
+        - platform: mqtt
+          topic: frigate/reviews
+      variables:
+        ev: "{{ trigger.payload_json.after | default({}, true) }}"
+        # Deduped labels in this segment. `-verified` suffixes are stripped so a
+        # verified detection still matches the plain label.
+        objects: >-
+          {{ (ev.data | default({}, true)).objects | default([], true)
+             | map('replace', '-verified', '') | list }}
+        # Person wins the wording when a segment contains both — it's the one you
+        # actually care about, and a segment is one notification.
+        label: >-
+          {{ 'person' if 'person' in objects
+             else (objects | select('in', ['dog', 'cat']) | first | default('', true)) }}
+        cam: "{{ ev.camera | default('', true) }}"
+        cam_name: >-
+          {{ state_attr('camera.' ~ cam, 'friendly_name')
+             | default(cam | replace('_', ' ') | title, true) }}
+        cam_pic: "{{ state_attr('camera.' ~ cam, 'entity_picture') }}"
+        # First tracked object in the segment — enough for the app to deep-link.
+        event_id: >-
+          {{ (ev.data | default({}, true)).detections | default([], true)
+             | first | default('', true) }}
+        front: "https://dragonfly.tail2ce561.ts.net:8443"
+      condition:
+        # Cheapest checks first — this runs on every Frigate review update.
+        - condition: template
+          value_template: "{{ trigger.payload_json.type == 'new' }}"
+        # EXPLICIT allow-list, not "anything Frigate tracked": widening the
+        # `track:` list in the Frigate seed must never silently start pushing.
+        - condition: template
+          value_template: "{{ label in ['person', 'dog', 'cat'] }}"
+        # Armed-only. These are INDOOR cameras — people living here generate
+        # person events constantly (measured: 10 in a few minutes), so alerting
+        # while disarmed would be unusable. Entity-ID-free so a panel rename
+        # can't break it; with one panel this reads as "the alarm is armed".
+        # Only armed_home/armed_away are listed because the panel reports
+        # supported_features=3 — night/vacation can never occur here.
+        - condition: template
+          value_template: >-
+            {{ states.alarm_control_panel
+               | selectattr('state', 'in', ['armed_home', 'armed_away'])
+               | list | count > 0 }}
+        # Object-class toggles, with DELIBERATELY ASYMMETRIC failure modes:
+        # person fails OPEN (a missing or unknown helper still alerts — a renamed
+        # helper must never silently disable a security feature), pets fail
+        # CLOSED (off is the safe direction for noise).
+        - condition: template
+          value_template: >-
+            {% if label == 'person' %}
+              {{ states('input_boolean.hawksnest_alert_person') != 'off' }}
+            {% else %}
+              {{ states('input_boolean.hawksnest_alert_pets') == 'on' }}
+            {% endif %}
+      action:
+        - service: rest_command.ntfy_publish
+          data:
+            topic: "hawksnest-alerts"
+            title: "{{ label | title }} at {{ cam_name }}"
+            message: "There is a {{ label }} at your {{ cam_name }}."
+            # These tags are the CLIENT'S ROUTING KEY (PushRoute.kindOf picks the
+            # notification channel off them) as well as valid ntfy emoji, so the
+            # alert also renders sensibly in the plain ntfy app.
+            tags: "{{ 'walking' if label == 'person' else label }}"
+            priority: "{{ 'high' if label == 'person' else 'default' }}"
+            # `event=` is unused by the client today, on purpose: the live-HA
+            # dual-write is the expensive step, so every parameter we may ever
+            # want ships now and the follow-up stays a pure client change.
+            click: "{{ front }}/?camera=camera.{{ cam }}&event={{ event_id }}"
+            attach: "{{ (front ~ cam_pic) if cam_pic else '' }}"
+
     # Frigate detection watchdog. Guards against the failure that actually shipped:
     # detect.enabled silently false (0.17 default) — pod healthy, ffmpeg healthy,
     # recordings accumulating, and NOTHING ever detected, with no log line to find.

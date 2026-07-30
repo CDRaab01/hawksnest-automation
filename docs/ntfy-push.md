@@ -17,9 +17,10 @@ Phone (Hawksnest app / ntfy app) ◀── Tailscale Serve https://<host>.ts.net
   overlay patches it to ClusterIP so it can't collide on the shared cluster) + `ntfy-config`
   ConfigMap (`server.yml`). Cache on a node-local `ntfy-cache` PVC.
 - **HA config** (`home-assistant/configmap.yaml` seed) — a generic `rest_command.ntfy_publish`
-  and two automations (`hawksnest_push_doorbell`, `hawksnest_push_alarm`) that publish to the
-  `hawksnest-alerts` topic. They're **entity-ID-free** (they filter the global `state_changed`
-  event) so they work without knowing how the Ring/alarm entities are named here.
+  and the automations that publish to the `hawksnest-alerts` topic: `hawksnest_push_doorbell`,
+  `hawksnest_push_alarm`, `hawksnest_push_camera_object`, `hawksnest_frigate_detection_watchdog`.
+  All are **entity-ID-free** — the first two filter the global `state_changed` event, the camera
+  one reads Frigate's own MQTT payload — so they work without knowing how entities are named here.
 
 The seed only reaches a **fresh** HA install (the initContainer won't clobber the live PVC), so
 the two live-apply steps below are required to light this up on the running instance.
@@ -39,6 +40,50 @@ rich-push release — a tap deep-links to the camera and shows its snapshot):
 `rest_command`, and replace the live `hawksnest_push_doorbell` automation with the seed version;
 then Reload *REST Commands* + *Automations*. Until then, doorbell push still works — it just lands
 on Home with no photo instead of the specific camera.
+
+### Camera object alerts (2026-07-30)
+
+`hawksnest_push_camera_object` — "There is a person at your Kitchen", with a picture. The repo's
+**first MQTT-triggered automation**: it subscribes to `frigate/events` rather than filtering the
+global `state_changed` firehose.
+
+Design points worth not re-deriving:
+
+- **Fires on `type == 'new'` only.** Frigate publishes `{type, before, after}`; `new` is emitted
+  once per tracked object, `update` repeats as score/zone change, and `end` arrives after the
+  person has left. Templates therefore read `trigger.payload_json.after.*`.
+- **Armed-only.** These are indoor cameras; with the house occupied Frigate produced ~10 person
+  events in a few minutes, so alerting while disarmed is unusable. The condition is written
+  entity-ID-free (`states.alarm_control_panel | selectattr('state', 'in', [...])`) and lists only
+  `armed_home`/`armed_away` because the panel reports `supported_features=3` — night/vacation
+  cannot occur here.
+- **`attach` is the camera's signed `entity_picture`, NOT Frigate's
+  `/api/frigate/notifications/<id>/thumbnail.jpg`.** Frigate writes both the thumbnail and the
+  snapshot to disk in `end()`, so at `type: new` neither file reliably exists and the attach would
+  usually 404 — which silently degrades the push to text-only. `entity_picture` is always present,
+  is the wide room view, and self-authenticates via its signed token (the app fetches notification
+  images with **no** auth headers). It is a live frame, so it can lag the event slightly.
+- **Two `input_boolean` toggles** gate it: `hawksnest_alert_person` and `hawksnest_alert_pets`
+  (person **fails open** if the helper is missing — a renamed helper must not silently disable a
+  security alert; pets **fail closed**). They're server-side so the push is never generated for a
+  device that doesn't want it. Hawksnest's Settings screen writes them.
+- **`click` already carries `&event=<id>`** even though no client reads it yet — the live-apply
+  ritual below is the expensive step, so the follow-up stays a pure client change.
+
+**To apply to a running instance:** add the `input_boolean:` block to the live
+`configuration.yaml` and append the automation to the live `automations.yaml`, then Reload
+*Input Booleans* + *Automations*. **Then turn `input_boolean.hawksnest_alert_person` ON** — the
+helpers deliberately carry no `initial:` (which would reset them on every restart and override the
+user's choice), so they start `off` on first creation.
+
+Prove it without waiting for a real person — publish a synthetic event:
+
+```bash
+kubectl -n home-automation exec deploy/mosquitto -- \
+  mosquitto_pub -h localhost -u frigate -P '<pw>' -t frigate/events -m \
+  '{"type":"new","before":{},"after":{"id":"test-1","camera":"kitchen","label":"person"}}'
+```
+With the alarm armed and person alerts on, that should land a push. Disarm and repeat: nothing.
 
 ## Step 1 — deploy ntfy (staging first, then prod)
 
