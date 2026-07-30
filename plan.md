@@ -623,6 +623,41 @@ One real contribution from this work, though: verifying GenAI made LM Studio JIT
 stayed resident, pushing host memory to 93%. **Consider a TTL on the GenAI model** so an idle
 description model does not hold ~6 GB indefinitely on a box that also hosts an 18 GB coding model.
 
+## Two post-deploy traps found while tuning (2026-07-29)
+
+### `detect.enabled` defaults to FALSE in 0.17 — Frigate recorded for hours and detected nothing
+
+The seed set `detect.width/height/fps` but never `detect.enabled`, and **Frigate 0.17 treats an
+absent `enabled` as false**. The result is the worst shape of failure: pod healthy, ffmpeg healthy,
+`camera_fps` correct, recordings accumulating on disk — and **zero detection**. No events, no CLIP
+embeddings, no alerts, no GenAI descriptions. Nothing in `kubectl logs` says so.
+
+It was caught only by pulling a camera snapshot, seeing a person plainly in frame, and noticing
+`detection_fps: 0.0`. The two reliable tells:
+
+```sh
+curl .../api/stats            # -> "detection_enabled": false
+mosquitto_sub -t 'frigate/<camera>/detect/state'   # -> OFF
+```
+
+Fixed by adding `enabled: true`. After a restart: `detection_enabled: true`, `detection_fps: 5.0`,
+`inference_speed: 2.09 ms`, `skipped_fps: 0.0`. **2 ms inference settles the CPU-vs-GPU question for
+good** — the OpenVINO CPU detector is not remotely stressed by one 640×360 camera.
+
+### The Frigate seed is FIRST-BOOT ONLY — the ConfigMap is decorative once deployed
+
+`seed-config` is `if [ ! -f /config/config.yml ]`, unlike go2rtc's init which re-seeds on every
+start. Two consequences, and the second one bites:
+
+- Good: masks, zones and passwords set in Frigate's UI **survive restarts**.
+- **Editing `kustomize/base/frigate/configmap.yaml` and deploying does NOT change the running
+  Frigate.** The file already exists on the PVC, so the seed is skipped silently.
+
+Every Frigate config change therefore needs a **dual write** — the repo seed *and* the live
+`/config/config.yml` — the same ritual the plan already calls for on HA's `recorder.exclude`. The
+`detect.enabled` fix above was applied both ways. To force a full re-seed instead, move
+`/config/config.yml` aside and restart, but that discards anything drawn in the UI.
+
 ## Verifying
 
 Locally, without a cluster:
