@@ -197,11 +197,24 @@ data:
     # entity-ID-free (it reads Frigate's own payload, not entity ids) AND it skips
     # the global state_changed firehose entirely.
     #
-    # WHY `type == 'new'`: Frigate publishes {type, before, after} on frigate/events
-    # (verified in its source, track/object_processing.py). `new` fires exactly
-    # once per tracked object, at the false-positive -> confirmed transition.
-    # `update` fires repeatedly as score/zone change; `end` arrives only after the
-    # person has left, which defeats the point of an alert.
+    # TRIGGERS ON `frigate/reviews`, NOT `frigate/events` — this is the dedup.
+    # Frigate tracks each object separately, and one person crossing a room
+    # produces SEVERAL concurrent tracked objects (measured: three at once on the
+    # kitchen camera). Triggering on events meant three pushes for one person.
+    # A "review segment" is Frigate's own coalescing of a burst of activity on one
+    # camera into a single reviewable item, so `type: new` on reviews = one alert
+    # per camera per burst of activity. That is upstream-maintained dedup rather
+    # than a hand-rolled cooldown with helpers writing state on every event, on a
+    # cluster that also runs the door locks.
+    #
+    # NOT filtered on `severity == 'alert'`, which is the obvious-looking thing to
+    # do and would be wrong here: Frigate scores person/car as `alert` and
+    # everything else as `detection`, so a severity filter would silently kill dog
+    # and cat alerts. The object toggles below do that job properly instead.
+    #
+    # The payload is {type, before, after} (frigate/review/maintainer.py), where
+    # `after.data.objects` is the DEDUPED LIST of labels in the segment — hence the
+    # list handling rather than a single `label`.
     #
     # WHY the picture is the camera's `entity_picture` and NOT Frigate's
     # /api/frigate/notifications/<id>/thumbnail.jpg: Frigate writes both the
@@ -223,18 +236,31 @@ data:
       max: 10
       trigger:
         - platform: mqtt
-          topic: frigate/events
+          topic: frigate/reviews
       variables:
         ev: "{{ trigger.payload_json.after | default({}, true) }}"
-        label: "{{ ev.label | default('', true) }}"
+        # Deduped labels in this segment. `-verified` suffixes are stripped so a
+        # verified detection still matches the plain label.
+        objects: >-
+          {{ (ev.data | default({}, true)).objects | default([], true)
+             | map('replace', '-verified', '') | list }}
+        # Person wins the wording when a segment contains both — it's the one you
+        # actually care about, and a segment is one notification.
+        label: >-
+          {{ 'person' if 'person' in objects
+             else (objects | select('in', ['dog', 'cat']) | first | default('', true)) }}
         cam: "{{ ev.camera | default('', true) }}"
         cam_name: >-
           {{ state_attr('camera.' ~ cam, 'friendly_name')
              | default(cam | replace('_', ' ') | title, true) }}
         cam_pic: "{{ state_attr('camera.' ~ cam, 'entity_picture') }}"
+        # First tracked object in the segment — enough for the app to deep-link.
+        event_id: >-
+          {{ (ev.data | default({}, true)).detections | default([], true)
+             | first | default('', true) }}
         front: "https://dragonfly.tail2ce561.ts.net:8443"
       condition:
-        # Cheapest checks first — this runs on every Frigate event.
+        # Cheapest checks first — this runs on every Frigate review update.
         - condition: template
           value_template: "{{ trigger.payload_json.type == 'new' }}"
         # EXPLICIT allow-list, not "anything Frigate tracked": widening the
@@ -277,7 +303,7 @@ data:
             # `event=` is unused by the client today, on purpose: the live-HA
             # dual-write is the expensive step, so every parameter we may ever
             # want ships now and the follow-up stays a pure client change.
-            click: "{{ front }}/?camera=camera.{{ cam }}&event={{ ev.id }}"
+            click: "{{ front }}/?camera=camera.{{ cam }}&event={{ event_id }}"
             attach: "{{ (front ~ cam_pic) if cam_pic else '' }}"
 
     # Frigate detection watchdog. Guards against the failure that actually shipped:
