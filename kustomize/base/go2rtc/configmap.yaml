@@ -79,7 +79,15 @@ data:
       # than trusting the 200. The encoder also restarts (~20s of HTTP 502s).
       #
       # 2560x1440 is what this design assumed all along, so nothing downstream changes.
+      # REOLINK_USER / REOLINK_PASS are shared across every Reolink on purpose
+      # (decided 2026-07-29). Per-camera credentials were considered and rejected:
+      # they all live in the same two container-mounted env files, so a leak exposes
+      # every camera regardless, and the only scenario per-camera passwords help is
+      # pivoting from an already-compromised camera to another — where the attacker
+      # would gain a read-only stream they already had. Two variables instead of ten
+      # at five cameras. Each camera still gets its own IP variable.
       big_room: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
+      first_floor_stairway: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_main"
 
       # --- Ring (cloud) ---------------------------------------------------------
       # ONE entry per Ring camera you want to talk through. The stream NAME MUST
@@ -98,7 +106,10 @@ data:
       kitchen: "ring:?device_id=${RING_DEVICE_ID_KITCHEN}&refresh_token=${RING_REFRESH_TOKEN}"
       pet_camera: "ring:?device_id=${RING_DEVICE_ID_PET_CAMERA}&refresh_token=${RING_REFRESH_TOKEN}"
       back_side_yard: "ring:?device_id=${RING_DEVICE_ID_BACK_SIDE_YARD}&refresh_token=${RING_REFRESH_TOKEN}"
-      first_floor_stairway: "ring:?device_id=${RING_DEVICE_ID_FIRST_FLOOR_STAIRWAY}&refresh_token=${RING_REFRESH_TOKEN}"
+      # NOTE: no `first_floor_stairway` entry here — the Reolink above claims that
+      # slug (2026-07-29, same swap as big_room). The Ring stairway camera is retired.
+      # `RING_DEVICE_ID_FIRST_FLOOR_STAIRWAY` joins RING_DEVICE_ID_BIG_ROOM as an
+      # unused-but-harmless key in go2rtc.env; leave both in place.
       bedroom: "ring:?device_id=${RING_DEVICE_ID_BEDROOM}&refresh_token=${RING_REFRESH_TOKEN}"
       # NOTE: no `big_room` entry here on purpose — the Reolink above claims that slug.
       # The Ring big_room camera is the one being retired. `RING_DEVICE_ID_BIG_ROOM` is
