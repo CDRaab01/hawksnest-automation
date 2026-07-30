@@ -49,7 +49,11 @@ ask rather than guessing — this controls physical door locks, so correctness m
   - Back door (deadbolt)
   - Garage-to-house interior door (deadbolt to be added; currently lever-only)
 - **Light switches (Z-Wave):** Zooz ZEN72 dimmers (basement, single-pole). Quantity TBD by Christian.
-- **Cameras / Doorbell:** Existing Ring devices (cloud integration).
+- **Cameras / Doorbell:** Existing Ring devices (cloud integration). *(Since 2026-07-29
+  no longer the whole story: three local Reolink cameras — big_room + first_floor_stairway
+  [E1 Zoom], kitchen [E1 Pro] — feed **Frigate** (sub-stream detect + 24/7 record) and
+  **go2rtc** (main-stream live); Ring remains for the doorbell + outdoor/battery cams.
+  Details: plan.md.)*
 
 ## V1 Scope (this deliverable)
 
