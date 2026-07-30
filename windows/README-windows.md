@@ -317,3 +317,47 @@ directory (`/dev/zwave: Is a directory`) and the locks drop to Unavailable. Regi
 
 **HA on NFS:** the `ha-config` PV needs `nolock` in its mountOptions (already in
 `kustomize/base/storage/nfs-pv.yaml`) — without it HA's `flock()` fails `ENOLCK` and crash-loops.
+
+---
+
+## Camera RTSP subnet routes (`/32`s) — added 2026-07-30
+
+The Hawksnest Android app has a top live tier that plays a camera's **own RTSP stream directly**,
+which is the smoothest option (no relay, no re-packaging) but needs the phone to reach the camera's
+LAN address. Off-LAN that only works if this host advertises the camera IPs as Tailscale subnet
+routes.
+
+```powershell
+& "C:\Program Files\Tailscale\tailscale.exe" set --advertise-routes=192.168.4.37/32,192.168.4.53/32,192.168.4.64/32
+```
+
+> ⚠️ **`set --advertise-routes` REPLACES the entire advertised list — it does not append.** Same
+> silent-overwrite family as `tailscale serve` (see the suite `CLAUDE.md` Serve-port table). Check
+> what's currently advertised *before* running it, and always pass the full list:
+>
+> ```powershell
+> & "C:\Program Files\Tailscale\tailscale.exe" debug prefs | ConvertFrom-Json | Select AdvertiseRoutes
+> ```
+
+**Advertising is only half of it — the routes must then be APPROVED** at
+<https://login.tailscale.com/admin/machines> → **dragonfly** → *Edit route settings* → tick each.
+The console can only show routes the node is already advertising, so if that dialog says
+"This machine does not expose any routes", the CLI step hasn't taken effect yet — the order is
+CLI first, console second.
+
+Verify the whole chain with `PrimaryRoutes`, which means *advertised **and** approved*:
+
+```powershell
+& "C:\Program Files\Tailscale\tailscale.exe" status --json | ConvertFrom-Json | Select -Expand Self | Select PrimaryRoutes
+```
+
+Don't skip that check: an unapproved route makes RTSP unreachable everywhere, and the app's ladder
+silently steps down to go2rtc — so the symptom is "live view is a bit slower", not an error.
+
+**Scope is deliberately per-camera `/32`, not the whole `192.168.4.0/22`.** A whole-LAN route would
+give every tailnet device a path to the NAS, printer, eero and every IoT device; the `/32`s expose
+exactly three cameras. The cost is that **each new camera needs its own route** — and since `set`
+replaces the list, that means re-issuing the command with *all* the IPs, not just the new one.
+
+On home Wi-Fi the phone may still route the `/32` through the tunnel and hairpin via this host
+rather than going direct. That works; it is just slightly indirect.

@@ -1,7 +1,11 @@
 # Reolink + Frigate migration — working plan
 
 **Branch (both repos):** `claude/reolink-frigate-integration-kfvz3h`
-**Started:** 2026-07-29 · **Status:** automation side landed, Hawksnest side not started
+**Started:** 2026-07-29 · **Status (2026-07-30): LIVE IN PROD.** Three Reolink cameras
+(`big_room`, `first_floor_stairway`, `kitchen`) are recording, detecting and generating AI event
+descriptions; the Ring fleet is down from 11 to 8. Hawksnest ships paged Frigate VOD, the
+stream-list go2rtc gate, and the direct-RTSP live tier. Remaining work is items 4-5 (manual), 6,
+9, and the `RecordedBackend.kt` half of 10 (8b done 2026-07-30).
 
 Replacing Ring with Reolink + Frigate: local RTSP, 24/7 recording, and AI event search,
 all on-prem. Phase 1 is the indoor cameras; the first is a **Reolink E1 Zoom** taking
@@ -44,15 +48,20 @@ Spans two repos:
 | 6 | Hawksnest | PTZ / IR / **privacy mode** controls | ⬜ |
 | 7 | Hawksnest | Dev proxy for `/go2rtc/` + `/ring-timeline/` | ✅ `4a56ef2` |
 | 8a | Hawksnest | Backend-capability refactor (`recordedBackend.ts`, `frigate.ts`) + tests | ✅ `4a56ef2` |
-| 8b | Hawksnest | Footage generalization — Frigate `/recordings` → `ringFootage` segments | ⬜ |
+| 8b | Hawksnest | Footage generalization — Frigate recordings → continuous lane | ✅ 2026-07-30 (via `frigate/recordings/get` WS — the planned REST `/recordings` route never existed, same as events/config) |
 | 6 | Hawksnest | PTZ / IR / **privacy mode** controls | ⬜ needs #5 |
 | 9 | Hawksnest | AI search screen, mock-ha fixtures, E2E | ⬜ |
-| 10 | Hawksnest | Android parity (`RecordedBackend.kt`, go2rtc stream-list gate) | ⬜ |
+| 10 | Hawksnest | Android parity (`RecordedBackend.kt` ⬜; go2rtc stream-list gate ✅ 2026-07-30) | 🟨 |
+| 11 | Hawksnest | **Direct-camera RTSP live tier** (Android-only; `/32` tailnet routes) | ✅ 2026-07-30 |
 | — | both | Remove the Ring bedroom camera from the Ring account for good | ⬜ after verify |
 
-Nothing is deployed. The branch has never been applied to a cluster. **The two repos are now
-knowingly out of lockstep on one point:** web derives its recorded backend, Android still gates on
-its own `isRing`. Item 10 closes that and should not be left to drift.
+~~Nothing is deployed.~~ **Deployed and live since 2026-07-29/30** — see the status line at the top;
+the notes further down that say "nothing is deployed" or "the camera is not on the network" are
+the pre-deployment record, kept for the reasoning, not the current state.
+
+**The two repos are still out of lockstep on one point:** web derives its recorded backend, Android
+still derives its own `isRing` for the RECORDED path. The go2rtc **live** gate half of item 10 is
+done (2026-07-30); `RecordedBackend.kt` remains and should not be left to drift.
 
 Retention decision (2026-07-29): bedroom is `continuous.days: 3`, not 14 — see below.
 
@@ -147,10 +156,26 @@ Commits 1-3 cannot deploy until these exist. All are Phase 0, all need the camer
 
       | stream | codec | resolution | fps | bitrate |
       |---|---|---|---|---|
-      | main (go2rtc live view) | **h264** High | **2560×1440** | 20 | 4096 kbps |
+      | main (go2rtc live view) | **h264** High | **2560×1440** | 20 | ~~4096~~ → **5120 kbps** |
       | sub (Frigate detect+record) | h264 High | 640×360 | 10 | 256 kbps |
 
       2560×1440 is what the design assumed from the start, so nothing downstream changed.
+
+      **Bitrate raised to 5120 on both E1 Zooms, 2026-07-30.** Leaving 4096 after the
+      h265→h264 switch was an oversight: h264 is markedly less efficient, and 2560×1440@20 at
+      4096 kbps is 0.056 bits/pixel/frame against the ~0.10–0.15 h264 wants — visibly soft and
+      blocky on motion. 5120 is the hardware maximum at this resolution (6144 and 7168 are
+      silently rejected — the same `SetEnc` trap below, caught by re-reading `GetEnc`).
+      The kitchen **E1 Pro (E330, 4 MP)** caps lower and stays at **3072 kbps**; it rejected
+      6144. **Its main stream is 2880×1616, not 1440p** (measured by ffprobe 2026-07-30 — don't
+      assume it matches the Zooms). That makes it the worst-off camera by a distance: 3072 kbps
+      over 2880×1616@20 is **0.033 bpp**, half the Zooms' 0.069 and a fifth of what h264 wants.
+      Since its bitrate ceiling is already reached, the only remaining levers are *fewer pixels*
+      or *fewer frames* — dropping it to 15 fps would buy ~33 % more bits per frame, and a lower
+      main resolution would buy more still. Untouched for now: worth judging on the RTSP/go2rtc
+      tier before changing anything. Note this is a *quality* fix and was never the cause of the jerkiness the owner
+      reported — that was Hawksnest's Android client falling back to segmented HLS
+      (item 10 divergence 1). Judge encoder quality only on a client using the go2rtc tier.
 
       > **Two traps, both worth remembering.**
       >
@@ -527,10 +552,13 @@ are `undefined` (the dead-playlist gap bug). Item 8 is correspondingly smaller t
 
 **Two Android divergences that break a naive port:**
 
-1. **Android has no go2rtc stream-list gate.** `CameraPlayer.kt:142` is
-   `canGo2rtc = isRing && Go2rtcHealth.maybeAvailable()` — a circuit-breaker only, no
-   `/go2rtc/api/streams` check. Dropping the `isRing` gate without porting that check
-   gives every camera an 8-second watchdog stall on first open. Same commit, not after.
+1. ~~**Android has no go2rtc stream-list gate.**~~ **DONE 2026-07-30** — `core/net/Go2rtcStreams`
+   ports web's cache (60 s TTL, fail-to-EMPTY-set, hosts `Go2rtcHealth`), and `CameraPlayer.kt`'s
+   `canGo2rtc` now asks it instead of `isRing`; both landed in one commit as required. This was
+   not just parity: the `isRing` gate was dropping every Reolink camera to segmented HLS, which
+   is what the owner reported as jumpy live video. The gate is tri-state — while the list is in
+   flight the ladder holds the WebRTC arms and must NOT resolve HLS (waking a battery camera's
+   stream pipeline is exactly what the lazy-HLS rule prevents).
 2. ~~**Android has no token accessor.**~~ **Already solved — verified 2026-07-29 against
    `main` @ `ffacfc1`.** `HaSource.kt:166-178` already does an authenticated
    `/api/frigate/events` read (`Bearer $token`), it is on the `Source` interface
@@ -658,6 +686,135 @@ Every Frigate config change therefore needs a **dual write** — the repo seed *
 `detect.enabled` fix above was applied both ways. To force a full re-seed instead, move
 `/config/config.yml` aside and restart, but that discards anything drawn in the UI.
 
+## BLOCKER: Frigate recorded playback 401s — the integration requires signed segment URLs
+
+**Found 2026-07-29 by testing in the app: live view works, Ring works, Frigate scrubbing is a
+black screen.** This is an app-side gap, not a misconfiguration, and it blocks item 8b/9 testing.
+
+frigate-hass-integration **v5.15.4 requires an `authSig` query parameter on every VOD *segment*
+request**. Playlists do not need it. `VodSegmentProxyView._async_validate_signed_manifest()` is
+unconditional — there is no config option to disable it, and a valid Bearer token is not enough.
+
+Measured, isolating each hop:
+
+| request | result |
+|---|---|
+| Frigate direct `:5000` → segment | 200 |
+| HA proxy → `master.m3u8` | 200 |
+| HA proxy → `index-v1-a1.m3u8` | 200 |
+| HA proxy → `seg-1-v1-a1.m4s` | **401** |
+| HA proxy → same segment **with `authSig`** | **200** (`video/mp4`) |
+
+The HA log line is the giveaway and is easy to miss:
+`Missing authSig query parameter on VOD segment request.`
+
+### Why it fails
+
+`recordingUrlAt()` (`src/lib/cameraEvents.ts:62`) builds a plain
+`/api/frigate/vod/<cam>/start/<s>/end/<e>/master.m3u8`. The manifest loads fine, hls.js then
+requests segments *relative to it* — and relative resolution **drops the query string**, so no
+segment ever carries a signature.
+
+### The fix, verified end to end
+
+`authSig` is a JWT signed with HA's `DATA_SIGN_SECRET`, obtained from the **`auth/sign_path`**
+WebSocket command. Crucially the validator only checks
+`claims["path"].startswith(request.path.rsplit("/", 1)[0])` — so **one signature for the manifest
+path covers every segment in that directory**. There is no need to sign each segment.
+
+1. `auth/sign_path` on the manifest path (`expires` ~600s), extract `authSig`.
+2. Load that signed URL as the HLS source.
+3. Configure hls.js `xhrSetup` to append the same `authSig` to segment requests.
+
+### ANDROID IS WORSE, AND ANDROID IS WHERE THIS WAS FOUND
+
+The above describes the **web** path. On **Android every request 401s, including the manifest** —
+measured with no auth header, exactly what the app sends today:
+
+```
+master.m3u8       -> 401
+index-v1-a1.m3u8  -> 401
+seg-1-v1-a1.m4s   -> 401
+```
+
+`VideoPlayer.kt` builds a bare `ExoPlayer.Builder(context).build()` and `Uri.parse(url)` — **no
+DataSource.Factory, no Authorization header anywhere.** That has never mattered before because
+Frigate VOD is the first thing Android plays that needs HA auth: live view goes through
+go2rtc/WebRTC, and Ring recorded goes through ring-timeline, which deliberately does not
+authenticate (see the note on `RingTimelineClient`). So this is a gap the Ring-only design never
+exposed, not a regression.
+
+### The design this points to (verified)
+
+**Signed URLs need no Bearer token at all** — measured, with no auth header:
+
+```
+master.m3u8 ?authSig=...  -> 200
+segment     ?authSig=...  -> 200
+```
+
+So both platforms want the same shape, and it is simpler than adding token plumbing:
+
+1. `auth/sign_path` on the manifest path → one `authSig`.
+2. Use the signed manifest URL as the source.
+3. Append that same `authSig` to every subsequent request — Android via a
+   `DataSource.Factory` wrapper, web via hls.js `xhrSetup`. Needed because both resolve segment
+   URLs relative to the manifest, which **drops the query string**.
+
+No Authorization header is required on either platform. Note the signature expires, so a long
+scrub session needs re-signing — pick `expires` accordingly and handle 401-on-refresh.
+
+### Remaining caveat, web only
+
+`xhrSetup` does not exist on native HLS. `HlsPlayer.tsx:106-115` loads hls.js only when the browser
+lacks native HLS, so Safari/iOS would still 401 on segments. Either force hls.js for Frigate VOD,
+rewrite the manifest in nginx to append `authSig` per line, or document native HLS as unsupported
+for Frigate recorded playback. **Android is unaffected by this particular choice.**
+
+## A single VOD manifest caps at ~3 hours — "one continuous VOD" does not scale
+
+**Measured 2026-07-29.** Frigate's `/vod/` endpoint 503s past roughly 3 hours:
+
+```
+ 60min -> 200 (330 segments)      190min -> 200 (778)
+120min -> 200                     220min -> 200 (940)
+180min -> 200                     230min -> 503
+```
+
+The cause is in Frigate's bundled nginx, not Frigate itself:
+
+```
+media_set_parse_durations: invalid number of elements in the durations array 1108
+```
+
+That is **nginx-vod-module's hard segment-count ceiling (~1024)**. At the ~11s segments these
+cameras produce it lands at ~3 hours. It is a compile-time constant, so it cannot be raised from
+config — only by rebuilding the module, which is not worth doing on a pinned upstream image.
+
+**This invalidates an assumption in the design, not just a nice-to-have.** ARCHITECTURE.md says the
+Frigate path is "one continuous VOD spanning the window", and `CameraPlayer` pins a **24h** window —
+which is already 8× over the limit. That path has never worked for a full window and never could;
+it only appeared to work in testing because short recent windows fall under the cap.
+
+### What scrubbing the full retention actually requires
+
+The owner's requirement (2026-07-29) is to scrub the whole retention period — 3 days today, and
+whatever `record.continuous.days` says later. That needs the timeline and the media to decouple:
+
+- **Timeline UI spans the full retention.** Purely presentational, cheap, and it is what makes the
+  3 days feel reachable. Today it is hardcoded `DAY_MS` (`CameraPlayer.kt:49,77`) with
+  `Timeline24h` clamping zoom to a 24h maximum, so both need to take the retention span instead.
+- **The VOD manifest becomes a bounded window that follows the playhead** — around 1-2h, safely
+  under the 1024-segment cap — refetched (and re-signed) when the playhead scrubs outside it.
+  This is the normal shape for long-retention NVR scrubbing; loading three days of segments up
+  front was never viable.
+- **Retention should be discovered, not hardcoded.** `/api/config` exposes
+  `record.continuous.days`, so the window can follow the Frigate config rather than drifting from
+  it the way a constant would.
+
+Note the interaction with signing: each window is a distinct path, so a new window needs a new
+`authSig`. Paging the window and re-signing are the same event, which keeps that simple.
+
 ## Verifying
 
 Locally, without a cluster:
@@ -704,3 +861,55 @@ what silently blocked every deploy for four days in July. Retiring ring-mqtt or
 ring-timeline; ten Ring cameras are still live.
 
 [genai-disc]: https://github.com/blakeblackshear/frigate/discussions/22224
+
+---
+
+## 11. Direct-camera RTSP live tier (Hawksnest Android) — built 2026-07-30
+
+**Why, when go2rtc already carries these streams.** go2rtc re-packages the camera's RTSP into
+WebRTC: continuous, but with a relay hop and (here) TCP transport. Playing the camera's own RTSP is
+what the Reolink app does, and it is the shortest path that exists. It is the **top** tier, not a
+replacement — it needs credentials, a routable camera IP, and one of the camera's few RTSP
+sessions, so anything that can't satisfy all three steps down to go2rtc.
+
+**Android-only, permanently.** Browsers cannot play RTSP at any level, so the web client's ceiling
+is and stays WebRTC. This is the one place the two ladders legitimately differ; `ReolinkRtsp.kt`
+has no web twin on purpose. Don't file it as a parity gap.
+
+Ladder is now: recorded VOD → **RTSP-direct** → go2rtc WebRTC → HA WebRTC → HLS → MJPEG → snapshot.
+
+**Setup is per-phone, in the app** (Settings → *Camera direct stream*): camera username, password,
+and a camera-name→IP list. Password is Keystore-wrapped like the HA token; the whole DataStore file
+is already excluded from cloud backup and device transfer. Nothing is baked into the repo — it is
+public, and the camera account is a house credential.
+
+**Network prerequisite:** per-camera `/32` Tailscale subnet routes, advertised by this host and
+approved in the admin console. Full runbook, including the `set --advertise-routes` replace-not-
+append trap, in `windows/README-windows.md`. Approved 2026-07-30 for `.37`, `.53`, `.64`.
+
+**New-camera runbook gains two steps:**
+1. Re-issue `tailscale set --advertise-routes=…` with **every** camera `/32` (it replaces the list),
+   then approve the new route in the admin console.
+2. Add the camera's name→IP row in the app's Settings on each phone that should use the tier.
+
+### Two things to keep in mind
+
+1. **RTSP session budget.** Reolink cameras allow only a handful of concurrent sessions. Frigate
+   holds the sub stream, go2rtc holds the main, and **each viewing phone takes another main**. An
+   over-budget open is rejected by the camera, which the app treats as a fail-fast → go2rtc. That
+   is the designed behaviour, but it means "live view got slower when two people watched at once"
+   has a real cause. If it becomes common, point the phone at the sub stream instead.
+2. **Fixed bitrate has no adaptation.** The main stream is ~5 Mbps regardless of link quality, so a
+   weak cellular connection degrades to a *stall*, not to lower quality. The player treats a
+   7-second post-play stall as a failure and steps down to go2rtc, which does adapt. The stall is
+   deliberately NOT recorded against the camera's circuit-breaker — the camera was fine.
+
+Failure handling is per-camera (`core/net/RtspHealth`), unlike go2rtc's process-wide breaker:
+go2rtc is one shared service so one failure predicts all, whereas each camera is its own server and
+a global verdict would let one powered-off camera downgrade the whole fleet for the session.
+
+**Cleartext invariant is intact and was verified, not assumed:** `media3-exoplayer-rtsp` 1.10.1 has
+zero references to `NetworkSecurityPolicy`, and `RtspClient`/`RtspMessageChannel` use raw
+`java.net.Socket` — the policy only binds cooperating HTTP stacks. Hawksnest's
+`cleartextTrafficPermitted="false"` needed no exception. If a future media3 changes that, stop and
+discuss: a scoped `<domain-config>` cannot match bare IPs.
