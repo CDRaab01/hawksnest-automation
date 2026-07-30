@@ -27,11 +27,32 @@ function Ensure-DistroRunning {
   Write-Warning "Distro '$Distro' did not report running within ~20s; attaching anyway."
 }
 
-# 1. Find the stick by VID:PID and attach it to WSL (no-op if already attached).
+# 1. Find the stick by VID:PID and attach it to WSL.
+#
+# The attach is preceded by a DETACH, and that is load-bearing after a
+# `wsl --shutdown` — do not "optimise" it away as redundant.
+#
+# Why: `usbipd attach` is a no-op when usbipd already believes the device is
+# attached, and a `wsl --shutdown` tears down the WSL side WITHOUT usbipd
+# noticing. usbipd keeps reporting STATE=Attached while the distro has no
+# /dev/ttyACM0 at all, so a plain attach silently does nothing and the stick
+# never comes back. The stale /dev/serial/by-id symlink left pointing at the
+# missing ttyACM0 then makes containerd fail the pod with:
+#   failed to generate spec: failed to mkdir ".../usb-Nabu_Casa_ZWA-2_...-if00":
+#   file exists
+# and zwave-js-ui sits in CreateContainerError with the locks offline.
+#
+# Observed 2026-07-29: this task ran on its 3-minute schedule and exited 0
+# repeatedly while the locks stayed down, precisely because attach was a no-op.
+# A detach first forces usbipd to rebuild the binding.
 $line = usbipd list | Select-String $HardwareId | Select-Object -First 1
 if ($line) {
   $busId = ($line.ToString().Trim() -split '\s+')[0]
   Ensure-DistroRunning -Distro $Distro
+  # Detach is best-effort: it fails harmlessly when nothing is attached.
+  Write-Host "Detaching ZWA-2 at bus id $busId (clears any stale binding) ..."
+  usbipd detach --busid $busId 2>$null
+  Start-Sleep -Seconds 2
   Write-Host "Attaching ZWA-2 at bus id $busId to '$Distro' ..."
   usbipd attach --busid $busId --wsl $Distro 2>$null
 } else {
