@@ -57,10 +57,18 @@ data:
 
     record:
       enabled: true
-      # 24/7 continuous. The old ~5.3 GB/day figure was a guess; the camera's own
-      # GetEnc reports the sub stream at **256 kbps**, which is ~2.8 GB/day, so 3 days
-      # is **~8 GB** for this camera — half what was budgeted. Still verify with
-      # `df -h` after 24h rather than trusting arithmetic on a nominal bitrate.
+      # 24/7 continuous. Budget from MEASURED sub-stream bitrates, not nominal specs,
+      # and note the cameras are not interchangeable:
+      #   big_room             (E1 Zoom)  256 kbps  ~2.8 GB/day
+      #   first_floor_stairway (E1 Zoom)  256 kbps  ~2.8 GB/day
+      #   kitchen              (E1 Pro)  1024 kbps ~11.1 GB/day   <-- 4x the others
+      # ~16.7 GB/day total, so 3 days is ~50 GB against ~900 GB free. Comfortable, but
+      # the kitchen alone is more than both Zooms combined — if disk ever becomes the
+      # constraint, lowering that camera's sub-stream bitrate is the biggest single
+      # lever, and it costs recorded quality rather than detection (detect only needs
+      # the geometry to match).
+      #
+      # Still verify with `df -h` after 24h rather than trusting this arithmetic.
       #
       # Retargeted 2026-07-29: the first camera is the BIG ROOM, not a bedroom. The
       # original `3` was chosen specifically to avoid two weeks of bedroom footage on
@@ -240,6 +248,58 @@ data:
           # /api/stats should read detection_fps 0.0 rather than a constant 5.0.
           # A mask that misses the clock leaves detection running on every frame
           # 24/7; one that is too large silently suppresses real detections.
+          mask:
+            - 0.26,0.015,0.72,0.015,0.72,0.11,0.26,0.11
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          genai:
+            enabled: true
+            objects:
+              - person
+
+      # -----------------------------------------------------------------------
+      kitchen:
+        # Replaces the RING kitchen camera (2026-07-29), same slug as big_room and
+        # first_floor_stairway before it.
+        #
+        # DIFFERENT HARDWARE from the other two: this is an E1 **Pro** (itemNo
+        # "E Series E330"), firmware v3.1.0.4417 — not an E1 Zoom (E340, v3.2.0.4741).
+        # Nothing about the Zooms' stream settings carries over, and the differences
+        # are the silent kind:
+        #   sub   896x512  @10  1024 kbps   (Zooms: 640x360 @10, 256 kbps)
+        #   main  2880x1616 @20 3072 kbps   (Zooms: 2560x1440 @20)
+        # Copying the Zooms' 640x360 detect here would have misplaced every bounding
+        # box without erroring.
+        #
+        # It also needs NO H.265 fix: 4MP Reolinks ship h264 on both streams, so the
+        # 4K/H.265 SetEnc dance both Zooms required does not apply. Confirmed by
+        # ffprobe — GetEnc on this older firmware omits vType entirely, so the camera
+        # cannot tell you the codec and ffprobe is the only source of truth.
+        ffmpeg:
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_KITCHEN}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          # Frigate 0.17 defaults this to FALSE when absent — see big_room.
+          enabled: true
+          # VERIFIED by ffprobe 2026-07-29 against 192.168.4.64: h264 High, 896x512,
+          # 10 fps. NOT the 640x360 the other two use.
+          width: 896
+          height: 512
+          # Same 10-sends / 5-detects split as the others.
+          fps: 5
+        motion:
+          # Timestamp OSD mask. The box is carried over from the Zooms because the OSD
+          # sits in the same relative place, but this frame is 896x512 with a slightly
+          # different aspect ratio, so the fit is NOT guaranteed.
+          # CONFIRM once live: /api/kitchen/latest.jpg?motion=1 should show no motion
+          # box on the clock in an empty kitchen, and detection_fps should read 0.0
+          # rather than a constant 5.0. Adjust the box if it misses.
           mask:
             - 0.26,0.015,0.72,0.015,0.72,0.11,0.26,0.11
         objects:
