@@ -169,6 +169,24 @@ data:
           # Dropping the camera to 5 would degrade recordings to save decode work
           # that is negligible at 640x360.
           fps: 5
+        motion:
+          # Mask the camera's OSD TIMESTAMP. The clock repaints every second, and
+          # Frigate reads that as motion — continuously, forever, in an empty room.
+          # Because object detection only runs where there is motion, an unmasked
+          # timestamp means detection runs on EVERY frame 24/7: wasted inference,
+          # and every passing object gets scored against a permanently-hot detector.
+          #
+          # Measured 2026-07-29, and the numbers make the case better than prose:
+          #   before mask -> detection_fps 5.0 constantly, empty room
+          #   after mask  -> detection_fps 0.0, empty room
+          # Confirmed visually first: /api/<cam>/latest.jpg?motion=1 drew a motion
+          # box squarely on the seconds digits with nobody in the room.
+          #
+          # Normalised 0-1 over the 640x360 detect frame. Re-check this box if the
+          # camera's OSD position or the detect resolution ever changes — a mask
+          # that no longer covers the clock silently restores the old behaviour.
+          mask:
+            - 0.26,0.015,0.72,0.015,0.72,0.11,0.26,0.11
         objects:
           track:
             - person
