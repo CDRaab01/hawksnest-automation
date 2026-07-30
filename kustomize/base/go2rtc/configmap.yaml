@@ -88,12 +88,23 @@ data:
       # at five cameras. Each camera still gets its own IP variable.
       big_room: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
       first_floor_stairway: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_main"
+      # `<name>_sub` = the same camera's SUB stream (640x360 / 896x512, ~256-1024
+      # kbps), for the app's Low/High live-quality toggle (added 2026-07-30). The
+      # main stream is fixed-bitrate with no adaptation, so a weak cellular link
+      # stalls rather than degrades — Low keeps a live picture at ~1/20 the
+      # bandwidth. go2rtc opens streams on demand: these cost nothing while nobody
+      # selects Low, and one extra RTSP session to the camera while someone does
+      # (an independent connection from Frigate's, which reads the same sub stream
+      # — mind the per-camera RTSP session budget in plan.md).
+      big_room_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BIG_ROOM}:554/h264Preview_01_sub"
+      first_floor_stairway_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_sub"
       # kitchen is an E1 **Pro** (E330), not an E1 Zoom like the two above. Its main
       # stream is 2880x1616 and already h264 — the 4K/H.265 default that had to be
       # fixed on both Zooms does not apply to the 4MP models. Nothing to do here, but
       # do not assume the Zoom settings transfer; they do not (see the Frigate seed,
       # where this camera's detect geometry is completely different).
       kitchen: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_KITCHEN}:554/h264Preview_01_main"
+      kitchen_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_KITCHEN}:554/h264Preview_01_sub"
 
       # --- Ring (cloud) ---------------------------------------------------------
       # ONE entry per Ring camera you want to talk through. The stream NAME MUST
