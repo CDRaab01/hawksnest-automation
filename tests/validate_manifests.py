@@ -247,6 +247,13 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
             check(("config", "/config") in mounts,
                   "go2rtc main container must mount the 'config' volume at /config "
                   "(without it, seeded streams never reach go2rtc)")
+            # Pinned image, same rationale as Frigate's check below: go2rtc's config
+            # schema and stream-source behavior move between releases, and this
+            # deployment re-seeds go2rtc.yaml on every pod start — a floating tag
+            # would pair tomorrow's binary with today's config on any recreate.
+            image = main.get("image", "")
+            check(not image.endswith((":stable", ":latest")) and ":" in image,
+                  f"go2rtc image must be pinned to an exact version, got '{image}'")
 
     # 5c. Frigate: three invariants that each guard a failure we can't see at deploy
     #     time — a leaked snapshot, a wedged pod, and an evicted neighbour.

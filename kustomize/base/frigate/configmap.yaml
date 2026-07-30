@@ -141,6 +141,18 @@ data:
             # go2rtc serves the MAIN stream for live view on its own connection, so
             # recording and live view have independent failure domains — a go2rtc
             # restart must never punch a hole in the 24/7 timeline.
+            #
+            # NO input_args ON PURPOSE (applies to all three cameras). Frigate
+            # 0.17's default RTSP preset already supplies what an explicit override
+            # would: verified 2026-07-30 against the RUNNING ffmpeg processes
+            # (/proc/<pid>/cmdline in the pod), which carry
+            #   -rtsp_transport tcp -timeout 10000000
+            #   -avoid_negative_ts make_zero -fflags +genpts+discardcorrupt
+            #   -use_wallclock_as_timestamps 1
+            # plus ffmpeg.retry_interval 10s for reconnects. Pinning input_args
+            # here would freeze today's preset and silently opt out of upstream
+            # fixes on the 0.18 upgrade. Re-verify the cmdline after any Frigate
+            # version bump instead.
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BIG_ROOM}:554/h264Preview_01_sub"
               roles:
                 - detect
@@ -241,15 +253,20 @@ data:
           fps: 5
         motion:
           # Same OSD timestamp mask as big_room. Same camera model, same firmware and
-          # the same 640x360 detect frame, so the clock sits in the same place — but
-          # CONFIRM IT ONCE the camera is live:
-          #   /api/first_floor_stairway/latest.jpg?motion=1
-          # should show no motion box on the clock in an empty stairway, and
-          # /api/stats should read detection_fps 0.0 rather than a constant 5.0.
-          # A mask that misses the clock leaves detection running on every frame
-          # 24/7; one that is too large silently suppresses real detections.
+          # the same 640x360 detect frame, so the clock sits in the same place.
+          # CONFIRMED 2026-07-30 (/api/first_floor_stairway/latest.jpg?motion=1):
+          # no motion box on the clock.
+          #
+          # SECOND MASK — the CEILING FAN. The same debug frame drew detection
+          # regions squarely on the spinning fan blades (top-right of frame): a
+          # 24/7 motion source exactly like the clock, keeping the detector hot
+          # all night in an empty house (detection_fps was pinned at 13-16 with
+          # the fan running). Nobody appears at ceiling height, so masking the
+          # fan's sweep costs nothing. Re-check both boxes if the OSD position,
+          # the fan, or the detect resolution ever changes.
           mask:
             - 0.26,0.015,0.72,0.015,0.72,0.11,0.26,0.11
+            - 0.76,0.0,1.0,0.0,1.0,0.42,0.76,0.42
         objects:
           track:
             - person
@@ -295,11 +312,11 @@ data:
           fps: 5
         motion:
           # Timestamp OSD mask. The box is carried over from the Zooms because the OSD
-          # sits in the same relative place, but this frame is 896x512 with a slightly
-          # different aspect ratio, so the fit is NOT guaranteed.
-          # CONFIRM once live: /api/kitchen/latest.jpg?motion=1 should show no motion
-          # box on the clock in an empty kitchen, and detection_fps should read 0.0
-          # rather than a constant 5.0. Adjust the box if it misses.
+          # sits in the same relative place; the frame is 896x512 with a slightly
+          # different aspect ratio, but normalised coordinates absorb that.
+          # CONFIRMED 2026-07-30: /api/kitchen/latest.jpg?motion=1 showed no motion
+          # box on the clock, and detection_fps read 0.0 with the kitchen empty.
+          # Re-check if the OSD position or detect resolution ever changes.
           mask:
             - 0.26,0.015,0.72,0.015,0.72,0.11,0.26,0.11
         objects:

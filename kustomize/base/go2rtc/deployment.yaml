@@ -53,7 +53,13 @@ spec:
               mountPath: /seed
       containers:
         - name: go2rtc
-          image: alexxit/go2rtc:latest
+          # PINNED (2026-07-30, was :latest). Same rationale as the Frigate pin,
+          # enforced by the same tests/validate_manifests.py check: config schema
+          # and stream-source behavior move between releases, and an unpinned tag
+          # upgrades silently on any pod recreate — on THIS deployment that also
+          # re-seeds go2rtc.yaml, so a schema change would wedge every stream at
+          # once. Bump deliberately.
+          image: alexxit/go2rtc:1.9.14
           # The image defaults to -config /config/go2rtc.yaml, which is our PVC.
           #
           # THE MOUNT BELOW IS LOAD-BEARING: this container originally shipped with

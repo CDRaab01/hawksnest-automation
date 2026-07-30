@@ -894,6 +894,19 @@ append trap, in `windows/README-windows.md`. Approved 2026-07-30 for `.37`, `.53
 
 ### Two things to keep in mind
 
+0. **In-cluster API exposure is an ACCEPTED RISK, and NetworkPolicy cannot narrow it today**
+   (audited 2026-07-30). Frigate `:5000` and go2rtc `:1984` are unauthenticated ClusterIP
+   surfaces — by upstream design for `:5000` (frigate-hass-integration expects it) — reachable
+   by anything in the namespace. The obvious fix, a NetworkPolicy restricting them to the HA
+   and Hawksnest pods, was written and then withdrawn: **this k3s runs `--disable-network-policy`**,
+   so the policy would sit in the cluster enforcing nothing — protection that reads as present
+   but isn't, which is worse than a recorded gap. Enabling enforcement means removing the flag
+   and restarting k3s (a full cluster restart on the node that runs the door locks), so it is
+   deliberate scheduled work, not a drive-by: do it at the next planned k3s maintenance window,
+   then land the policies. Until then the guards are: single-tenant cluster, the split
+   frigate/frigate-ui Services (5000 is never NodePort-exposed), and Frigate's authenticated
+   UI on `:8971`.
+
 1. **RTSP session budget.** Reolink cameras allow only a handful of concurrent sessions. Frigate
    holds the sub stream, go2rtc holds the main, and **each viewing phone takes another main**. An
    over-budget open is rejected by the camera, which the app treats as a fail-fast → go2rtc. That
