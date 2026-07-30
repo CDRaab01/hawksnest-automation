@@ -743,6 +743,50 @@ lacks native HLS, so Safari/iOS would still 401 on segments. Either force hls.js
 rewrite the manifest in nginx to append `authSig` per line, or document native HLS as unsupported
 for Frigate recorded playback. **Android is unaffected by this particular choice.**
 
+## A single VOD manifest caps at ~3 hours — "one continuous VOD" does not scale
+
+**Measured 2026-07-29.** Frigate's `/vod/` endpoint 503s past roughly 3 hours:
+
+```
+ 60min -> 200 (330 segments)      190min -> 200 (778)
+120min -> 200                     220min -> 200 (940)
+180min -> 200                     230min -> 503
+```
+
+The cause is in Frigate's bundled nginx, not Frigate itself:
+
+```
+media_set_parse_durations: invalid number of elements in the durations array 1108
+```
+
+That is **nginx-vod-module's hard segment-count ceiling (~1024)**. At the ~11s segments these
+cameras produce it lands at ~3 hours. It is a compile-time constant, so it cannot be raised from
+config — only by rebuilding the module, which is not worth doing on a pinned upstream image.
+
+**This invalidates an assumption in the design, not just a nice-to-have.** ARCHITECTURE.md says the
+Frigate path is "one continuous VOD spanning the window", and `CameraPlayer` pins a **24h** window —
+which is already 8× over the limit. That path has never worked for a full window and never could;
+it only appeared to work in testing because short recent windows fall under the cap.
+
+### What scrubbing the full retention actually requires
+
+The owner's requirement (2026-07-29) is to scrub the whole retention period — 3 days today, and
+whatever `record.continuous.days` says later. That needs the timeline and the media to decouple:
+
+- **Timeline UI spans the full retention.** Purely presentational, cheap, and it is what makes the
+  3 days feel reachable. Today it is hardcoded `DAY_MS` (`CameraPlayer.kt:49,77`) with
+  `Timeline24h` clamping zoom to a 24h maximum, so both need to take the retention span instead.
+- **The VOD manifest becomes a bounded window that follows the playhead** — around 1-2h, safely
+  under the 1024-segment cap — refetched (and re-signed) when the playhead scrubs outside it.
+  This is the normal shape for long-retention NVR scrubbing; loading three days of segments up
+  front was never viable.
+- **Retention should be discovered, not hardcoded.** `/api/config` exposes
+  `record.continuous.days`, so the window can follow the Frigate config rather than drifting from
+  it the way a constant would.
+
+Note the interaction with signing: each window is a distinct path, so a new window needs a new
+`authSig`. Paging the window and re-signing are the same event, which keeps that simple.
+
 ## Verifying
 
 Locally, without a cluster:
