@@ -44,8 +44,8 @@ Spans two repos:
 | 2 | automation | Reolink main stream via go2rtc (live view) | ✅ `98e411d` |
 | 3 | automation | Frigate deployment, PVCs, config seed, staging park, invariants | ✅ `d7d7321` |
 | 4 | automation | Frigate admin UI exposure (NodePort + socat + firewall rule) | ✅ `d3c13e1` + `3370f5e` (Serve `:8447`, https+insecure) |
-| 5 | HA | HACS + frigate-hass-integration + Reolink integration | 🟨 manual — frigate-hass-integration ✅ live; **Reolink integration ⬜** (Phase 0 of the 2026-07-30 audit plan: admin account + HTTPS port per camera first) |
-| 6 | Hawksnest | PTZ / IR / **privacy mode** controls | ⬜ needs #5 (design settled 2026-07-30: HA Reolink integration entities + PtzPad/Zoom/Focus/Preset chrome, both platforms) |
+| 5 | HA | HACS + frigate-hass-integration + Reolink integration | ✅ both live (verified 2026-07-30 — see "PTZ: what is actually there") |
+| 6 | Hawksnest | PTZ / IR / **privacy mode** controls | ⬜ ready to build — entity surface measured 2026-07-30, no blockers left |
 | 7 | Hawksnest | Dev proxy for `/go2rtc/` + `/ring-timeline/` | ✅ `4a56ef2` |
 | 8a | Hawksnest | Backend-capability refactor (`recordedBackend.ts`, `frigate.ts`) + tests | ✅ `4a56ef2` |
 | 8b | Hawksnest | Footage generalization — Frigate recordings → continuous lane | ✅ 2026-07-30 (via `frigate/recordings/get` WS — the planned REST `/recordings` route never existed, same as events/config) |
@@ -890,6 +890,59 @@ append trap, in `windows/README-windows.md`. Approved 2026-07-30 for `.37`, `.53
 1. Re-issue `tailscale set --advertise-routes=…` with **every** camera `/32` (it replaces the list),
    then approve the new route in the admin console.
 2. Add the camera's name→IP row in the app's Settings on each phone that should use the tier.
+
+### PTZ: what is actually there (measured 2026-07-30, supersedes the guesses above)
+
+The pre-deployment notes in this file say ONVIF port 8000 is closed, only 9000 is open, and
+the Reolink integration is not installed. **All three are now false** — measured against the
+live cameras and the running HA, not inferred:
+
+- **Open ports on all three cameras: 80, 554, 8000, 9000.** The HTTP API and ONVIF are both
+  reachable; nothing needs enabling on the cameras for PTZ.
+- **The official Reolink integration is installed and its entities exist.** The earlier
+  "not installed" reading came from the HA *seed* ConfigMap, which cannot show it: UI-installed
+  integrations live in `.storage/core.config_entries`, never in `configuration.yaml`. Don't
+  conclude an integration is absent from the seed alone.
+- **The `camera.*` collision trap never fired** — the integration's own camera entities are not
+  present, so `camera.big_room` / `first_floor_stairway` / `kitchen` remain the Frigate ones.
+  Keep it that way if the integration is ever re-added.
+
+Entity surface, per camera (from `/api/states`):
+
+| | big_room (E1 Zoom) | stairway (E1 Zoom) | kitchen (E1 Pro) |
+|---|---|---|---|
+| `button.<n>_ptz_{up,down,left,right,stop,calibrate}` | ✅ | ✅ | ✅ |
+| `number.<n>_zoom` (0–32) / `number.<n>_focus` (0–285) | ✅ | ✅ | ✖ none |
+| `switch.<n>_auto_focus` | ✅ | ✅ | ✖ none |
+| `sensor.<n>_ptz_{pan,tilt}_position` | ✅ | ✅ | ✅ |
+| `select.<n>_ptz_preset` | ✖ | ✖ | ✖ |
+
+Three consequences the client work must respect:
+
+1. **The Reolink device name is NOT always the camera base.** The stairway's PTZ entities are
+   `button.stairway_ptz_*` / `number.stairway_zoom`, while its Frigate camera is
+   `camera.first_floor_stairway`. Deriving PTZ entity ids from the camera base would silently
+   drop PTZ on that camera — capability detection must tolerate an alias, not assume equality.
+2. **No preset select exists, and that is a camera-side fact, not a bug.** `GetPtzPreset`
+   returns six slots (`pos1`…`pos6`) all with `enable: 0` — nothing is saved, so the
+   integration creates no select. Save a preset in the Reolink app and the entity appears.
+3. **Custom PTZ speed is unsupported on this hardware.** The camera's own `GetAbility` reports
+   `supportPtzSpeed: {permit: 0, ver: 0}`, so `reolink.ptz_move` with a speed argument is out —
+   plain button presses are the whole vocabulary. (Same probe confirms what IS supported:
+   `ptzCtrl` ver 2, `supportPt`, `supportZoom`, `supportFocus`, `disableAutoFocus`, `ptzPreset`,
+   `ptzPatrol`, and `aiTrack` — the E1 Zooms can auto-track, which Frigate's own autotracking
+   cannot drive.) `supportDigitalZoom: permit 0` — the zoom is optical only.
+
+**Still unmeasured: press semantics.** Whether a direction press moves continuously until
+`ptz_stop` or advances one step was not tested, because the test physically re-aims a recording
+camera. The dedicated stop button and the absence of a speed parameter both point to
+continuous, but it is unverified. The client design does not depend on the answer: press on
+touch-down, `ptz_stop` on release/unmount covers both (continuous → hold-to-move; step → one
+step per tap, with the stop a harmless no-op). Confirm it during the on-device smoke test.
+
+Baseline aim, if a test ever needs restoring: big_room pan 5345 / tilt 0 / zoom 15 / focus 187;
+stairway pan 3314 / tilt 750 / zoom 0 / focus 36; kitchen pan 3682 / tilt 382. Autofocus on for
+both Zooms.
 
 ### Two things to keep in mind
 
