@@ -698,19 +698,50 @@ path covers every segment in that directory**. There is no need to sign each seg
 2. Load that signed URL as the HLS source.
 3. Configure hls.js `xhrSetup` to append the same `authSig` to segment requests.
 
-### The caveat that decides the design
+### ANDROID IS WORSE, AND ANDROID IS WHERE THIS WAS FOUND
 
-**Step 3 does not work on native HLS.** `HlsPlayer.tsx:106-115` uses hls.js only when the browser
-lacks native HLS; Safari/iOS play the manifest natively, where there is no `xhrSetup` hook and the
-integration does not rewrite segment URLs. Options, in order of preference:
+The above describes the **web** path. On **Android every request 401s, including the manifest** —
+measured with no auth header, exactly what the app sends today:
 
-- Force hls.js even where native HLS exists, for Frigate VOD only (smallest change, costs the
-  native path on Safari).
-- Proxy/rewrite the manifest in Hawksnest's nginx to append `authSig` per segment line (works
-  everywhere, but puts URL rewriting in nginx).
-- Leave native HLS unsupported for Frigate recorded playback and document it.
+```
+master.m3u8       -> 401
+index-v1-a1.m3u8  -> 401
+seg-1-v1-a1.m4s   -> 401
+```
 
-Android is unaffected — ExoPlayer is a separate path and needs the same signature added there.
+`VideoPlayer.kt` builds a bare `ExoPlayer.Builder(context).build()` and `Uri.parse(url)` — **no
+DataSource.Factory, no Authorization header anywhere.** That has never mattered before because
+Frigate VOD is the first thing Android plays that needs HA auth: live view goes through
+go2rtc/WebRTC, and Ring recorded goes through ring-timeline, which deliberately does not
+authenticate (see the note on `RingTimelineClient`). So this is a gap the Ring-only design never
+exposed, not a regression.
+
+### The design this points to (verified)
+
+**Signed URLs need no Bearer token at all** — measured, with no auth header:
+
+```
+master.m3u8 ?authSig=...  -> 200
+segment     ?authSig=...  -> 200
+```
+
+So both platforms want the same shape, and it is simpler than adding token plumbing:
+
+1. `auth/sign_path` on the manifest path → one `authSig`.
+2. Use the signed manifest URL as the source.
+3. Append that same `authSig` to every subsequent request — Android via a
+   `DataSource.Factory` wrapper, web via hls.js `xhrSetup`. Needed because both resolve segment
+   URLs relative to the manifest, which **drops the query string**.
+
+No Authorization header is required on either platform. Note the signature expires, so a long
+scrub session needs re-signing — pick `expires` accordingly and handle 401-on-refresh.
+
+### Remaining caveat, web only
+
+`xhrSetup` does not exist on native HLS. `HlsPlayer.tsx:106-115` loads hls.js only when the browser
+lacks native HLS, so Safari/iOS would still 401 on segments. Either force hls.js for Frigate VOD,
+rewrite the manifest in nginx to append `authSig` per line, or document native HLS as unsupported
+for Frigate recorded playback. **Android is unaffected by this particular choice.**
 
 ## Verifying
 
