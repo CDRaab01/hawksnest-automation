@@ -1,0 +1,23 @@
+# Weekly check that the LIVE Frigate config still matches the repo seed
+# (kustomize/base/frigate/configmap.yaml). The seed is first-boot-only, so every
+# real change is a dual write — this catches the forgotten half. A red run means
+# drift; the log names each differing key and which side has what.
+#
+# Triggers are schedule + manual ONLY — never pull_request: this runs on the
+# self-hosted runner on the prod host, and the repo is public (see the suite
+# invariant about fork PRs and self-hosted runners).
+name: frigate-drift
+
+on:
+  schedule:
+    - cron: "0 13 * * 1" # Mondays 09:00 America/New_York (13:00 UTC)
+  workflow_dispatch: {}
+
+jobs:
+  drift-check:
+    runs-on: [self-hosted, linux, dragonfly]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare live Frigate config against the seed
+        run: ./scripts/frigate-drift-check.sh
