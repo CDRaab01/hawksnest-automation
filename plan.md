@@ -658,6 +658,60 @@ Every Frigate config change therefore needs a **dual write** — the repo seed *
 `detect.enabled` fix above was applied both ways. To force a full re-seed instead, move
 `/config/config.yml` aside and restart, but that discards anything drawn in the UI.
 
+## BLOCKER: Frigate recorded playback 401s — the integration requires signed segment URLs
+
+**Found 2026-07-29 by testing in the app: live view works, Ring works, Frigate scrubbing is a
+black screen.** This is an app-side gap, not a misconfiguration, and it blocks item 8b/9 testing.
+
+frigate-hass-integration **v5.15.4 requires an `authSig` query parameter on every VOD *segment*
+request**. Playlists do not need it. `VodSegmentProxyView._async_validate_signed_manifest()` is
+unconditional — there is no config option to disable it, and a valid Bearer token is not enough.
+
+Measured, isolating each hop:
+
+| request | result |
+|---|---|
+| Frigate direct `:5000` → segment | 200 |
+| HA proxy → `master.m3u8` | 200 |
+| HA proxy → `index-v1-a1.m3u8` | 200 |
+| HA proxy → `seg-1-v1-a1.m4s` | **401** |
+| HA proxy → same segment **with `authSig`** | **200** (`video/mp4`) |
+
+The HA log line is the giveaway and is easy to miss:
+`Missing authSig query parameter on VOD segment request.`
+
+### Why it fails
+
+`recordingUrlAt()` (`src/lib/cameraEvents.ts:62`) builds a plain
+`/api/frigate/vod/<cam>/start/<s>/end/<e>/master.m3u8`. The manifest loads fine, hls.js then
+requests segments *relative to it* — and relative resolution **drops the query string**, so no
+segment ever carries a signature.
+
+### The fix, verified end to end
+
+`authSig` is a JWT signed with HA's `DATA_SIGN_SECRET`, obtained from the **`auth/sign_path`**
+WebSocket command. Crucially the validator only checks
+`claims["path"].startswith(request.path.rsplit("/", 1)[0])` — so **one signature for the manifest
+path covers every segment in that directory**. There is no need to sign each segment.
+
+1. `auth/sign_path` on the manifest path (`expires` ~600s), extract `authSig`.
+2. Load that signed URL as the HLS source.
+3. Configure hls.js `xhrSetup` to append the same `authSig` to segment requests.
+
+### The caveat that decides the design
+
+**Step 3 does not work on native HLS.** `HlsPlayer.tsx:106-115` uses hls.js only when the browser
+lacks native HLS; Safari/iOS play the manifest natively, where there is no `xhrSetup` hook and the
+integration does not rewrite segment URLs. Options, in order of preference:
+
+- Force hls.js even where native HLS exists, for Frigate VOD only (smallest change, costs the
+  native path on Safari).
+- Proxy/rewrite the manifest in Hawksnest's nginx to append `authSig` per segment line (works
+  everywhere, but puts URL rewriting in nginx).
+- Leave native HLS unsupported for Frigate recorded playback and document it.
+
+Android is unaffected — ExoPlayer is a separate path and needs the same signature added there.
+
 ## Verifying
 
 Locally, without a cluster:
