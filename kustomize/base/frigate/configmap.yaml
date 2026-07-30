@@ -257,16 +257,26 @@ data:
           # CONFIRMED 2026-07-30 (/api/first_floor_stairway/latest.jpg?motion=1):
           # no motion box on the clock.
           #
-          # SECOND MASK — the CEILING FAN. The same debug frame drew detection
-          # regions squarely on the spinning fan blades (top-right of frame): a
-          # 24/7 motion source exactly like the clock, keeping the detector hot
-          # all night in an empty house (detection_fps was pinned at 13-16 with
-          # the fan running). Nobody appears at ceiling height, so masking the
-          # fan's sweep costs nothing. Re-check both boxes if the OSD position,
-          # the fan, or the detect resolution ever changes.
+          # TWO MORE MASKS — the CEILING FANS, both of them. The debug frame drew
+          # detection regions squarely on spinning fan blades: a 24/7 motion
+          # source exactly like the clock, keeping the detector hot all night in
+          # an empty house (detection_fps was pinned at 13-16). Nobody appears at
+          # ceiling height, so masking the sweeps costs nothing.
+          #
+          # The second fan was only found by re-checking AFTER masking the first
+          # (2026-07-30): with the big right-hand fan quiet, detection_fps settled
+          # at 1.6-1.9 rather than 0.0, and the fresh debug frame boxed a second
+          # fan through the doorway at top-LEFT. Masking one motion source can
+          # reveal the next — verify to 0.0, don't stop at "better".
+          #   fan 1 (right, in-room):    0.76,0.0 .. 1.0,0.42
+          #   fan 2 (left, thru doorway): 0.0,0.23 .. 0.18,0.44
+          # VERIFIED 2026-07-30: detection_fps 0.0 on an empty stairway, no boxes.
+          # Re-check every box if the OSD position, either fan, or the detect
+          # resolution ever changes.
           mask:
             - 0.26,0.015,0.72,0.015,0.72,0.11,0.26,0.11
             - 0.76,0.0,1.0,0.0,1.0,0.42,0.76,0.42
+            - 0.0,0.23,0.18,0.23,0.18,0.44,0.0,0.44
         objects:
           track:
             - person
