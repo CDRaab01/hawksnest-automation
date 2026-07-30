@@ -32,6 +32,7 @@ resources:
   - frigate/deployment.yaml
   - frigate/service.yaml
   - frigate/service-ui.yaml
+  - frigate/backup-cronjob.yaml
   - ring-timeline/deployment.yaml
   - ring-timeline/service.yaml
   - ntfy/configmap.yaml

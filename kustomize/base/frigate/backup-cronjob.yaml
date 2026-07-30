@@ -1,0 +1,62 @@
+# Nightly copy of Frigate's LIVE /config/config.yml onto the NFS-backed ha-config
+# PVC, because the live config is the ONLY home of two things the repo cannot hold:
+#   * zones drawn in Frigate's UI (deliberately uncommitted — see the seed ConfigMap),
+#   * every dual-write change made since first boot (the seed is first-boot-only).
+# frigate-config is local-path BY DESIGN (SQLite index must not live on NFS), which
+# also puts it outside the Synology-snapshot backup story — so a disk loss silently
+# discards all zone tuning. This copies the one small file that matters into
+# `ha-config/frigate-backup/`, riding the existing NFS backup + snapshots with no
+# new PV, NAS folder, or credential. Seven-day rotation by weekday name.
+#
+# Both PVCs are RWO but this is a single-node cluster, so a second same-node mount
+# is fine. concurrencyPolicy Forbid + a tight deadline keep a wedged run from piling
+# up. Runs in staging too, harmlessly: its local-path PVCs exist and the copy is a
+# no-op-cheap busybox exec.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: frigate-config-backup
+  labels:
+    app: frigate
+spec:
+  schedule: "30 3 * * *"
+  timeZone: America/New_York
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: backup
+              image: busybox:1.36
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  if [ ! -f /frigate/config.yml ]; then
+                    echo "no live config yet (Frigate parked or first boot) — nothing to back up"
+                    exit 0
+                  fi
+                  mkdir -p /ha-config/frigate-backup
+                  cp /frigate/config.yml "/ha-config/frigate-backup/config-$(date +%a).yml"
+                  echo "backed up to frigate-backup/config-$(date +%a).yml"
+              volumeMounts:
+                - name: frigate-config
+                  mountPath: /frigate
+                  readOnly: true
+                - name: ha-config
+                  mountPath: /ha-config
+          volumes:
+            - name: frigate-config
+              persistentVolumeClaim:
+                claimName: frigate-config
+            - name: ha-config
+              persistentVolumeClaim:
+                claimName: ha-config

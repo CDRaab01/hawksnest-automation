@@ -214,8 +214,10 @@ Guest-code expiry automation is deferred, but the slot structure is in place.
 
 `ring-mqtt` bridges Ring devices into HA over MQTT and exposes **on-demand** live video
 via an RTSP/go2rtc gateway. (Ring has no continuous local stream, so this is *not* a
-Frigate/NVR source — see [DEPLOYMENT.md](./DEPLOYMENT.md). Frigate is parked until an
-RTSP-capable camera exists.)
+Frigate/NVR source — see [DEPLOYMENT.md](./DEPLOYMENT.md). **Frigate is LIVE since
+2026-07-29**: three Reolink cameras — big_room + first_floor_stairway [E1 Zoom],
+kitchen [E1 Pro] — record 24/7 through it; the full findings live in
+[plan.md](./plan.md).)
 
 1. **Add the MQTT integration in HA** (if not already): **Settings → Devices & Services →
    Add Integration → MQTT**, broker `mosquitto`, port `1883`, with a broker user.

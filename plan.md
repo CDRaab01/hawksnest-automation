@@ -43,15 +43,14 @@ Spans two repos:
 | 1 | automation | ~~Retire Ring bedroom camera~~ → **retire Ring `big_room`**, free that slug | ✅ `dfee869`, inverted 2026-07-29 |
 | 2 | automation | Reolink main stream via go2rtc (live view) | ✅ `98e411d` |
 | 3 | automation | Frigate deployment, PVCs, config seed, staging park, invariants | ✅ `d7d7321` |
-| 4 | automation | Frigate admin UI exposure (NodePort + socat + firewall rule) | ⬜ |
-| 5 | HA | HACS + frigate-hass-integration + Reolink integration | ⬜ manual |
-| 6 | Hawksnest | PTZ / IR / **privacy mode** controls | ⬜ |
+| 4 | automation | Frigate admin UI exposure (NodePort + socat + firewall rule) | ✅ `d3c13e1` + `3370f5e` (Serve `:8447`, https+insecure) |
+| 5 | HA | HACS + frigate-hass-integration + Reolink integration | 🟨 manual — frigate-hass-integration ✅ live; **Reolink integration ⬜** (Phase 0 of the 2026-07-30 audit plan: admin account + HTTPS port per camera first) |
+| 6 | Hawksnest | PTZ / IR / **privacy mode** controls | ⬜ needs #5 (design settled 2026-07-30: HA Reolink integration entities + PtzPad/Zoom/Focus/Preset chrome, both platforms) |
 | 7 | Hawksnest | Dev proxy for `/go2rtc/` + `/ring-timeline/` | ✅ `4a56ef2` |
 | 8a | Hawksnest | Backend-capability refactor (`recordedBackend.ts`, `frigate.ts`) + tests | ✅ `4a56ef2` |
 | 8b | Hawksnest | Footage generalization — Frigate recordings → continuous lane | ✅ 2026-07-30 (via `frigate/recordings/get` WS — the planned REST `/recordings` route never existed, same as events/config) |
-| 6 | Hawksnest | PTZ / IR / **privacy mode** controls | ⬜ needs #5 |
 | 9 | Hawksnest | AI search screen, mock-ha fixtures, E2E | ⬜ |
-| 10 | Hawksnest | Android parity (`RecordedBackend.kt` ⬜; go2rtc stream-list gate ✅ 2026-07-30) | 🟨 |
+| 10 | Hawksnest | Android parity (`RecordedBackend.kt` ✅ 2026-07-30 [feat/reolink-camera-controls]; go2rtc stream-list gate ✅ 2026-07-30) | ✅ |
 | 11 | Hawksnest | **Direct-camera RTSP live tier** (Android-only; `/32` tailnet routes) | ✅ 2026-07-30 |
 | — | both | Remove the Ring bedroom camera from the Ring account for good | ⬜ after verify |
 
@@ -384,9 +383,9 @@ changes it silently declines (below).
 ## Architecture
 
 ```
-                    Reolink E1 Pro (static DHCP)
+     3× Reolink: big_room + first_floor_stairway (E1 ZOOM), kitchen (E1 Pro)
                     │                        │
-        main (2560×1440)              sub (640×360)
+        main (2560×1440 / 2880×1616)  sub (640×360 / 896×512)
                     │                        │
                     ▼                        ▼
       go2rtc (existing pod)           Frigate (new pod)
@@ -394,9 +393,9 @@ changes it silently declines (below).
                     │                 ├─ record 24/7
                     ▼                 ├─ SQLite index + retention
       Hawksnest LIVE view             ├─ CLIP embeddings, GenAI
-      /go2rtc/api/ws?src=bedroom      └─ MQTT → HA discovery
+      /go2rtc/api/ws?src=<cam>        └─ MQTT → HA discovery
       full resolution, sub-second              │
-                                    HA + frigate-hass-integration
+      (`<cam>_sub` = Low quality)   HA + frigate-hass-integration
                                                │
                                   nginx /api/frigate/ (already existed)
                                                │
@@ -893,6 +892,19 @@ append trap, in `windows/README-windows.md`. Approved 2026-07-30 for `.37`, `.53
 2. Add the camera's name→IP row in the app's Settings on each phone that should use the tier.
 
 ### Two things to keep in mind
+
+0. **In-cluster API exposure is an ACCEPTED RISK, and NetworkPolicy cannot narrow it today**
+   (audited 2026-07-30). Frigate `:5000` and go2rtc `:1984` are unauthenticated ClusterIP
+   surfaces — by upstream design for `:5000` (frigate-hass-integration expects it) — reachable
+   by anything in the namespace. The obvious fix, a NetworkPolicy restricting them to the HA
+   and Hawksnest pods, was written and then withdrawn: **this k3s runs `--disable-network-policy`**,
+   so the policy would sit in the cluster enforcing nothing — protection that reads as present
+   but isn't, which is worse than a recorded gap. Enabling enforcement means removing the flag
+   and restarting k3s (a full cluster restart on the node that runs the door locks), so it is
+   deliberate scheduled work, not a drive-by: do it at the next planned k3s maintenance window,
+   then land the policies. Until then the guards are: single-tenant cluster, the split
+   frigate/frigate-ui Services (5000 is never NodePort-exposed), and Frigate's authenticated
+   UI on `:8971`.
 
 1. **RTSP session budget.** Reolink cameras allow only a handful of concurrent sessions. Frigate
    holds the sub stream, go2rtc holds the main, and **each viewing phone takes another main**. An

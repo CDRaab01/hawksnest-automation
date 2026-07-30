@@ -54,6 +54,22 @@ data:
           # attachment, so alarm/other publishes that omit it are unaffected.
           Attach: "{{ attach | default('') }}"
 
+    # Frigate's actual continuous-recording retention, surfaced as an entity so the
+    # Hawksnest apps can size their recorded timeline from the source of truth
+    # instead of a hand-synced constant (which drifted the moment anyone touched
+    # `record.continuous.days`). HA reaches Frigate's unauthenticated in-cluster
+    # API directly; the apps only ever see the resulting sensor — the config
+    # endpoint (which embeds camera RTSP URLs) is never proxied outward.
+    # Harmless when Frigate is parked (staging): the sensor just reads unavailable
+    # and the apps fall back to their built-in default.
+    sensor:
+      - platform: rest
+        name: Frigate retention days
+        unique_id: frigate_retention_days
+        resource: http://frigate:5000/api/config
+        value_template: "{{ value_json.record.continuous.days }}"
+        scan_interval: 3600
+
     # Modular config splits so automations/scripts/scenes can grow independently
     # (WLED, Zigbee, Plex, presence/auto-lock all slot in here later).
     automation: !include automations.yaml
@@ -154,6 +170,57 @@ data:
     # PVC: a PVC restore or camera re-discovery silently reverts them to Auto.
     # Entity-ID-free, like the push automations above. Battery cost is the
     # accepted trade-off; tune per-camera via the number entity if drain bites.
+    # Frigate detection watchdog. Guards against the failure that actually shipped:
+    # detect.enabled silently false (0.17 default) — pod healthy, ffmpeg healthy,
+    # recordings accumulating, and NOTHING ever detected, with no log line to find.
+    # Also catches a dead camera stream (camera_fps pinned at 0 — hung ffmpeg or a
+    # DHCP'd camera IP moving out from under the Secret), which is otherwise equally
+    # silent. Deliberately NOT detection_fps-based: detection only runs where there
+    # is motion, so 0.0 overnight in an empty house is normal, not a failure.
+    # Entity-ID-free like the push automations above (`switch.<cam>_detect` and
+    # `sensor.<cam>_camera_fps` are frigate-hass-integration names). Checks hourly;
+    # a 15-minute grace keeps Frigate restarts from paging anyone. Repeats hourly
+    # until fixed — for a household, a reminder beats a latch that gets missed.
+    - id: hawksnest_frigate_detection_watchdog
+      alias: "Hawksnest: Frigate detection watchdog"
+      mode: single
+      trigger:
+        - platform: time_pattern
+          minutes: "23"
+      variables:
+        dead_detect: >-
+          {{ states.switch
+             | selectattr('entity_id', 'search', '_detect$')
+             | selectattr('state', 'eq', 'off')
+             | selectattr('last_changed', 'lt', now() - timedelta(minutes=15))
+             | map(attribute='entity_id') | list }}
+        dead_stream: >-
+          {{ states.sensor
+             | selectattr('entity_id', 'search', '_camera_fps$')
+             | rejectattr('state', 'in', ['unavailable', 'unknown'])
+             | selectattr('state', 'in', ['0', '0.0'])
+             | selectattr('last_changed', 'lt', now() - timedelta(minutes=15))
+             | map(attribute='entity_id') | list }}
+      condition:
+        - condition: template
+          value_template: "{{ (dead_detect | count) > 0 or (dead_stream | count) > 0 }}"
+      action:
+        - service: rest_command.ntfy_publish
+          data:
+            topic: "hawksnest-alerts"
+            title: "Frigate watchdog"
+            message: >-
+              {%- if dead_detect | count > 0 -%}
+              Detection is OFF: {{ dead_detect | join(', ') }}.
+              {%- endif -%}
+              {%- if dead_stream | count > 0 %}
+              Camera stream dead (0 fps): {{ dead_stream | join(', ') }}.
+              {%- endif %}
+              Frigate is recording blind — check /api/stats and the camera IPs.
+            tags: "warning"
+            priority: "high"
+            click: "https://dragonfly.tail2ce561.ts.net:8447/"
+
     - id: hawksnest_ring_snapshot_policy
       alias: "Hawksnest: Ring snapshot policy (battery cams get interval snapshots)"
       mode: single

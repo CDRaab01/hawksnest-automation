@@ -212,6 +212,40 @@ optional_secret "ring-timeline.env"
 # fallback must not be a path that ships camera snapshots to a public API.
 optional_secret "frigate.env"
 
+# --- Reolink credential-consistency check (warn-only) --------------------------
+# frigate.env (FRIGATE_REOLINK_USER/PASSWORD) and go2rtc.env (REOLINK_USER/PASS)
+# both hold the SAME camera account — a deliberate two-consumer split (see the
+# go2rtc seed's comments). Rotation is therefore a two-file edit, and nothing
+# else asserts the copies match: a half-rotation leaves one of recording or live
+# view silently 401ing at the camera. Catch it here, at deploy time.
+#
+# WARN, never die: camera services must never block a deploy of the cluster that
+# rolls the door locks (same rule as the optional_secret fallbacks above). The
+# check also skips when either file is still a dummy .example copy — those
+# legitimately differ.
+reolink_cred_check() {
+  local f="${SECRETS_DST}/frigate.env" g="${SECRETS_DST}/go2rtc.env"
+  [ -f "${f}" ] && [ -f "${g}" ] || return 0
+  # Dummy copies (byte-identical to their .example) are expected to disagree.
+  cmp -s "${f}" "${f}.example" 2>/dev/null && return 0
+  cmp -s "${g}" "${g}.example" 2>/dev/null && return 0
+  local fu fp gu gp
+  fu="$(sed -n 's/^FRIGATE_REOLINK_USER=//p' "${f}" | tail -1)"
+  fp="$(sed -n 's/^FRIGATE_REOLINK_PASSWORD=//p' "${f}" | tail -1)"
+  gu="$(sed -n 's/^REOLINK_USER=//p' "${g}" | tail -1)"
+  gp="$(sed -n 's/^REOLINK_PASS=//p' "${g}" | tail -1)"
+  if [ "${fu}" != "${gu}" ] || [ "${fp}" != "${gp}" ]; then
+    warn "REOLINK CREDENTIAL DRIFT: frigate.env and go2rtc.env disagree on the
+       camera account (user match: $([ "${fu}" = "${gu}" ] && echo yes || echo NO),
+       password match: $([ "${fp}" = "${gp}" ] && echo yes || echo NO)).
+       These are copies of the SAME account — a half-finished rotation will
+       silently 401 either recording (Frigate) or live view (go2rtc) at the
+       camera. Fix both files under ${HAWKSNEST_SECRETS_DIR} and redeploy.
+       Continuing anyway: camera services never block a lock-cluster deploy."
+  fi
+}
+[ "${OVERLAY}" = "prod" ] && reolink_cred_check
+
 # --- validate the build before touching the cluster ---------------------------
 log "Validating kustomize build"
 kubectl kustomize "${KUSTOMIZE_DIR}" >/dev/null \
