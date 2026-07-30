@@ -138,6 +138,18 @@ data:
                 - detect
                 - record
         detect:
+          # MUST be set explicitly. Frigate 0.17 defaults detect.enabled to FALSE
+          # when the key is absent, and the failure is silent in the worst way:
+          # the camera records 24/7, the pod is healthy, ffmpeg is fine,
+          # camera_fps looks correct — and NOTHING is ever detected. No events, no
+          # search index, no alerts, no GenAI descriptions. It ran that way from
+          # first deploy until caught 2026-07-29 by noticing detection_fps was 0.0
+          # while a person was plainly visible in the frame.
+          #
+          # `kubectl logs` will not tell you. The tells are
+          # `/api/stats` -> detection_enabled:false, and the MQTT topic
+          # frigate/<camera>/detect/state reading OFF.
+          enabled: true
           # VERIFIED against the real camera 2026-07-29 (E1 Zoom, itemNo E340,
           # firmware v3.2.0.4741) by ffprobe AND by the camera's own GetEnc:
           #   subStream: 640*360, h264, High profile, 10 fps, 256 kbps, gop 4
