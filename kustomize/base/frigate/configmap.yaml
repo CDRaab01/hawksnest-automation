@@ -198,7 +198,56 @@ data:
             enabled: true
             objects:
               - person
-        # No `motion:` mask committed — masks and zones are drawn in Frigate's own
-        # UI against a live frame and land in the live /config/config.yml. Tune them
-        # early: an untuned camera fires on a TV or a ceiling fan, and every false
-        # alert is another junk embedding in the semantic search index.
+        # ZONES are not committed — unlike the timestamp mask above, they are drawn
+        # against a live frame in Frigate's UI and land in the live /config/config.yml.
+        # Tune early: every false alert is another junk embedding in the search index.
+
+      # -----------------------------------------------------------------------
+      first_floor_stairway:
+        # Replaces the RING first_floor_stairway camera (2026-07-29) — same slug on
+        # purpose, so the HA entity id and everything downstream keep working. The
+        # Ring stream for this slug is retired in the go2rtc seed.
+        ffmpeg:
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          # Frigate 0.17 defaults this to FALSE when absent — see the long note on
+          # big_room. Without it this camera would record and detect nothing.
+          enabled: true
+          # VERIFIED 2026-07-29 against 192.168.4.53 by ffprobe (as the `frigate`
+          # account, not admin) AND the camera's own GetEnc. Identical hardware and
+          # firmware to big_room — E1 Zoom, itemNo E340, v3.2.0.4741 — and the sub
+          # stream matches exactly: 640x360 h264 High, 10 fps, 256 kbps, gop 4.
+          #
+          # It was worth measuring anyway. The MAIN stream shipped as 3840x2160
+          # h265, the same WebRTC-breaking default big_room had, and had to be
+          # switched to 2560x1440 h264. "Same model so same settings" held for the
+          # sub stream and was wrong for the main one.
+          width: 640
+          height: 360
+          # Same 10-sends / 5-detects split as big_room, for the same reason: this
+          # stream also carries the `record` role.
+          fps: 5
+        motion:
+          # Same OSD timestamp mask as big_room. Same camera model, same firmware and
+          # the same 640x360 detect frame, so the clock sits in the same place — but
+          # CONFIRM IT ONCE the camera is live:
+          #   /api/first_floor_stairway/latest.jpg?motion=1
+          # should show no motion box on the clock in an empty stairway, and
+          # /api/stats should read detection_fps 0.0 rather than a constant 5.0.
+          # A mask that misses the clock leaves detection running on every frame
+          # 24/7; one that is too large silently suppresses real detections.
+          mask:
+            - 0.26,0.015,0.72,0.015,0.72,0.11,0.26,0.11
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          genai:
+            enabled: true
+            objects:
+              - person
