@@ -18,6 +18,9 @@ start there if you're picking this up fresh.
 | `mosquitto`      | MQTT broker — used by `ring-mqtt`; also seam for future Ratgdo. | `mosquitto-data` (NFS)   |
 | `ring-mqtt`      | Bridges Ring cameras/doorbell/sensors to MQTT; on-demand live video via RTSP. | `ring-mqtt-data` (NFS) ⭐ |
 | `ntfy`           | Self-hosted push for Hawksnest doorbell + alarm alerts (tailnet-only). See [docs/ntfy-push.md](docs/ntfy-push.md). | `ntfy-cache` (local-path) |
+
+> **Adding a camera?** [docs/adding-a-camera.md](docs/adding-a-camera.md) — the six places a
+> Reolink touches, the two that fail silently, and measured capacity numbers.
 | `ring-timeline`  | Recorded-footage timeline for Hawksnest from Ring's own `video_search` API — real event times + directly playable URLs, which ring-mqtt cannot provide. The one image we build ourselves. See [ring-timeline/README.md](ring-timeline/README.md). | `ring-timeline-data` (local-path) |
 
 ⭐ = **must be backed up** (see [Backups](#backups)).
