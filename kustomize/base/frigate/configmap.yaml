@@ -409,3 +409,132 @@ data:
             - cat
           # Same one-sentence prompt as big_room — see the anchor there.
           genai: *person_genai
+
+      # =======================================================================
+      # FOUR MORE E1 PROs, added 2026-07-31: nursery, basement, bedroom, garage.
+      #
+      # GEOMETRY VERIFIED PER CAMERA by ffprobe on 2026-07-31, not copied between
+      # them. All four returned h264 896x512 @10 on the sub stream — identical to
+      # kitchen, different from the two Zooms' 640x360. They were probed
+      # individually anyway, because "same model so same settings" already held
+      # for the sub stream and was WRONG for the main one on the Zooms (see
+      # first_floor_stairway). Main is 2880x1616 @20 h264 on all four, so none of
+      # them needs the 4K/H.265 SetEnc fix the Zooms required.
+      #
+      # NO motion.mask ON ANY OF THESE FOUR YET — deliberate, not an oversight.
+      # They were configured while sitting at a temporary bench location and get
+      # physically mounted afterwards, so a timestamp/OSD mask drawn against the
+      # current scene would be aimed at the wrong part of the frame. Every camera
+      # already here needed one and the stairway needed three (clock + two ceiling
+      # fans). Draw them per camera AFTER mounting: check
+      # /api/<cam>/latest.jpg?motion=1 for a box on the seconds digits, mask it,
+      # then confirm detection_fps settles to 0.0 on an empty room — and re-check
+      # after each mask, since masking one motion source can reveal the next.
+      # Until that is done these four run the detector continuously on the clock
+      # repaint, which is wasteful but not harmful.
+      # =======================================================================
+      nursery:
+        # New slug — nothing held it before. Not a Ring replacement.
+        ffmpeg:
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_NURSERY}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          # Frigate 0.17 defaults this to FALSE when absent — see big_room.
+          enabled: true
+          # ffprobe 192.168.4.30, 2026-07-31: h264 896x512 @10.
+          width: 896
+          height: 512
+          # Same 10-sends / 5-detects split as every other camera here.
+          fps: 5
+        # Retention: inherits the global 3 days. Considered explicitly against the
+        # bedroom's 1 day and kept at 3 on 2026-07-31 — this is a monitoring
+        # camera where looking back a couple of days is the point of having it.
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          # Same one-sentence prompt as big_room — see the anchor there.
+          genai: *person_genai
+
+      # -----------------------------------------------------------------------
+      basement:
+        # Replaces the RING basement camera (2026-07-31) — same slug on purpose,
+        # so the HA entity id and everything downstream keep working. The Ring
+        # stream for this slug is retired in the go2rtc seed.
+        ffmpeg:
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BASEMENT}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          enabled: true
+          # ffprobe 192.168.4.23, 2026-07-31: h264 896x512 @10.
+          width: 896
+          height: 512
+          fps: 5
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          genai: *person_genai
+
+      # -----------------------------------------------------------------------
+      bedroom:
+        # Replaces the RING bedroom camera (2026-07-31), same slug. This is the
+        # slug the FIRST Reolink was originally scoped for before being retargeted
+        # to big_room on 2026-07-29 — the room finally has its own camera.
+        ffmpeg:
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BEDROOM}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          enabled: true
+          # ffprobe 192.168.4.46, 2026-07-31: h264 896x512 @10.
+          width: 896
+          height: 512
+          fps: 5
+        record:
+          # ONE DAY, not the global 3 — decided 2026-07-31. The global record:
+          # block anticipated this exact camera: "The bedroom Reolink planned for a
+          # later phase should carry its own SHORTER window set under that camera
+          # — do not raise this one and assume it covers both." This is that
+          # window. It shortens ONLY the 24/7 continuous timeline; alert and
+          # detection clips still follow the global 30-day retention.
+          continuous:
+            days: 1
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          genai: *person_genai
+
+      # -----------------------------------------------------------------------
+      garage:
+        # New slug — nothing held it before. Not a Ring replacement.
+        ffmpeg:
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_GARAGE}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          enabled: true
+          # ffprobe 192.168.4.62, 2026-07-31: h264 896x512 @10.
+          width: 896
+          height: 512
+          fps: 5
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          genai: *person_genai

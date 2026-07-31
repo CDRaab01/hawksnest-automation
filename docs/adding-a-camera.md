@@ -11,6 +11,41 @@ capacity number here was **measured**, not estimated — see [Capacity](#capacit
 
 ---
 
+## Read this first: running these commands from the Windows host
+
+Every `kubectl exec` in this runbook that references a shell variable **must be fed over
+stdin**, not passed as an argument:
+
+```bash
+# RIGHT — the heredoc reaches `sh` intact
+kubectl -n home-automation exec -i deploy/go2rtc -c go2rtc -- sh -s <<'EOF'
+  echo "${REOLINK_USER}"
+EOF
+
+# WRONG — ${REOLINK_USER} is eaten crossing PowerShell -> wsl -> kubectl
+kubectl -n home-automation exec deploy/go2rtc -- sh -c 'echo "${REOLINK_USER}"'
+```
+
+The variable arrives **empty**, and the failure does not look like a quoting failure. It looks
+like whatever the empty value causes downstream:
+
+| What you run | What you see | What it actually is |
+|---|---|---|
+| ffprobe | `401 Unauthorized` | empty credentials, not wrong ones |
+| `mariadb -p"$PW"` | `Access denied … (using password: NO)` | empty password |
+
+**The tell is the echoed URL.** `rtsp://:@192.168.4.30` means the variables were eaten;
+`rtsp://frigate:xxxx@192.168.4.30` means the camera genuinely rejected you. Check that before
+concluding anything about credentials — on 2026-07-31 this cost two full diagnostic rounds.
+
+Also note **ffprobe prints the password in cleartext** in its error line. Redact it:
+
+```bash
+... 2>&1 | sed "s/${REOLINK_PASS}/<redacted>/g"
+```
+
+---
+
 ## The shape of the job
 
 A camera touches **six places**, in two repos plus the Windows host:
@@ -78,6 +113,15 @@ Measured on the live cluster, 2026-07-31, with three cameras running:
 you want longer retention than 3 days, the room is there — but change it *after* the new cameras
 have run a full day and you can measure again, not on this table.
 
+**Update, 2026-07-31 — measured at 7 cameras.** Adding four moved detector inference from
+**1.64 ms → 1.74 ms**, and `skipped_fps` stayed at 0 on every camera with `camera_fps` ≈ 5 and
+`process_fps` tracking it. The detector was not the constraint at 3 and is not at 7.
+
+One number does jump, and it is expected: a camera with **no motion mask yet** runs
+`detection_fps` at ~4.5–4.7 continuously, versus 0.0 on the three masked cameras, because the OSD
+clock repaints every second. That is the cost of deferring masks (see step 3) and it disappears
+once they are drawn — but it means "detection_fps is high on the new cameras" is not a fault.
+
 **What to actually watch is CPU, not the detector or the disk.** Detection is cheap here; ffmpeg
 decode and motion detection are not, and they scale with camera count. After the rollout, check
 `process_fps` still tracks `camera_fps` on every camera and that `skipped_fps` stays at 0. A
@@ -95,6 +139,55 @@ limit. Treat `df -h` as the authority.
 
 Do this for **every** camera before editing anything. The differences between Reolink models are
 the silent kind — copying another camera's numbers misplaces every bounding box without erroring.
+
+### 0. The `frigate` service account must exist ON EACH CAMERA
+
+**This blocks everything else and is easy to miss.** A camera out of the box has only the
+`admin` account created during app setup. Enabling RTSP does **not** create the service user
+that `REOLINK_USER` / `REOLINK_PASS` refer to. Until you create it, every ffprobe, every
+go2rtc stream and every Frigate input gets a real 401.
+
+Discovered 2026-07-31 on all four new cameras — the shared credentials worked against the three
+deployed cameras and failed on all four new ones in the same breath, which is what proves it is
+camera-side and not a credential problem.
+
+**Check before anything else** (this is a better first probe than ffprobe: it separates
+reachable-but-unauthorized from unreachable in one shot, and reports the lockout budget):
+
+```bash
+kubectl -n home-automation exec -i deploy/go2rtc -c go2rtc -- sh -s <<'EOF'
+curl -s -m 10 "http://<ip>/cgi-bin/api.cgi?cmd=GetDevInfo&user=${REOLINK_USER}&password=${REOLINK_PASS}" \
+  | sed "s/${REOLINK_PASS}/<redacted>/g"
+EOF
+```
+
+`"code": 0` + device info = the account exists. `"rspCode": -7, "detail": "login failed"` = it
+does not. That response also carries `auth_warning_info.remain_times` — Reolink locks the account
+out after repeated failures, so **do not probe usernames speculatively**; a lockout turns a
+five-minute fix into a factory reset.
+
+Create it either in the Reolink app (Settings → System → User Management) or over the API:
+
+```
+Login  -> [{"cmd":"Login","action":0,"param":{"User":{"Version":"0","userName":"admin","password":"<pw>"}}}]
+AddUser-> [{"cmd":"AddUser","action":0,"param":{"User":{"userName":"frigate","password":"<pw>","level":"guest"}}}]
+GetUser-> confirm the account is listed, then Logout
+```
+
+Two traps in that sequence, both of which cost a round on 2026-07-31:
+
+- **Reolink pretty-prints its JSON**, so a naive token extraction (`grep -o '"name"[^,}]*'`)
+  captures the trailing spaces before the closing brace. The token then looks fine but every
+  authed URL fails with `curl: (3) URL rejected: Malformed input to a URL function`. Anchor on
+  the closing quote instead: `sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'`,
+  and assert the token is alphanumeric before using it.
+- **Use `curl -sS`, never bare `-s`.** With `-s` the above failure prints an empty body and
+  looks like "the firmware returned nothing", sending you off investigating the camera instead
+  of your own script.
+
+`go2rtc.env.example` calls for a **non-admin** account. Reolink's levels are `admin` and
+`guest`; create it as `guest` and verify RTSP still authenticates before moving on. There is no
+"change level" call — changing it is DelUser + AddUser.
 
 ### 1. A fixed IP
 
@@ -114,12 +207,19 @@ image lacks it. go2rtc has it on `PATH` *and* already has the Reolink credential
 environment, which is why the recipe below uses it:
 
 ```bash
-kubectl -n home-automation exec deploy/go2rtc -- sh -c '
+# NOTE: stdin heredoc, not `sh -c '...'` — see "Running these commands from the
+# Windows host" above. As an argument the credentials arrive empty and you get a 401.
+kubectl -n home-automation exec -i deploy/go2rtc -c go2rtc -- sh -s <<'EOF'
+for ip in <ip1> <ip2>; do
+  echo "=== $ip ==="
   ffprobe -v error -select_streams v:0 \
     -show_entries stream=codec_name,width,height,avg_frame_rate \
     -of default=noprint_wrappers=1 \
     -rtsp_transport tcp \
-    "rtsp://${REOLINK_USER}:${REOLINK_PASS}@<ip>:554/h264Preview_01_sub"'
+    "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${ip}:554/h264Preview_01_sub" 2>&1 \
+    | sed "s/${REOLINK_PASS}/<redacted>/g"
+done
+EOF
 ```
 
 Verified 2026-07-31 against the two deployed models — it returns exactly the numbers below, which
@@ -177,9 +277,27 @@ instruction, it says so.
 
 ### 1. Secrets — the same IP, twice, in two files
 
+**Edit the canonical copies on the runner host, NOT the repo checkout:**
+
 ```
-kustomize/overlays/prod/secrets/go2rtc.env    →  REOLINK_IP_<NAME>=192.168.4.x
-kustomize/overlays/prod/secrets/frigate.env   →  FRIGATE_REOLINK_IP_<NAME>=192.168.4.x
+/home/sonic/hawksnest-secrets/go2rtc.env    →  REOLINK_IP_<NAME>=192.168.4.x
+/home/sonic/hawksnest-secrets/frigate.env   →  FRIGATE_REOLINK_IP_<NAME>=192.168.4.x
+```
+
+`scripts/deploy.sh` copies these into a fresh checkout at deploy time (`HAWKSNEST_SECRETS_DIR`),
+and `need_secret()`/`optional_secret()` **skip the copy when the destination already exists**.
+That last detail is load-bearing — see the warning in [step 5](#5-deploy-then-dual-write-frigate)
+about what a checkout with stale `.env` files does. Back up before editing; that directory
+already uses a `<file>.bak.<YYYYMMDDHHMMSS>` convention. Guard the write (line delta, expected
+key count, password hash unchanged) — the suite rule about never blind-rewriting a live `.env`
+applies here.
+
+The old paths below are where the secrets are *consumed*, and the `.example` templates next to
+them are tracked in git and should gain the new keys:
+
+```
+kustomize/overlays/prod/secrets/go2rtc.env.example    →  REOLINK_IP_<NAME>=replace-with-...
+kustomize/overlays/prod/secrets/frigate.env.example   →  FRIGATE_REOLINK_IP_<NAME>=replace-with-...
 ```
 
 The `FRIGATE_` prefix is not cosmetic: Frigate does its own `{VAR}` substitution and **requires**
@@ -284,18 +402,80 @@ NAS, printer, eero and every IoT device.
 
 ### 5. Deploy, then dual-write Frigate
 
-```bash
-# Normal deploy (or push to main and let the workflow do it)
-kubectl kustomize kustomize/overlays/prod | kubectl apply -f -
+> ### ⚠ DO NOT run `kubectl kustomize kustomize/overlays/prod | kubectl apply -f -`
+> ### from a checkout whose `secrets/*.env` are placeholder copies.
+>
+> Found 2026-07-31: in `C:\Code\hawksnest-automation` all six `secrets/*.env` files are
+> **byte-identical to their `.example` templates**, because `deploy.sh` leaves an existing
+> destination file alone. The real values live only on the runner host and in the cluster.
+>
+> The overlay uses `generatorOptions: disableNameSuffixHash: true`, so that apply **overwrites
+> all six live Secrets in place with dummy values** — mosquitto auth for Frigate *and*
+> ring-mqtt, every Reolink credential, mariadb (Home Assistant's recorder DB), ring-timeline
+> and go2rtc. On the cluster that runs the door locks.
+>
+> `reolink_cred_check()` in deploy.sh cannot save you: it deliberately returns early when a
+> file is byte-identical to its `.example`, which is exactly this state.
+>
+> Check before any apply:
+> ```bash
+> cd kustomize/overlays/prod/secrets
+> for f in go2rtc frigate mariadb ring-mqtt ring-timeline; do
+>   cmp -s $f.env $f.env.example && echo "DUMMY: $f.env"; done
+> ```
 
+Use one of these instead:
+
+**(a) Surgical — smallest blast radius, and what was used on 2026-07-31.** Touches only the
+camera objects; HA, mariadb, zwave-js-ui and the locks are never involved. The seed ConfigMaps
+carry no labels or name prefixes, so they apply by exact name.
+
+```bash
+# add ONLY the new keys to the two Secrets, values read from the canonical files
+kubectl -n home-automation patch secret frigate-credentials --type merge \
+  -p '{"data":{"FRIGATE_REOLINK_IP_<NAME>":"<base64 of the IP>"}}'
+kubectl -n home-automation patch secret go2rtc-credentials --type merge \
+  -p '{"data":{"REOLINK_IP_<NAME>":"<base64 of the IP>"}}'
+
+kubectl -n home-automation apply -f kustomize/base/go2rtc/configmap.yaml
+kubectl -n home-automation apply -f kustomize/base/frigate/configmap.yaml
+```
+
+**(b) `./scripts/deploy.sh` from the WSL checkout** — the normal path, with real guards (live HA
+config check, server-side dry run, zwave parking). It applies the whole overlay, so a camera
+change puts HA and mariadb in the blast radius.
+
+**(c) Merge to main and let CI deploy** — correct, but the change reaches prod before you can
+verify it.
+
+```bash
 # go2rtc picks up its ConfigMap on restart — this is all it needs
 kubectl -n home-automation rollout restart deploy/go2rtc
 kubectl -n home-automation rollout status deploy/go2rtc
 ```
 
+**ORDER MATTERS: the Secret must carry the new IPs BEFORE the new Frigate config loads.**
+Frigate resolves `{FRIGATE_*}` at config-load time from its environment, so a config naming a
+variable the pod doesn't have yet dies with `KeyError: 'FRIGATE_REOLINK_IP_<NAME>'` and boots
+into safe mode with **all** cameras stopped. Patch the Secret first; the pod picks the new
+values up on the restart that also loads the new config, so one restart covers both.
+
 Frigate needs the dual write. **Stage and verify in the pod before replacing the live file** — the
 guard exists because a careless `kubectl exec` without `-i` once truncated a live config to zero
-bytes:
+bytes.
+
+**First, check what replacing the live file would destroy.** This step overwrites masks and zones
+that were drawn in Frigate's UI and never committed. Run the drift check *before* editing the
+seed, so you know whether live and seed already agree, and list the zones:
+
+```bash
+bash scripts/frigate-drift-check.sh          # clean == safe to replace wholesale
+kubectl -n home-automation exec deploy/frigate -c frigate -- \
+  python3 -c "import yaml;print({n:list((c or {}).get('zones') or []) for n,c in yaml.safe_load(open('/config/config.yml'))['cameras'].items()})"
+```
+
+If either shows live-only content, merge it into the seed first rather than clobbering it. (On
+2026-07-31 the baseline was clean and no camera had zones, so a wholesale replace was safe.)
 
 ```bash
 POD=$(kubectl -n home-automation get pod -l app=frigate -o name | head -1)
@@ -304,16 +484,33 @@ POD=$(kubectl -n home-automation get pod -l app=frigate -o name | head -1)
 kubectl -n home-automation exec -i "$POD" -c frigate -- sh -c 'cat > /config/config.yml.new' < ./frigate-config.yml
 
 # 2. verify the STAGED file in the pod, before it can replace anything
-kubectl -n home-automation exec -i "$POD" -c frigate -- python3 - <<'PY'
-import yaml
-c = yaml.safe_load(open("/config/config.yml.new"))
+#
+# yaml.safe_load ONLY proves the file is YAML. It does NOT catch the schema errors that
+# actually cause safe mode. Use Frigate's own validator as well — it is the same code path
+# whose failure stops every camera:
+kubectl -n home-automation exec -i "$POD" -c frigate -- python3 -s <<'PY'
+import os, yaml
+# If the pod does not have the new IP vars yet (see the ORDER note above), inject them so the
+# validator can resolve {FRIGATE_*}; otherwise it raises KeyError and tells you nothing else.
+os.environ.update({"FRIGATE_REOLINK_IP_<NAME>": "192.168.4.x"})
+import importlib, frigate.config.env as e; importlib.reload(e)
+import frigate.config.config as m; importlib.reload(m)
+
+raw = open("/config/config.yml.new").read()
+c = yaml.safe_load(raw)
 cams = list(c["cameras"])
 print("cameras:", cams)
 assert len(cams) == 7, cams
 for n in cams:
     assert c["cameras"][n]["detect"]["enabled"] is True, f"{n}: detect not enabled"
-print("STAGED OK")
+# the genai anchor must resolve to ONE shared prompt, not drifted copies
+assert len({c["cameras"][n]["objects"]["genai"]["prompt"] for n in cams}) == 1
+
+cfg = m.FrigateConfig.parse_yaml(raw)          # <-- the real check
+print("STAGED OK — FrigateConfig accepts", sorted(cfg.cameras))
 PY
+# `parse_file` is NOT the YAML entry point — it is pydantic's deprecated JSON loader and
+# fails with a JSONDecodeError. Use parse_yaml (or parse_object on a dict).
 
 # 3. only now replace, keeping a backup
 kubectl -n home-automation exec "$POD" -c frigate -- sh -c \
@@ -353,7 +550,22 @@ Every camera wants a live `pid`, `camera_fps` near 5, `process_fps` tracking it,
 ### 7. Home Assistant (manual UI work)
 
 1. The **frigate-hass-integration** creates `camera.<name>` automatically once Frigate reports the
-   camera. Confirm each new entity appears with exactly the slug you chose.
+   camera — but **not until its config entry is reloaded**. It builds the entity list at setup, so
+   after a Frigate restart the new cameras are absent from HA and it looks like the rollout failed.
+   Reload the entry (no HA restart needed — returns `require_restart: False`):
+
+   ```bash
+   # find the entry id
+   GET  /api/config/config_entries/entry            -> domain "frigate"
+   POST /api/config/config_entries/entry/<id>/reload
+   ```
+
+   Then confirm each new entity appears with exactly the slug you chose.
+
+   **If the new camera replaces a Ring camera, its Ring entities do not disappear on their own.**
+   `camera.<room>_snapshot` from the Ring integration survives retiring the go2rtc stream, so
+   Hawksnest will show that room twice. The three cameras retired in July no longer have Ring
+   entities, so removing them is the established outcome — do the same for each replacement.
 2. Add the official **Reolink** integration per camera for PTZ / IR / privacy — then **disable its
    camera entities**. They end in suffixes `cameraModel.classify()` parses and would collide with
    the Frigate camera in Hawksnest's `resolveCameras`.
@@ -372,6 +584,12 @@ That is already measurable: the recorder holds **97,804 state rows for the last 
 781,751 over 30 days, which is what made Hawksnest's History screen fall over before it was
 capped and made lazy. Four more cameras roughly doubles the camera-derived share of that.
 
+**CORRECTED 2026-07-31 — the globs this runbook used to recommend match ZERO entities here.**
+`sensor.*_camera_fps`, `*_detection_fps`, `*_process_fps`, `*_skipped_fps` and the `*_cpu_usage`
+family do not exist on this instance. The runbook warned "glob a name that doesn't exist and it
+silently excludes nothing" and then did exactly that. What Frigate's integration actually creates
+here are per-camera **count** sensors:
+
 ```yaml
 recorder:
   db_url: !secret recorder_db_url
@@ -379,17 +597,35 @@ recorder:
   commit_interval: 5
   exclude:
     entity_globs:
-      - sensor.*_camera_fps
-      - sensor.*_detection_fps
-      - sensor.*_process_fps
-      - sensor.*_skipped_fps
-      - sensor.*_detection_cpu_usage
-      - sensor.*_ffmpeg_cpu_usage
-      - sensor.*_capture_cpu_usage
+      - sensor.*_all_count
+      - sensor.*_all_active_count
+      - sensor.*_person_count
+      - sensor.*_person_active_count
 ```
 
-Confirm the real entity ids against your instance before pasting — glob a name that doesn't exist
-and it silently excludes nothing. Then **Developer Tools → YAML → Check Configuration** and reload,
+Measured over 24 h on 2026-07-31 with 3 cameras: **12 entities, 15,643 of 102,335 state rows
+(~15%)** — about 8–9k rows per camera per day, so seven cameras is ~36k/day from this source
+alone. Verified these globs catch *only* Frigate camera entities.
+
+**Deliberately not excluded:** `binary_sensor.<cam>_person` / `_motion*` (21 entities, 7,859
+rows/day). Those are real history — "when was there motion in the kitchen" is worth being able to
+answer — and the motion glob also catches non-Frigate motion sensors.
+
+**Also worth knowing:** the single biggest churn source is not Frigate at all. `camera.*_snapshot`
+(Ring) is 8 entities and 13,742 rows/day. Excluding it is a bigger win than anything above, but it
+is Ring churn, unrelated to adding a Reolink.
+
+**`recorder` is not a reloadable domain** — the exclude takes effect only on an HA restart. Write
+it, validate it, and let it apply on the next restart rather than bouncing HA for it.
+
+Measure the real list on your own instance rather than trusting any of the above:
+
+```sql
+SELECT sm.entity_id, COUNT(*) AS rows_24h
+FROM states s JOIN states_meta sm ON s.metadata_id = sm.metadata_id
+WHERE s.last_updated_ts > UNIX_TIMESTAMP() - 86400
+GROUP BY sm.entity_id ORDER BY rows_24h DESC LIMIT 30;
+``` Then **Developer Tools → YAML → Check Configuration** and reload,
 and verify the row count stops growing as fast:
 
 ```bash
@@ -416,13 +652,16 @@ Cameras are discovered from HA. Two things can need attention:
 
 Per camera, in order — each step's failure has a different cause, so do not batch the checks:
 
+- [ ] the `frigate` service account exists ON the camera (`GetDevInfo` returns `code: 0`)
 - [ ] `ffprobe` against the sub stream returns the geometry you put in `detect:`
 - [ ] `tailscale status` `PrimaryRoutes` lists the camera's `/32` (advertised **and** approved)
 - [ ] Frigate `/api/stats` shows a live `pid`, `camera_fps` ≈ 5, `skipped_fps` = 0
 - [ ] `scripts/frigate-drift-check.sh` reports live == seed
 - [ ] go2rtc lists both `<name>` and `<name>_sub` (`/go2rtc/api/streams`)
+- [ ] the Frigate config entry has been **reloaded** in HA (otherwise the camera never appears)
 - [ ] `camera.<name>` exists in HA with the exact slug
 - [ ] Reolink integration's camera entities are **disabled**
+- [ ] if this REPLACES a Ring camera: the Ring `camera.<room>_snapshot` entity is gone too
 - [ ] Hawksnest shows the camera; live view and the recorded timeline both play
 - [ ] `df -h /media/frigate` after 24 h — then decide whether to raise retention
 
