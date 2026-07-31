@@ -212,12 +212,31 @@ data:
             - person
             - dog
             - cat
-          genai:
+          genai: &person_genai
             # Per-camera, and deliberately narrower than `track`: a description for
             # every passing cat is noise in the search index and needless VLM load.
             enabled: true
             objects:
               - person
+            # OVERRIDE THE DEFAULT PROMPT. Frigate's built-in one asks the model to
+            # "Analyze the sequence of images… consider what the {label} is doing,
+            # why, and what it might do next" — an invitation to write an essay, and
+            # the model obliges: multi-paragraph answers with markdown headings and
+            # numbered sections. That is useless in a phone notification, useless in
+            # the app's event strip, and worse embeddings for semantic search than a
+            # plain sentence would be.
+            #
+            # This is the RIGHT place to fix verbosity. Truncating in the client
+            # would still store the essay, still spend the VLM tokens generating it,
+            # and still index it.
+            #
+            # `{label}` is substituted by Frigate. Anchored (&person_genai) and
+            # aliased by the other two cameras so the wording can never drift
+            # between them.
+            prompt: >-
+              In ONE short sentence of at most 20 words, plainly state what the
+              {label} is doing. Write only that sentence: no markdown, no headings,
+              no lists, no preamble, no analysis of intent.
         # ZONES are not committed — unlike the timestamp mask above, they are drawn
         # against a live frame in Frigate's UI and land in the live /config/config.yml.
         # Tune early: every false alert is another junk embedding in the search index.
@@ -282,10 +301,8 @@ data:
             - person
             - dog
             - cat
-          genai:
-            enabled: true
-            objects:
-              - person
+          # Same one-sentence prompt as big_room — see the anchor there.
+          genai: *person_genai
 
       # -----------------------------------------------------------------------
       kitchen:
@@ -334,7 +351,5 @@ data:
             - person
             - dog
             - cat
-          genai:
-            enabled: true
-            objects:
-              - person
+          # Same one-sentence prompt as big_room — see the anchor there.
+          genai: *person_genai
