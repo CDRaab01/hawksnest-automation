@@ -35,6 +35,34 @@ data:
       db_url: !secret recorder_db_url
       purge_keep_days: 30
       commit_interval: 5
+      # Added 2026-07-31, with the four-camera rollout. plan.md called for an
+      # exclude block during the ORIGINAL three-camera rollout and it was never
+      # added, so until now every Frigate diagnostic counter was recorded against
+      # purge_keep_days: 30.
+      #
+      # THE GLOBS ARE MEASURED, NOT COPIED. The obvious set (sensor.*_camera_fps,
+      # *_detection_fps, *_process_fps, *_skipped_fps, *_*_cpu_usage) matches
+      # ZERO entities on this instance — those sensors do not exist here, and a
+      # glob that matches nothing silently excludes nothing while looking correct.
+      # What Frigate's HA integration actually creates here are per-camera COUNT
+      # sensors. Measured over 24h on 2026-07-31, with 3 cameras:
+      #   12 entities (4 per camera), 15,643 of 102,335 total state rows = ~15%
+      # At 7 cameras that becomes 28 entities and roughly 36,000 rows/day.
+      #
+      # Verified these globs match ONLY Frigate camera entities — no Z-Wave, lock
+      # or Ring entity is caught. Re-check with a LIKE query against states_meta
+      # before adding to this list; do not extend it from another install's docs.
+      #
+      # DELIBERATELY NOT EXCLUDED: binary_sensor.<cam>_person / _motion*. Those
+      # are 7,859 rows/day but they are real history — "when was there motion in
+      # the kitchen" is a question worth being able to answer — and the motion
+      # glob also catches non-Frigate motion sensors.
+      exclude:
+        entity_globs:
+          - sensor.*_all_count
+          - sensor.*_all_active_count
+          - sensor.*_person_count
+          - sensor.*_person_active_count
 
     # Push transport for Hawksnest (doorbell + alarm). Publishes to the in-cluster
     # ntfy Service (http://ntfy) — phones subscribe over Tailscale Serve. Generic,
