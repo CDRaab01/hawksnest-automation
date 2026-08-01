@@ -106,7 +106,19 @@ spec:
               cpu: 50m
               memory: 64Mi
             limits:
-              memory: 256Mi
+              # RAISED 256Mi -> 512Mi, 2026-07-31, in the same commit that gave every
+              # Reolink main stream an audio-only `#audio=opus` ffmpeg producer (see the
+              # configmap). Those ffmpeg children live in THIS pod's cgroup, one per
+              # camera being watched, so concurrent viewers now consume memory that the
+              # bare-RTSP passthrough never did.
+              #
+              # This is not a "give it room" guess — an OOMKill here is expensive. This
+              # is the SAME go2rtc that serves Ring two-way talk, so the pod dying takes
+              # the walkie-talkie with it, and with `strategy: Recreate` plus the config
+              # re-seed on start, a Ring refresh-token rotation is lost on that restart.
+              # AAC 16 kHz mono -> Opus is a cheap encode (well under 2% of a core, no
+              # video work), so CPU is untouched; memory is the only real cost.
+              memory: 512Mi
       volumes:
         - name: config
           persistentVolumeClaim:

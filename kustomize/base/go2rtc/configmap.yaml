@@ -86,8 +86,43 @@ data:
       # pivoting from an already-compromised camera to another — where the attacker
       # would gain a read-only stream they already had. Two variables instead of ten
       # at five cameras. Each camera still gets its own IP variable.
-      big_room: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
-      first_floor_stairway: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_main"
+      # EVERY MAIN STREAM CARRIES A SECOND, AUDIO-ONLY PRODUCER. WHY:
+      # Live view had NO SOUND AT ALL (reported 2026-07-31). The Reolinks emit
+      # **AAC** (16 kHz mono; MPEG4-GENERIC/16000 in their SDP, confirmed by probing
+      # the live producer). WebRTC cannot carry AAC — only Opus/PCMA/PCMU — and these
+      # entries were bare RTSP URLs with no transcode directive, so there was nothing
+      # to convert it and the audio track was simply never negotiated. Silence was the
+      # correct outcome of the config, not a fault.
+      #
+      # The second source transcodes ONLY the audio to Opus. go2rtc starts sources
+      # lazily and additively: RTSP/MSE/HLS consumers that can take AAC keep using the
+      # bare producer above, and nothing runs at all while nobody is watching.
+      #
+      # THE FULL URL, NOT the `ffmpeg:big_room#...` shorthand. The shorthand feeds
+      # ffmpeg from go2rtc's own internal RTSP endpoint, and this config sets
+      # `rtsp: listen: ""` (see the rtsp block above) — there is no listener to read
+      # from, so the shorthand would fail.
+      #
+      # NO `#video=` ON PURPOSE. Adding `#video=copy` would make this producer offer
+      # H264 as well, and a WebRTC consumer could then start BOTH producers — two RTSP
+      # sessions to the same camera for one viewer. Audio-only keeps it to one extra.
+      # That still costs a session per viewer, against the per-camera RTSP budget in
+      # plan.md — watch it if several people view one camera at once.
+      #
+      # THE `_sub` STREAMS BELOW ARE DELIBERATELY LEFT ALONE. Low quality exists to cut
+      # bandwidth on a weak link; giving it its own audio transcode would add a second
+      # camera session to the exact case that is already struggling. Consequence to know:
+      # **toggling Low drops audio.** Revisit if that proves annoying in practice.
+      #
+      # MEMORY: ffmpeg children share this pod's cgroup, and this is the SAME go2rtc
+      # that serves Ring two-way talk — an OOMKill takes Ring talk down with it. The
+      # limit was raised 256Mi -> 512Mi in the same commit for exactly this reason.
+      big_room:
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
+        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main#audio=opus"
+      first_floor_stairway:
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_main"
+        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_main#audio=opus"
       # `<name>_sub` = the same camera's SUB stream (640x360 / 896x512, ~256-1024
       # kbps), for the app's Low/High live-quality toggle (added 2026-07-30). The
       # main stream is fixed-bitrate with no adaptation, so a weak cellular link
@@ -103,7 +138,9 @@ data:
       # fixed on both Zooms does not apply to the 4MP models. Nothing to do here, but
       # do not assume the Zoom settings transfer; they do not (see the Frigate seed,
       # where this camera's detect geometry is completely different).
-      kitchen: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_KITCHEN}:554/h264Preview_01_main"
+      kitchen:
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_KITCHEN}:554/h264Preview_01_main"
+        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_KITCHEN}:554/h264Preview_01_main#audio=opus"
       kitchen_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_KITCHEN}:554/h264Preview_01_sub"
 
       # Four more cameras, added 2026-07-31 — nursery, basement, bedroom, garage.
@@ -117,13 +154,21 @@ data:
       # `basement` and `bedroom` REPLACE the Ring cameras that held those slugs (the
       # Ring entries are retired below, same swap as big_room/kitchen/stairway on
       # 2026-07-29). `nursery` and `garage` are new slugs — nothing had them.
-      nursery: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY}:554/h264Preview_01_main"
+      nursery:
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY}:554/h264Preview_01_main"
+        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY}:554/h264Preview_01_main#audio=opus"
       nursery_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY}:554/h264Preview_01_sub"
-      basement: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BASEMENT}:554/h264Preview_01_main"
+      basement:
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BASEMENT}:554/h264Preview_01_main"
+        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BASEMENT}:554/h264Preview_01_main#audio=opus"
       basement_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BASEMENT}:554/h264Preview_01_sub"
-      bedroom: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BEDROOM}:554/h264Preview_01_main"
+      bedroom:
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BEDROOM}:554/h264Preview_01_main"
+        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BEDROOM}:554/h264Preview_01_main#audio=opus"
       bedroom_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BEDROOM}:554/h264Preview_01_sub"
-      garage: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_GARAGE}:554/h264Preview_01_main"
+      garage:
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_GARAGE}:554/h264Preview_01_main"
+        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_GARAGE}:554/h264Preview_01_main#audio=opus"
       garage_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_GARAGE}:554/h264Preview_01_sub"
 
       # --- Ring (cloud) ---------------------------------------------------------
