@@ -55,6 +55,92 @@ data:
       # a real camera and render as an unscrubbable tile on the camera wall.
       enabled: false
 
+    # Global ffmpeg args. SCOPE: OUTPUT args only — this block deliberately sets no
+    # `input_args`, and every camera below carries a comment on why the 0.17 RTSP
+    # input preset is left alone. Keep that true.
+    ffmpeg:
+      output_args:
+        # COPY THE CAMERA'S AAC, DO NOT RE-ENCODE IT.
+        # Added 2026-07-31 after "chopped and muffled" audio on recorded playback.
+        #
+        # Frigate's DEFAULT record preset is `preset-record-generic-audio-aac`
+        # (= `-c:v copy -c:a aac`, no -b:a). Verified against the RUNNING ffmpeg
+        # cmdline in the pod, not assumed. That default exists because many cameras
+        # emit G.711/PCM, which is not legal in an MP4 container. These are not
+        # those cameras — every one already emits AAC, the exact codec we want.
+        #
+        # MEASURED 2026-07-31, all seven sub streams, `-c copy` into mp4:
+        #   E1 Zoom  big_room / first_floor_stairway   aac 16 kHz mono ~31 kbps
+        #   E1 Pro   kitchen/nursery/basement/bedroom/garage
+        #                                              aac 16 kHz mono ~64 kbps
+        # Recorded output was 32,411 bps for ALL of them. So the five E1 Pros were
+        # having their bitrate halved, and all seven were paying a second generation
+        # of lossy coding through ffmpeg's weakest AAC encoder, for nothing. `-c copy`
+        # is strictly better here: better audio, less CPU, same container.
+        #
+        # THE PRECONDITION, AND IT IS LOAD-BEARING: every camera must emit MP4-legal
+        # audio. All seven were individually test-muxed with `-c copy` before this
+        # went in — not inferred from the model name. (The `PCMU/8000` line in their
+        # SDP is the two-way-talk backchannel and is sendonly; ffmpeg picks the AAC
+        # track.) If a future camera ships non-AAC audio, or has its mic disabled so
+        # only the PCMU line survives, the mp4 muxer refuses and ffmpeg EXITS — and
+        # since Frigate runs ONE ffmpeg per camera with TWO outputs, that takes
+        # DETECTION down along with recording. The escape hatch is per-camera, not a
+        # global revert:
+        #     ffmpeg:
+        #       output_args:
+        #         record: preset-record-generic-audio-aac
+        # under the offending camera. docs/adding-a-camera.md now probes audio too.
+        #
+        # DISK: +~32 kbps on the five E1 Pros only, ~1.7 GB/day added. Immaterial
+        # against the ~16.7 GB/day baseline below.
+        #
+        # ---------------------------------------------------------------------------
+        # SEGMENT LENGTH 60s, AND WHY THESE ARGS ARE SPELLED OUT INSTEAD OF A PRESET
+        #
+        # These args ARE `preset-record-generic-audio-copy` verbatim, with one change:
+        # `-segment_time 10` -> `-segment_time 60`. Frigate bundles the chunk length
+        # into the same preset as the codec choice, so there is no way to keep the
+        # preset and change only the length.
+        #
+        # THE SECOND HALF OF THE "chopped and muffled" REPORT. `-c copy` above fixed
+        # the muffling; it did NOT fix the chopping, and the chopping is not a codec
+        # problem at all. The segment muxer cuts on a VIDEO keyframe, but AAC audio is
+        # packed in indivisible 64 ms frames (1024 samples @ 16 kHz) that do not line
+        # up with that cut. The frame straddling the boundary is DROPPED rather than
+        # split, so every segment starts its audio late and ends it early. MEASURED
+        # 2026-07-31 on garage, three consecutive segments:
+        #       video 12.015s / audio 11.838s  -> 177 ms of sound missing
+        #       video 12.340s / audio 12.179s  -> 161 ms
+        #       video  8.010s / audio  7.842s  -> 168 ms
+        # Concatenating six segments showed inter-packet gaps of 336/272/216 ms at the
+        # joins. The app plays recordings as nginx-vod-module HLS, which stitches these
+        # chunks end to end, so the user hears a ~150 ms dropout every ~10 seconds.
+        #
+        # RULED OUT FIRST, so nobody re-litigates it: the input timestamp flags are NOT
+        # the cause. All four combinations of `-use_wallclock_as_timestamps` and
+        # `+genpts` were tested against the live camera and produced identical results.
+        # It is purely the keyframe-vs-audio-frame grid mismatch.
+        #
+        # 60s DOES NOT ELIMINATE THE GAP — it makes it 6x rarer (one dropout a minute
+        # instead of six). The hole is the same size; there are simply fewer seams.
+        # Owner accepted that trade 2026-07-31 over leaving it alone.
+        #
+        # WHAT IT COSTS:
+        #  - Coarser seeking and coarser retention granularity (60s is the smallest
+        #    unit Frigate can keep or delete).
+        #  - This block is now PINNED. It will not pick up upstream changes to the
+        #    segmenter on a Frigate upgrade the way the preset would. **On any version
+        #    bump, re-read `PRESETS_RECORD_OUTPUT` and re-sync everything here except
+        #    the segment_time.**
+        #  - 6x more data in flight in /tmp/cache, which is a 1 GB **tmpfs** and
+        #    therefore counts against this container's memory cgroup. Measured 32 MB at
+        #    10s across seven cameras, so expect ~190 MB. Frigate was already sitting at
+        #    3718 MiB of a 4 GiB limit (stable, not leaking), which left no room — the
+        #    deployment's memory limit was raised 4Gi -> 5Gi in the same commit. Do not
+        #    separate those two changes.
+        record: -f segment -segment_time 60 -segment_format mp4 -reset_timestamps 1 -strftime 1 -c copy
+
     record:
       enabled: true
       # 24/7 continuous. Budget from MEASURED sub-stream bitrates, not nominal specs,

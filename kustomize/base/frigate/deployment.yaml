@@ -140,7 +140,22 @@ spec:
             # it would take every Ring camera offline. Raise deliberately if
             # semantic_search model_size is ever moved to `large`.
             limits:
-              memory: 4Gi
+              # RAISED 4Gi -> 5Gi, 2026-07-31, together with the move to 60-second
+              # recording segments (see the ffmpeg block in configmap.yaml — the two
+              # changes must not be separated).
+              #
+              # /tmp/cache is a 1 GB **tmpfs**, so in-flight segments are RAM and count
+              # against THIS cgroup. Measured 32 MB of cache at 10s segments across
+              # seven cameras; 60s segments make that ~190 MB. Frigate was already
+              # steady at 3718 MiB against the old 4 GiB limit (sampled three times,
+              # flat — not a leak), leaving ~120 MiB of headroom. That is not enough to
+              # absorb the larger cache, and an OOMKill here stops recording AND
+              # detection on all seven cameras at once.
+              #
+              # Checked against the node before raising, per the neighbour argument
+              # above: the Dragonfly WSL distro has 23 GB with ~13 GB available, so the
+              # extra 1 GB does not put ring-mqtt at risk.
+              memory: 5Gi
       volumes:
         - name: config
           persistentVolumeClaim:

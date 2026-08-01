@@ -233,6 +233,60 @@ is also the evidence that the models really do differ:
 Record `codec_name`, `width`, `height` and the frame rate for the **sub** stream. Repeat with
 `h264Preview_01_main` if you want to know what live view will carry. A benign
 `Overread VUI by 8 bits` warning on some firmwares is not a failure — read the values below it.
+(It is emitted by every E1 Pro even on a completely successful probe or mux. Do not write a check
+that treats *any* ffmpeg stderr as failure — that produced a false "all five cameras cannot mux"
+result on 2026-07-31. Judge the output file, not stderr.)
+
+### …and probe the AUDIO too — this is now load-bearing
+
+The recipe above is `-select_streams v:0`, video only, and until 2026-07-31 **no camera's audio had
+ever been probed here**. It is no longer optional, because Frigate now records with
+`preset-record-generic-audio-copy` (`-c copy`) — it muxes the camera's audio **as-is** instead of
+re-encoding it. That requires the codec to be MP4-legal:
+
+```bash
+kubectl -n home-automation exec -i deploy/go2rtc -c go2rtc -- sh -s <<'EOF'
+for ip in <ip1> <ip2>; do
+  echo "=== $ip ==="
+  # 1. what codec is it?
+  ffprobe -v error -select_streams a -rtsp_transport tcp \
+    -show_entries stream=codec_name,sample_rate,channels \
+    -of default=noprint_wrappers=1 \
+    "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${ip}:554/h264Preview_01_sub" 2>&1 \
+    | sed "s/${REOLINK_PASS}/<redacted>/g"
+  # 2. THE REAL GATE: does -c copy actually mux into mp4?
+  ffmpeg -v error -rtsp_transport tcp \
+    -i "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${ip}:554/h264Preview_01_sub" \
+    -t 8 -c copy -f mp4 -y /tmp/probe.mp4 2>&1 | grep -v 'Overread VUI' \
+    | sed "s/${REOLINK_PASS}/<redacted>/g"
+  ffprobe -v error -select_streams a -show_entries stream=codec_name,bit_rate \
+    -of csv=p=0 /tmp/probe.mp4
+done
+EOF
+```
+
+Expected on the deployed fleet (measured 2026-07-31, all seven):
+
+| Model | Audio |
+|---|---|
+| E1 Zoom (`big_room`, `first_floor_stairway`) | aac, 16 kHz mono, **~31 kbps** |
+| E1 Pro (`kitchen`, `nursery`, `basement`, `bedroom`, `garage`) | aac, 16 kHz mono, **~64 kbps** |
+
+**If a camera is not AAC** — or has its mic disabled so only the `PCMU/8000` *sendonly* talk
+backchannel remains — the mp4 muxer refuses the stream and **ffmpeg exits**. Frigate runs ONE
+ffmpeg per camera with TWO outputs, so that kills **detection as well as recording** for that
+camera. Do not fix it by reverting the global; give the odd camera its own override:
+
+```yaml
+    <camera>:
+      ffmpeg:
+        output_args:
+          record: preset-record-generic-audio-aac
+```
+
+For **live** audio the camera must additionally appear in the go2rtc config with a second,
+audio-only `ffmpeg:…#audio=opus` source — WebRTC cannot carry AAC, and a bare RTSP entry gives a
+silent live view. See the comment above `big_room` in `kustomize/base/go2rtc/configmap.yaml`.
 
 Known differences among the three deployed cameras:
 
@@ -566,6 +620,23 @@ Every camera wants a live `pid`, `camera_fps` near 5, `process_fps` tracking it,
    `camera.<room>_snapshot` from the Ring integration survives retiring the go2rtc stream, so
    Hawksnest will show that room twice. The three cameras retired in July no longer have Ring
    entities, so removing them is the established outcome — do the same for each replacement.
+
+   **This step was skipped for `basement` and `bedroom` on 2026-07-31, and the failure mode is
+   worse than a duplicate tile.** The stale entities come from **ring-mqtt** (platform `mqtt`, not
+   the disabled `ring` config entry), and they keep the *canonical* entity IDs, which forces
+   Frigate's real entities onto suffixed ones:
+
+   | entity | platform | state |
+   |---|---|---|
+   | `camera.<room>_snapshot`, `binary_sensor.<room>_motion` | `mqtt` (ring-mqtt) | `unavailable` |
+   | `binary_sensor.<room>_motion_2` | `frigate` | the live one |
+   | `binary_sensor.<room>_motion_3` | `reolink` | |
+
+   Hawksnest resolves by base slug, so it binds the **dead** entity — which is what made the
+   basement / Cooper's-bedroom **scrubber and thumbnail tiles** wrong while the cameras themselves
+   were fine. Removing the `mqtt` entities is not enough on its own: afterwards **rename Frigate's
+   `_motion_2` back to `_motion`**, because HA does not reclaim a freed slug automatically. Check
+   for references to the suffixed name before renaming (there were none in July).
 2. Add the official **Reolink** integration per camera for PTZ / IR / privacy — then **disable its
    camera entities**. They end in suffixes `cameraModel.classify()` parses and would collide with
    the Frigate camera in Hawksnest's `resolveCameras`.
