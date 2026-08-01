@@ -450,9 +450,35 @@ data:
     # the guard, the software half works today and the hardware half starts
     # working the moment the integration lands, with no edit here.
     #
-    # EXPECT DURING THE WINDOW: Frigate logs ffmpeg read errors for this camera
-    # and the bedroom tile reads unavailable in Hawksnest. That is the feature
-    # working, not a fault.
+    # EXPECT DURING THE WINDOW: the bedroom tile reads unavailable in Hawksnest.
+    # That is the feature working, not a fault.
+    #
+    # THE THIRD LAYER, added 2026-08-01: `frigate/bedroom/enabled/set` = OFF.
+    #
+    # detect/recordings/snapshots OFF only mutes Frigate's OUTPUTS — it keeps the
+    # capture pipeline alive, so ffmpeg goes on pulling a camera that privacy mode
+    # has made silent. The watchdog then crash-loops it all night:
+    #     watchdog.bedroom: No frames received from bedroom in 20 seconds
+    #     watchdog.bedroom: Ffmpeg process crashed unexpectedly for bedroom
+    #     ffmpeg.bedroom.detect: Could not find codec parameters ... unspecified size
+    # 634 error lines in one window on 2026-07-31. This note used to say those
+    # errors were expected; they were, but they are also avoidable, and the real
+    # cost is that a genuinely broken bedroom camera is indistinguishable from a
+    # privacy window in the logs. (It cost an incorrect "the camera has failed"
+    # diagnosis that same night — the direct symptoms of privacy mode, an RTSP
+    # stream advertising `h264, 0x0, 0/0 fps` and port 80 refusing, look exactly
+    # like a wedged encoder.)
+    #
+    # `enabled` is a real Frigate MQTT command (0.17.2 `dispatcher.py` registers
+    # `"enabled": self._on_enabled_command`) and it stops the pipeline properly:
+    # verified live — "Terminating the existing ffmpeg process / FFmpeg has exited",
+    # 0 record processes, no watchdog noise, and back recording ~12s after ON.
+    # There is NO `switch.<camera>_enabled` entity in the HA integration, which is
+    # why this goes via mqtt.publish rather than switch.turn_off.
+    #
+    # The other two layers are deliberately KEPT. `enabled` alone would do it, but
+    # they cost nothing, and if a Frigate upgrade ever renames this command the
+    # privacy guarantee must not quietly depend on one topic string.
     - id: hawksnest_bedroom_privacy_window
       alias: "Hawksnest: bedroom privacy window (19:00-07:00)"
       mode: single
@@ -479,6 +505,12 @@ data:
                       - switch.bedroom_detect
                       - switch.bedroom_recordings
                       - switch.bedroom_snapshots
+                # Stop the capture pipeline outright, so no ffmpeg is left pulling a
+                # camera that is about to go silent (see the note above).
+                - service: mqtt.publish
+                  data:
+                    topic: frigate/bedroom/enabled/set
+                    payload: "OFF"
                 - service: switch.turn_on
                   continue_on_error: true
                   target:
@@ -493,6 +525,13 @@ data:
             # Re-enabling Frigate first would bank a minute of black frames and a
             # burst of decode errors at the top of every morning's timeline.
             - delay: "00:00:30"
+            # Pipeline back up BEFORE the output switches: `enabled` is what spawns
+            # ffmpeg, and it takes ~12s to produce frames. Doing it in the other
+            # order would arm recording against a camera with no capture running.
+            - service: mqtt.publish
+              data:
+                topic: frigate/bedroom/enabled/set
+                payload: "ON"
             - service: switch.turn_on
               target:
                 entity_id:
