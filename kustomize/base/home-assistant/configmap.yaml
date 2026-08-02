@@ -539,8 +539,689 @@ data:
                   - switch.bedroom_recordings
                   - switch.bedroom_snapshots
 
+    # ── Reconciled from the live instance, 2026-08-02 ─────────────────────────
+    # Built in the HA UI and never written back here, so they lived only on the
+    # ha-config PVC. Copied in mechanically (scripts/ha-config-drift-check.sh now
+    # guards the gap). Schema is HA's post-2024.10 spelling (triggers/conditions/
+    # actions) because that is what the UI editor writes.
+    - id: '1782824028630307'
+      alias: All Lock
+      triggers:
+      - platform: state
+        entity_id: alarm_control_panel.mfa_alarm
+        to: armed_home
+      conditions: []
+      actions:
+      - target:
+          entity_id:
+          - lock.front_door_lock
+          - lock.garage_door
+          - lock.lock
+        action: lock.lock
+      mode: single
+    - id: '1783863871268981'
+      alias: Garage Door Unarm
+      triggers:
+      - platform: state
+        entity_id: alarm_control_panel.mfa_alarm
+        to: disarmed
+      conditions: []
+      actions:
+      - target:
+          entity_id:
+          - lock.garage_door
+        action: lock.unlock
+      mode: single
+    - id: '1785527100001'
+      alias: Cooper's ZEN32 - WLED presets
+      description: Small buttons 1-4 pick a WLED preset. Single tap = Starry Night / Campfire
+        / Ocean / Nebula (matching each button's LED colour); double tap = New Sleep /
+        Rocket / Rainbow 2 / Music. Button-to-scene mapping measured 2026-08-01, not assumed.
+      triggers:
+      - entity_id:
+        - event.cooper_s_bedroom_cooper_s_scene_controller_scene_001
+        - event.cooper_s_bedroom_cooper_s_scene_controller_scene_002
+        - event.cooper_s_bedroom_cooper_s_scene_controller_scene_003
+        - event.cooper_s_bedroom_cooper_s_scene_controller_scene_004
+        platform: state
+      conditions:
+      - condition: template
+        value_template: '{{ trigger.to_state.state not in [''unknown'',''unavailable'',''none'']
+          and chosen not in [none,''None'',''''] }}'
+      actions:
+      - target:
+          entity_id: select.cooper_s_new_bedroom_preset
+        data:
+          option: '{{ chosen }}'
+        action: select.select_option
+      variables:
+        presets:
+          1_KeyPressed: Starry Night
+          2_KeyPressed: Campfire
+          3_KeyPressed: Ocean
+          4_KeyPressed: Nebula
+          1_KeyPressed2x: New Sleep
+          2_KeyPressed2x: Rocket
+          3_KeyPressed2x: Rainbow 2
+          4_KeyPressed2x: Music
+        chosen: '{{ presets.get(trigger.entity_id[-1] ~ ''_'' ~ trigger.to_state.attributes.event_type)
+          }}'
+      max: 10
+      mode: queued
+    - id: '1785527100002'
+      alias: Cooper's ZEN32 - big button
+      description: Big relay key (scene_005). SINGLE PRESS IS NOT HANDLED HERE - the key
+        is hard-wired to the relay (parameter 19 = 1, local control enabled), so a tap
+        throws the relay in hardware and keeps working when Home Assistant or Z-Wave is
+        down. That matters because the relay drives real loads in a child's bedroom and
+        this host has an intermittent RAM fault. Double tap toggles the WLED strip and
+        press-and-hold sets Starry Night; both of those need HA, which costs nothing because
+        the strip is Wi-Fi and needed it anyway. Scene events still fire on a single press
+        - deliberately ignored, or the tap would toggle the relay twice over.
+      triggers:
+      - platform: state
+        entity_id:
+        - event.cooper_s_bedroom_cooper_s_scene_controller_scene_005
+      conditions:
+      - condition: template
+        value_template: '{{ trigger.to_state.state not in [''unknown'',''unavailable'',''none'']
+          }}'
+      actions:
+      - choose:
+        - conditions:
+          - condition: template
+            value_template: '{{ trigger.to_state.attributes.event_type == ''KeyPressed2x''
+              }}'
+          sequence:
+          - action: light.toggle
+            target:
+              entity_id: light.cooper_s_new_bedroom
+        - conditions:
+          - condition: template
+            value_template: '{{ trigger.to_state.attributes.event_type == ''KeyHeldDown''
+              }}'
+          sequence:
+          - action: select.select_option
+            target:
+              entity_id: select.cooper_s_new_bedroom_preset
+            data:
+              option: Starry Night
+      mode: queued
+      max: 5
+    - id: '1785527100003'
+      alias: Nursery LED bar - alarm colour + night dimming
+      description: BASE layer only. Colour follows the MFA alarm (blue disarmed, red armed-home,
+        violet armed-away, orange arming); brightness steps down through evening into
+        night. Transient effects live in the two automations below. Updated 2026-08-01.
+      triggers:
+      - entity_id: alarm_control_panel.mfa_alarm
+        platform: state
+      - at:
+        - 07:00:00
+        - '19:00:00'
+        - '21:00:00'
+        platform: time
+      - event: start
+        platform: homeassistant
+      actions:
+      - target:
+          device_id: 83fde5fed357870364f7dc7b9c127ac5
+        data:
+          parameter: 95
+          value: '{{ colour | int }}'
+        action: zwave_js.set_config_parameter
+      - target:
+          device_id: 83fde5fed357870364f7dc7b9c127ac5
+        data:
+          parameter: 96
+          value: '{{ colour | int }}'
+        action: zwave_js.set_config_parameter
+      - target:
+          device_id: 83fde5fed357870364f7dc7b9c127ac5
+        data:
+          parameter: 97
+          value: '{{ bri_on | int }}'
+        action: zwave_js.set_config_parameter
+      - target:
+          device_id: 83fde5fed357870364f7dc7b9c127ac5
+        data:
+          parameter: 98
+          value: '{{ bri_off | int }}'
+        action: zwave_js.set_config_parameter
+      variables:
+        bri_off: '{% set h = now().hour %}
+
+          {{ 10 if 7 <= h < 19 else (5 if 19 <= h < 21 else 1) }}'
+        bri_on: '{% set h = now().hour %}
+
+          {{ 33 if 7 <= h < 19 else (20 if 19 <= h < 21 else 8) }}'
+        colour: '{% set s = states(''alarm_control_panel.mfa_alarm'') %}
+
+          {{ {''disarmed'':170,''armed_home'':0,''armed_away'':190,''triggered'':0,''pending'':0,''arming'':7}.get(s,
+          170) }}'
+      mode: single
+    - id: '1785527100004'
+      alias: Nursery LED effect - alarm + too hot
+      description: 'Sustained overlay on the Nursery LED bar. Priority: alarm triggered
+        (red fast blink) > room at or over 78F (orange pulse) > nothing (clear). TEMPERATURE
+        SOURCE CHANGED 2026-08-02, from the ZSE44 to the switch''s OWN sensor. The original
+        note here claimed the in-wall sensor runs warm; measurement says otherwise - on
+        2026-08-01 the switch read 72.6F against the ZSE44''s 72.2F in the same room,
+        0.45F apart. What the ZSE44 does have is a battery, so it sleeps: on that same
+        day it had last reported five hours earlier while the mains-powered switch was
+        seconds old. For an alert whose whole job is to fire promptly when a baby''s room
+        gets hot, a sensor that reports every few minutes beats one that is accurate but
+        hours stale. Fails safe: if the sensor drops out, float(0) makes ''hot'' false
+        rather than firing. Parameter 99 is written as FOUR partials because a whole-parameter
+        write 500s on this firmware; effect 255 is ''Clear'' (releases the bar), not 0
+        which is ''Off'' and would hold it dark. The override-beats-base behaviour this
+        relies on was verified on the Master Bedroom twin 2026-08-02.'
+      triggers:
+      - entity_id: alarm_control_panel.mfa_alarm
+        platform: state
+      - entity_id: sensor.nursery_on_off_switch_air_temperature
+        platform: state
+      - event: start
+        platform: homeassistant
+      - event_type: nursery_led_restore
+        platform: event
+      actions:
+      - default:
+        - target:
+            device_id: 83fde5fed357870364f7dc7b9c127ac5
+          data:
+            command_class: 112
+            property: 99
+            value: 255
+            property_key: 4278190080
+          action: zwave_js.set_value
+        choose:
+        - sequence:
+          - target:
+              device_id: 83fde5fed357870364f7dc7b9c127ac5
+            data:
+              command_class: 112
+              property: 99
+              value: 0
+              property_key: 16711680
+            action: zwave_js.set_value
+          - target:
+              device_id: 83fde5fed357870364f7dc7b9c127ac5
+            data:
+              command_class: 112
+              property: 99
+              value: 100
+              property_key: 65280
+            action: zwave_js.set_value
+          - target:
+              device_id: 83fde5fed357870364f7dc7b9c127ac5
+            data:
+              command_class: 112
+              property: 99
+              value: 255
+              property_key: 255
+            action: zwave_js.set_value
+          - target:
+              device_id: 83fde5fed357870364f7dc7b9c127ac5
+            data:
+              command_class: 112
+              property: 99
+              value: 2
+              property_key: 4278190080
+            action: zwave_js.set_value
+          conditions:
+          - condition: template
+            value_template: '{{ alarmed }}'
+        - sequence:
+          - target:
+              device_id: 83fde5fed357870364f7dc7b9c127ac5
+            data:
+              command_class: 112
+              property: 99
+              value: 7
+              property_key: 16711680
+            action: zwave_js.set_value
+          - target:
+              device_id: 83fde5fed357870364f7dc7b9c127ac5
+            data:
+              command_class: 112
+              property: 99
+              value: 60
+              property_key: 65280
+            action: zwave_js.set_value
+          - target:
+              device_id: 83fde5fed357870364f7dc7b9c127ac5
+            data:
+              command_class: 112
+              property: 99
+              value: 255
+              property_key: 255
+            action: zwave_js.set_value
+          - target:
+              device_id: 83fde5fed357870364f7dc7b9c127ac5
+            data:
+              command_class: 112
+              property: 99
+              value: 4
+              property_key: 4278190080
+            action: zwave_js.set_value
+          conditions:
+          - condition: template
+            value_template: '{{ hot }}'
+      variables:
+        hot: '{{ states(''sensor.nursery_on_off_switch_air_temperature'') | float(0) >=
+          78 }}'
+        alarmed: '{{ states(''alarm_control_panel.mfa_alarm'') == ''triggered'' }}'
+      mode: restart
+    - id: '1785527100005'
+      alias: Nursery LED effect - garage door opened
+      description: Pulses the Nursery LED bar green for 5s when the garage door opens,
+        then restores whatever the arbiter says should be showing. Skipped entirely while
+        the alarm is triggered. Created 2026-08-01.
+      triggers:
+      - from: 'off'
+        platform: state
+        to: 'on'
+        entity_id: binary_sensor.garage_door
+      conditions:
+      - condition: template
+        value_template: '{{ states(''alarm_control_panel.mfa_alarm'') != ''triggered''
+          }}'
+      actions:
+      - target:
+          device_id: 83fde5fed357870364f7dc7b9c127ac5
+        data:
+          command_class: 112
+          property: 99
+          value: 85
+          property_key: 16711680
+        action: zwave_js.set_value
+      - target:
+          device_id: 83fde5fed357870364f7dc7b9c127ac5
+        data:
+          command_class: 112
+          property: 99
+          value: 100
+          property_key: 65280
+        action: zwave_js.set_value
+      - target:
+          device_id: 83fde5fed357870364f7dc7b9c127ac5
+        data:
+          command_class: 112
+          property: 99
+          value: 5
+          property_key: 255
+        action: zwave_js.set_value
+      - target:
+          device_id: 83fde5fed357870364f7dc7b9c127ac5
+        data:
+          command_class: 112
+          property: 99
+          value: 4
+          property_key: 4278190080
+        action: zwave_js.set_value
+      - delay:
+          seconds: 9
+      - event: nursery_led_restore
+      mode: single
+    - id: '1785540000001'
+      alias: Master Bedroom ZEN32 - WLED presets
+      description: Small keys 1-3 pick a WLED preset; each LED colour matches its preset
+        (1 blue = Blue Relax, 2 magenta = Rainbow, 3 cyan = Noisemeter). Key 4 is unassigned
+        and its LED is off. Every key powers the strip first via script.master_bedroom_strip_power_up,
+        because the big key's relay is the strip's mains supply - without that, pressing
+        a scene key on a dark strip would do nothing at all and look broken. Key-to-scene
+        mapping (scene_001..004 = small keys) confirmed live on this unit 2026-08-01.
+      triggers:
+      - platform: state
+        entity_id:
+        - event.master_bedroom_scene_controller_scene_001
+        - event.master_bedroom_scene_controller_scene_002
+        - event.master_bedroom_scene_controller_scene_003
+      conditions:
+      - condition: template
+        value_template: '{{ trigger.to_state.state not in [''unknown'',''unavailable'',''none'']
+          and chosen not in [none,''None'',''''] }}'
+      actions:
+      - action: script.master_bedroom_strip_power_up
+      - action: select.select_option
+        target:
+          entity_id: select.master_bedroom_preset
+        data:
+          option: '{{ chosen }}'
+      variables:
+        presets:
+          1_KeyPressed: Blue Relax
+          2_KeyPressed: Rainbow
+          3_KeyPressed: Noisemeter
+        chosen: '{{ presets.get(trigger.entity_id[-1] ~ ''_'' ~ trigger.to_state.attributes.event_type)
+          }}'
+      mode: queued
+      max: 10
+    - id: '1785540000002'
+      alias: Master Bedroom ZEN32 - big key gestures
+      description: 'SINGLE PRESS IS DELIBERATELY ABSENT. The big key''s relay is the strip''s
+        mains supply, so a tap already powers it in hardware - no Home Assistant, no Wi-Fi,
+        no Z-Wave. Adding a light.toggle there was an outright bug: it raced the ESP''s
+        ~4s boot and could switch the strip straight back off. Double tap drops to 3%
+        - chosen to match Blue Relax and Noisemeter, which are both stored at 8/255; the
+        first attempt used 12%, which is four times brighter than either and so brightened
+        the room instead of dimming it. Press-and-hold sets solid red at 20% as a night-vision-friendly
+        mode. Both power the strip first, since neither can reach a controller with no
+        mains.'
+      triggers:
+      - platform: state
+        entity_id:
+        - event.master_bedroom_scene_controller_scene_005
+      conditions:
+      - condition: template
+        value_template: '{{ trigger.to_state.state not in [''unknown'',''unavailable'',''none'']
+          }}'
+      actions:
+      - choose:
+        - conditions:
+          - condition: template
+            value_template: '{{ trigger.to_state.attributes.event_type == ''KeyPressed2x''
+              }}'
+          sequence:
+          - action: script.master_bedroom_strip_power_up
+          - action: light.turn_on
+            target:
+              entity_id: light.master_bedroom
+            data:
+              brightness_pct: 3
+        - conditions:
+          - condition: template
+            value_template: '{{ trigger.to_state.attributes.event_type == ''KeyHeldDown''
+              }}'
+          sequence:
+          - action: script.master_bedroom_strip_power_up
+          - action: light.turn_on
+            target:
+              entity_id: light.master_bedroom
+            data:
+              rgb_color:
+              - 255
+              - 0
+              - 0
+              brightness_pct: 20
+              effect: Solid
+      mode: queued
+      max: 5
+    - id: '1785540000003'
+      alias: Master Bedroom strip - brighten amber by day
+      description: 'The strip''s mains is the ZEN32''s relay, so every power-on is a cold
+        boot. WLED boots into preset 5 ''Amber Night'' (solid amber, 26/255) - deliberately
+        the DIM one, because the failure that matters is being blasted at 2am, and brightening
+        a room in daylight bothers nobody. This automation supplies the other half: if
+        the strip comes up during the day, it is raised to the full-brightness ''Startup''
+        amber it used to boot into. Triggered on the entity becoming available, which
+        is what a boot looks like from Home Assistant''s side. Doing it the other way
+        round - boot bright, dim afterwards - would flash the room every night before
+        HA could react.'
+      triggers:
+      - platform: state
+        entity_id: light.master_bedroom
+        from: unavailable
+      conditions:
+      - condition: time
+        after: 07:00:00
+        before: '21:00:00'
+      actions:
+      - delay:
+          seconds: 3
+      - action: select.select_option
+        target:
+          entity_id: select.master_bedroom_preset
+        data:
+          option: Startup
+      mode: single
+    - id: '1785540000004'
+      alias: Master Bedroom ZEN32 - LEDs off at night
+      description: 'Four lit LEDs point at the bed all night, so after sunset the pad
+        goes fully dark and at sunrise it comes back. Only the LED MODE parameters (1-4)
+        are toggled: Always on (3) by day, Always off (2) by night. Colour and brightness
+        are deliberately NOT part of this - they are set once, statically, to the daytime
+        look (relay green, key1 blue, key2 magenta, key3 cyan at Medium), because an LED
+        that is off has no colour and rewriting eight parameters twice a day to no visible
+        effect is just Z-Wave traffic. Earlier versions recoloured to red and then blue
+        at Low; both still read as too bright on the wall, and 30% is this device''s floor,
+        so the answer was fewer lit LEDs rather than a different colour. Key 4 is omitted:
+        its LED is already permanently off. Night comes from sun.sun rather than from
+        which trigger fired, so a Home Assistant restart at 3am re-applies the correct
+        state instead of leaving the pad lit - this host has an intermittent RAM fault
+        and does restart unexpectedly. Consequence accepted by the owner: at night the
+        pad is invisible and the big key has to be found by memory.'
+      triggers:
+      - platform: sun
+        event: sunset
+      - platform: sun
+        event: sunrise
+      - platform: homeassistant
+        event: start
+      actions:
+      - repeat:
+          for_each:
+          - 1
+          - 2
+          - 3
+          - 4
+          sequence:
+          - action: zwave_js.set_config_parameter
+            target:
+              device_id: a62df2c050dc5f0aca52cb9e302ef98e
+            data:
+              parameter: '{{ repeat.item }}'
+              value: '{{ 2 if night else 3 }}'
+          - delay:
+              milliseconds: 400
+      variables:
+        night: '{{ is_state(''sun.sun'',''below_horizon'') }}'
+      mode: single
+      max_exceeded: silent
+    - id: '1785540000005'
+      alias: Master Bedroom LED bar - alarm colour + dim at night
+      description: 'BASE layer only; transient effects live in the overlay automation.
+        Colour follows the MFA alarm (blue disarmed, red armed-home, violet armed-away,
+        orange arming), ported from the Nursery. NIGHT RULE: after sunset the bar stays
+        lit but very dim (8 on / 1 off, the Nursery''s night values) WHENEVER THE ALARM
+        IS NOT DISARMED, and goes fully dark when it is. The point is that an armed house
+        should still say so at 3am - going dark unconditionally, which this did first,
+        threw away the one piece of information worth having overnight. Disarmed and dark
+        is fine because there is nothing to report. Sun-based rather than the Nursery''s
+        fixed 07/19/21 steps, to match the ZEN32 in the same room. Alerts are independent:
+        the overlay writes parameter 99, which carries its own brightness, so a triggered
+        alarm or over-temperature pulse shows regardless.'
+      triggers:
+      - platform: state
+        entity_id: alarm_control_panel.mfa_alarm
+      - platform: sun
+        event: sunset
+      - platform: sun
+        event: sunrise
+      - platform: homeassistant
+        event: start
+      actions:
+      - action: zwave_js.set_config_parameter
+        target:
+          device_id: 4921442741687644efb1bd60b30c377d
+        data:
+          parameter: 95
+          value: '{{ colour | int }}'
+      - action: zwave_js.set_config_parameter
+        target:
+          device_id: 4921442741687644efb1bd60b30c377d
+        data:
+          parameter: 96
+          value: '{{ colour | int }}'
+      - action: zwave_js.set_config_parameter
+        target:
+          device_id: 4921442741687644efb1bd60b30c377d
+        data:
+          parameter: 97
+          value: '{{ bri_on | int }}'
+      - action: zwave_js.set_config_parameter
+        target:
+          device_id: 4921442741687644efb1bd60b30c377d
+        data:
+          parameter: 98
+          value: '{{ bri_off | int }}'
+      variables:
+        colour: '{% set s = states(''alarm_control_panel.mfa_alarm'') %}
+
+          {{ {''disarmed'':170,''armed_home'':0,''armed_away'':190,''triggered'':0,''pending'':0,''arming'':7}.get(s,
+          170) }}'
+        bri_on: '{% set night = is_state(''sun.sun'',''below_horizon'') %}{% set armed
+          = states(''alarm_control_panel.mfa_alarm'') != ''disarmed'' %}{{ (8 if armed
+          else 0) if night else 33 }}'
+        bri_off: '{% set night = is_state(''sun.sun'',''below_horizon'') %}{% set armed
+          = states(''alarm_control_panel.mfa_alarm'') != ''disarmed'' %}{{ (1 if armed
+          else 0) if night else 10 }}'
+      mode: queued
+      max: 5
+    - id: '1785540000006'
+      alias: Master Bedroom LED effect - alarm + too hot
+      description: 'Sustained overlay on the Master Bedroom LED bar. VERIFIED ON HARDWARE
+        2026-08-02: with the base layer at brightness 8/1 (the dim armed-at-night setting),
+        firing this effect produced bright red fast blinking, not a faint one - so parameter
+        99 carries its own brightness and is not capped by the base. That is what makes
+        ''dim bar all night, loud alert when it matters'' work, and it is the assumption
+        the Nursery''s identical overlay also rests on. Priority: alarm triggered (red
+        fast blink) > room at or over 78F (orange pulse) > nothing (clear). Parameter
+        99 is written as FOUR partials - colour, level, duration, effect - because a whole-parameter
+        write returns a 500 on this firmware. Effect 255 is ''Clear'', which releases
+        the bar back to the base layer; effect 0 is ''Off'', which would hold it dark
+        and outrank the base colour. Temperature comes from the SWITCH''S OWN sensor:
+        this room has no separate thermometer, and the Nursery pair was measured on 2026-08-01
+        at 72.6F on the switch against 72.2F on its ZSE44 - 0.45F apart, so the switch
+        is trustworthy here. That also corrects the Nursery overlay''s description, which
+        claims the in-wall sensor runs warm; the measurement says it does not.'
+      triggers:
+      - platform: state
+        entity_id: alarm_control_panel.mfa_alarm
+      - platform: state
+        entity_id: sensor.master_bedroom_on_off_switch_air_temperature
+      - platform: homeassistant
+        event: start
+      - platform: event
+        event_type: master_bedroom_led_restore
+      actions:
+      - choose:
+        - conditions:
+          - condition: template
+            value_template: '{{ alarmed }}'
+          sequence:
+          - action: zwave_js.set_value
+            target:
+              device_id: 4921442741687644efb1bd60b30c377d
+            data:
+              command_class: 112
+              property: 99
+              property_key: 16711680
+              value: 0
+          - action: zwave_js.set_value
+            target:
+              device_id: 4921442741687644efb1bd60b30c377d
+            data:
+              command_class: 112
+              property: 99
+              property_key: 65280
+              value: 100
+          - action: zwave_js.set_value
+            target:
+              device_id: 4921442741687644efb1bd60b30c377d
+            data:
+              command_class: 112
+              property: 99
+              property_key: 255
+              value: 255
+          - action: zwave_js.set_value
+            target:
+              device_id: 4921442741687644efb1bd60b30c377d
+            data:
+              command_class: 112
+              property: 99
+              property_key: 4278190080
+              value: 2
+        - conditions:
+          - condition: template
+            value_template: '{{ hot }}'
+          sequence:
+          - action: zwave_js.set_value
+            target:
+              device_id: 4921442741687644efb1bd60b30c377d
+            data:
+              command_class: 112
+              property: 99
+              property_key: 16711680
+              value: 7
+          - action: zwave_js.set_value
+            target:
+              device_id: 4921442741687644efb1bd60b30c377d
+            data:
+              command_class: 112
+              property: 99
+              property_key: 65280
+              value: 60
+          - action: zwave_js.set_value
+            target:
+              device_id: 4921442741687644efb1bd60b30c377d
+            data:
+              command_class: 112
+              property: 99
+              property_key: 255
+              value: 255
+          - action: zwave_js.set_value
+            target:
+              device_id: 4921442741687644efb1bd60b30c377d
+            data:
+              command_class: 112
+              property: 99
+              property_key: 4278190080
+              value: 4
+        default:
+        - action: zwave_js.set_value
+          target:
+            device_id: 4921442741687644efb1bd60b30c377d
+          data:
+            command_class: 112
+            property: 99
+            property_key: 4278190080
+            value: 255
+      variables:
+        alarmed: '{{ states(''alarm_control_panel.mfa_alarm'') == ''triggered'' }}'
+        hot: '{{ states(''sensor.master_bedroom_on_off_switch_air_temperature'') | float(0)
+          >= 78 }}'
+      mode: queued
+      max: 5
+
+
   scripts.yaml: |
-    {}
+    master_bedroom_strip_power_up:
+      alias: 'Master Bedroom strip: ensure powered'
+      description: The ZEN32's relay IS the WLED strip's mains supply, so anything that
+        talks to the strip over Wi-Fi has to make sure it is actually powered first -
+        otherwise the command goes to a controller that is not switched on and vanishes
+        silently. Turns the relay on only if it is off, then waits for the ESP to finish
+        booting (about 4 seconds, measured) rather than guessing with a fixed delay. Shared
+        by every key that sets a scene, so this wait exists once.
+      mode: single
+      sequence:
+      - if:
+        - condition: state
+          entity_id: switch.master_bedroom_scene_controller
+          state: 'off'
+        then:
+        - action: switch.turn_on
+          target:
+            entity_id: switch.master_bedroom_scene_controller
+        - wait_template: '{{ states(''light.master_bedroom'') not in [''unavailable'',''unknown'']
+            }}'
+          timeout:
+            seconds: 25
+          continue_on_timeout: false
+        - delay:
+            seconds: 1
 
   scenes.yaml: |
     []

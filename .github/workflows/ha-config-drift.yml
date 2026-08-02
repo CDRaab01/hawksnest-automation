@@ -1,0 +1,28 @@
+# Weekly check that the LIVE Home Assistant config still matches the repo seed
+# (kustomize/base/home-assistant/configmap.yaml). The sibling of frigate-drift, pointed at the
+# config with the higher blast radius: three deadbolts, an alarm panel, and the nursery.
+#
+# The seed is first-boot-only, so every real change is a dual write and this catches the
+# forgotten half. It also flags duplicate automation ids, which HA silently resolves by keeping
+# the first and ignoring the rest. A red run names each difference and which side has what.
+#
+# Runs a day after frigate-drift so two red runs don't arrive at once.
+#
+# Triggers are schedule + manual ONLY — never pull_request: this runs on the self-hosted runner
+# on the prod host, and the repo is public (see the suite invariant about fork PRs and
+# self-hosted runners).
+name: ha-config-drift
+
+on:
+  schedule:
+    - cron: "0 13 * * 2" # Tuesdays 09:00 America/New_York (13:00 UTC)
+  workflow_dispatch: {}
+
+jobs:
+  drift-check:
+    runs-on: [self-hosted, linux, dragonfly]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare live HA config against the seed
+        run: ./scripts/ha-config-drift-check.sh

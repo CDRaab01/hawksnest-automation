@@ -19,12 +19,32 @@ spec:
     spec:
       containers:
         - name: zwave-js-ui
-          image: zwavejs/zwave-js-ui:latest
+          # Pinned, not :latest. This pod owns the radio for three deadbolts and the
+          # ZEN32 scene controllers; a floating tag means any pod recreate can roll
+          # the Z-Wave stack forward unattended, on the one workload where a bad
+          # upgrade is a locked-out house rather than a broken page. Bump
+          # deliberately, after reading the release notes. (Same reasoning the
+          # frigate manifest spells out for its own tag.)
+          image: zwavejs/zwave-js-ui:11.22.0
           ports:
             - name: ws
               containerPort: 3000   # Z-Wave JS websocket — HA connects here
             - name: ui
               containerPort: 8091   # Control panel UI
+          # Readiness only, matching frigate and ring-mqtt: the driver takes a while
+          # to come up and interview the mesh, and a liveness probe on a slow start
+          # turns into an inescapable kill-loop (ring-mqtt did exactly that once —
+          # see PROGRESS.md). Readiness is still worth having, because without it a
+          # wedged daemon keeps its Service endpoint and HA goes on believing the
+          # websocket is fine. This pod previously had no probes at all, which was an
+          # omission rather than the deliberate choice its neighbours made.
+          readinessProbe:
+            tcpSocket:
+              port: ws
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
           securityContext:
             # The ZWA-2 is a raw serial device; privileged is the simplest reliable
             # way to give the container access to it inside K3s-in-WSL2. A narrower
