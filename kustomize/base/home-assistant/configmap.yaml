@@ -98,6 +98,50 @@ data:
         value_template: "{{ value_json.record.continuous.days }}"
         scan_interval: 3600
 
+      # Is the vision model Frigate's GenAI depends on actually loaded and actually
+      # capable of images? Added 2026-08-02 after both halves of that failed silently
+      # for an unknown length of time.
+      #
+      # WHY THIS EXISTS. GenAI failures surface only as a WARNING in Frigate's log —
+      # event descriptions and semantic-search enrichment just stop, and nothing in
+      # HA or the app looks any different. Two distinct faults hid there at once:
+      #   1. genai.model was never env-substituted, so Frigate sent the literal
+      #      string "{FRIGATE_GENAI_MODEL}" to LM Studio.
+      #   2. With one model loaded, LM Studio serves an unknown identifier from
+      #      whatever IS loaded. That was a text-only coder model, so the error read
+      #      "Model does not support images" — a plausible wrong answer that pointed
+      #      at the model choice rather than the config.
+      # Loading a second model made LM Studio say what it meant. Neither fault would
+      # have been noticed without someone reading the log.
+      #
+      # LM Studio's NATIVE api (/api/v0/models), not the OpenAI-compatible /v1/models:
+      # /v1 lists everything DOWNLOADED, so it reports the model present even when it
+      # is unloaded and unusable. /api/v0 carries `state` and `type` per model, which
+      # is the whole point — `type: vlm` marks it vision-capable, so this also catches
+      # someone repointing genai at a text-only model.
+      #
+      # The endpoint is the same LM Studio the Frigate container reaches (through the
+      # lmstudio-fwd socat unit, NOT the host's LAN IP). Keep it in step with
+      # OPENAI_BASE_URL in the frigate secret; they must name the same instance.
+      - platform: rest
+        name: Frigate GenAI model ready
+        unique_id: frigate_genai_model_ready
+        resource: http://10.42.0.1:21234/api/v0/models
+        # Guard every hop: a missing key or an unreachable endpoint must read
+        # "unavailable", never a cheerful "on".
+        value_template: >-
+          {% set want = 'google/gemma-4-e4b' %}
+          {% set m = (value_json.data | default([], true))
+                     | selectattr('id', 'eq', want) | list | first | default(none) %}
+          {% if m is none %} missing
+          {% elif m.state != 'loaded' %} unloaded
+          {% elif m.type != 'vlm' %} not_vision
+          {% else %} ready {% endif %}
+        # LM Studio's idle TTL can unload a model between checks, so poll often
+        # enough that a silent unload is caught in minutes rather than at the next
+        # time somebody happens to look at an event.
+        scan_interval: 300
+
     # Household policy for camera object alerts, toggled from Hawksnest's Settings
     # (added 2026-07-30). Server-side ON PURPOSE rather than filtered on the phone:
     # this stops the push being *generated*, so it applies to every device and
@@ -365,9 +409,16 @@ data:
              | selectattr('state', 'in', ['0', '0.0'])
              | selectattr('last_changed', 'lt', now() - timedelta(minutes=15))
              | map(attribute='entity_id') | list }}
+        # Anything other than 'ready' means event descriptions and semantic-search
+        # enrichment are silently dead. Deliberately treats unavailable/unknown as a
+        # fault too: if the sensor cannot reach LM Studio, neither can Frigate.
+        genai_state: "{{ states('sensor.frigate_genai_model_ready') }}"
+        genai_bad: >-
+          {{ genai_state not in ['ready'] }}
       condition:
         - condition: template
-          value_template: "{{ (dead_detect | count) > 0 or (dead_stream | count) > 0 }}"
+          value_template: >-
+            {{ (dead_detect | count) > 0 or (dead_stream | count) > 0 or genai_bad }}
       action:
         - service: rest_command.ntfy_publish
           data:
@@ -380,7 +431,14 @@ data:
               {%- if dead_stream | count > 0 %}
               Camera stream dead (0 fps): {{ dead_stream | join(', ') }}.
               {%- endif %}
+              {%- if genai_bad %}
+              AI event descriptions are down ({{ genai_state }}) — LM Studio is not
+              serving a loaded vision model, so every event description and search
+              enrichment is failing silently.
+              {%- endif %}
+              {%- if dead_detect | count > 0 or dead_stream | count > 0 %}
               Frigate is recording blind — check /api/stats and the camera IPs.
+              {%- endif %}
             tags: "warning"
             priority: "high"
             click: "https://dragonfly.tail2ce561.ts.net:8447/"

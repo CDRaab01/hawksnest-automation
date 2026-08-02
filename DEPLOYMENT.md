@@ -184,6 +184,52 @@ by service name. Remote access is **Tailscale only**; no public internet ports.
    refuses files above the kustomization root (`"not in or below"` error). Prod's are at
    `kustomize/overlays/prod/secrets/` and gitignored; staging's dummies are at
    `kustomize/overlays/staging/secrets/` (the `*.example` files are tracked).
+3b. **NEVER deploy with a bare `kubectl apply -k`. Use `scripts/deploy.sh`.** This one
+   caused a real outage on 2026-08-02, and the failure is quiet enough to be worth
+   spelling out.
+
+   The real prod secrets live **only** on the runner host, at
+   `HAWKSNEST_SECRETS_DIR` (`/home/sonic/hawksnest-secrets`) — never in the checkout,
+   never in git. `deploy.sh` copies them into the overlay before applying. A bare
+   `kubectl apply -k` skips that step, so `secretGenerator` builds the Secrets from
+   whatever `secrets/*.env` happens to be in the working tree — and with
+   `disableNameSuffixHash: true` those overwrite the live Secrets **in place, under the
+   same name**, with no new object and nothing to notice.
+
+   It gets worse in three specific ways:
+   - **The checkout can contain convincing fakes.** CI stages `*.example` → `*.env` so
+     `kustomize build` resolves. If that ever runs locally (or someone mirrors it), the
+     tree holds byte-identical placeholder copies that look like real secrets. Compare
+     against the `.example` to tell: `cmp -s foo.env foo.env.example` means placeholder.
+   - **`need_secret()` / `optional_secret()` skip any file already present in the
+     checkout.** So once placeholders are there, running `deploy.sh` does *not* rescue
+     you — it sees the files and leaves them alone. **Delete the placeholder `*.env` /
+     `*.passwd` from the overlay first**, then run `deploy.sh` so it copies the real
+     ones in. That deletion was the actual fix on 2026-08-02.
+   - **Nothing breaks until a pod restarts.** A Secret change does not roll pods, so
+     everything keeps running on credentials held in its own environment. The cluster
+     looks completely healthy while every workload is one restart away from coming up
+     with `replace-with-…` values. On 2026-08-02 that landed on go2rtc first (all
+     Reolink live view down), then Frigate (all seven cameras down) — hours after the
+     apply that caused it.
+
+   To check whether the live Secrets are real without printing them:
+   ```sh
+   kubectl get secret frigate-credentials -n home-automation \
+     -o jsonpath='{.data.FRIGATE_REOLINK_PASSWORD}' | base64 -d | grep -q '^replace-with-' \
+     && echo PLACEHOLDER || echo real
+   ```
+   Recovery is `deploy.sh` (after deleting the placeholders) followed by an explicit
+   `rollout restart` of anything already running on the bad values — `deploy.sh` only
+   waits on the lock/alarm-critical set (mariadb, mosquitto, home-assistant,
+   zwave-js-ui, ring-mqtt) and will not restart frigate or go2rtc for you.
+
+   Running it as root needs both `$HOME`-relative defaults overridden, since neither
+   lives under `/root`:
+   ```sh
+   HAWKSNEST_SECRETS_DIR=/home/sonic/hawksnest-secrets \
+   KUBECONFIG=/home/sonic/.kube/config ./scripts/deploy.sh
+   ```
 4. **MariaDB readiness race** — HA's recorder fails *permanently for that boot* if it
    starts before MariaDB finishes first-boot DB init. Fixed with a `wait-for-mariadb`
    initContainer on the HA deployment. If recorder is ever down after a change, check that
