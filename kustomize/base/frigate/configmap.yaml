@@ -80,7 +80,13 @@ data:
         #
         # THE PRECONDITION, AND IT IS LOAD-BEARING: every camera must emit MP4-legal
         # audio. All seven were individually test-muxed with `-c copy` before this
-        # went in — not inferred from the model name. (The `PCMU/8000` line in their
+        # went in — not inferred from the model name.
+        #
+        # RE-VERIFIED ON THE MAIN STREAMS 2026-08-02, when recording moved there: the
+        # original test covered the SUB streams, and this precondition does not carry
+        # over by assumption. All seven mains probe `aac, 16000, 1` and mux cleanly
+        # with `-c copy`. Re-run that test if recording is ever pointed at a different
+        # stream again — docs/adding-a-camera.md has the one-liner. (The `PCMU/8000` line in their
         # SDP is the two-way-talk backchannel and is sendonly; ffmpeg picks the AAC
         # track.) If a future camera ships non-AAC audio, or has its mic disabled so
         # only the PCMU line survives, the mp4 muxer refuses and ffmpeg EXITS — and
@@ -93,7 +99,9 @@ data:
         # under the offending camera. docs/adding-a-camera.md now probes audio too.
         #
         # DISK: +~32 kbps on the five E1 Pros only, ~1.7 GB/day added. Immaterial
-        # against the ~16.7 GB/day baseline below.
+        # against the recording baseline below — and more so since 2026-08-02, when
+        # recording moved to the main streams and that baseline went from ~16.7 to
+        # ~299 GB/day.
         #
         # ---------------------------------------------------------------------------
         # SEGMENT LENGTH 60s, AND WHY THESE ARGS ARE SPELLED OUT INSTEAD OF A PRESET
@@ -143,26 +151,50 @@ data:
 
     record:
       enabled: true
-      # 24/7 continuous. Budget from MEASURED sub-stream bitrates, not nominal specs,
-      # and note the cameras are not interchangeable:
-      #   big_room             (E1 Zoom)  256 kbps  ~2.8 GB/day
-      #   first_floor_stairway (E1 Zoom)  256 kbps  ~2.8 GB/day
-      #   kitchen              (E1 Pro)  1024 kbps ~11.1 GB/day   <-- 4x the others
-      # ~16.7 GB/day total, so 3 days is ~50 GB against ~900 GB free. Comfortable, but
-      # the kitchen alone is more than both Zooms combined — if disk ever becomes the
-      # constraint, lowering that camera's sub-stream bitrate is the biggest single
-      # lever, and it costs recorded quality rather than detection (detect only needs
-      # the geometry to match).
+      # ── RECORDING MOVED TO THE MAIN STREAM, 2026-08-02 ────────────────────────
+      # Every camera now has TWO ffmpeg inputs: sub carries `detect`, main carries
+      # `record`. Previously one sub input carried both, so recordings inherited the
+      # detector's stream — 640x360 or 896x512 at 10 fps, measured at 9.97 fps on a
+      # real segment. Fine for detection, poor to actually watch back.
+      #
+      # Detect deliberately STAYS on sub. It only needs geometry, and decoding a
+      # 2560x1440 stream seven times over for the detector would cost far more CPU
+      # than the recording quality is worth. Recording is a stream copy (-c copy),
+      # so main costs disk and one more RTSP session per camera, not CPU.
+      #
+      # Budget from MEASURED main-stream bitrates (GetEnc, 2026-08-02), not specs —
+      # the cameras are NOT interchangeable and two of them are outliers:
+      #   big_room             (E1 Zoom)  5120 kbps  55.3 GB/day  <-- highest
+      #   first_floor_stairway (E1 Zoom)  4096 kbps  44.2 GB/day
+      #   basement/bedroom/garage (E1 Pro) 4096 kbps 44.2 GB/day each
+      #   kitchen/nursery      (E1 Pro)   3072 kbps  33.2 GB/day each
+      # ~299 GB/day total. At 7 days that is ~2.1 TB.
+      #
+      # The bitrate spread is historical, not deliberate — big_room is 25% above its
+      # neighbours for no recorded reason. Normalising everything to 4096 would make
+      # capacity planning predictable; left alone here so this change is only about
+      # which stream is recorded.
+      #
+      # DO NOT MERGE THIS BEFORE THE NEW DISKS ARE MOUNTED. 7 days needs ~2.1 TB and
+      # the current volume has ~873 GB free — even 3 days (896 GB) no longer fits.
+      # Two 10 TB drives were on order as of 2026-08-02; mirrored (10 TB usable) this
+      # sits at ~21%, which is the right side of the guardrail below.
       #
       # Still verify with `df -h` after 24h rather than trusting this arithmetic.
       #
       # Retargeted 2026-07-29: the first camera is the BIG ROOM, not a bedroom. The
       # original `3` was chosen specifically to avoid two weeks of bedroom footage on
-      # disk; that reasoning does not apply to a living space. Kept at 3 anyway for
-      # now — NOT for privacy, but because this is the first Frigate camera on an
-      # unquotaed hostPath volume and the disk-growth rate is still unmeasured
-      # (see the guardrail note below). Revisit once `df -h` after 24h gives a real
-      # number; 14 is reasonable for this room once the rate is known.
+      # disk; that reasoning does not apply to a living space. It was then kept at 3
+      # only because the disk-growth rate was unmeasured.
+      #
+      # RAISED 3 -> 7 (2026-08-02). The rate is now measured rather than guessed
+      # (~299 GB/day, per camera above), and a week is what the owner actually wants
+      # to be able to look back over. Not 14 or 30: at this bitrate 30 days is 9 TB,
+      # which would fill a mirrored pair to 90% and leave no room for the SQLite
+      # index or event clips.
+      #
+      # The bedroom's own 1-day continuous override is UNCHANGED by this and must
+      # stay that way — it is a privacy decision, not a capacity one.
       #
       # Retention is per-camera. The bedroom Reolink planned for a later phase should
       # carry its own SHORTER window set under that camera — do not raise this one and
@@ -174,7 +206,7 @@ data:
       # with it. Raise these numbers deliberately, and only after the DS925+
       # migration gives the media volume somewhere of its own to grow.
       continuous:
-        days: 3
+        days: 7
       alerts:
         retain:
           days: 30
@@ -263,6 +295,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BIG_ROOM}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # MUST be set explicitly. Frigate 0.17 defaults detect.enabled to FALSE
@@ -393,6 +427,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # Frigate 0.17 defaults this to FALSE when absent — see the long note on
@@ -469,6 +505,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_KITCHEN}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_KITCHEN}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # Frigate 0.17 defaults this to FALSE when absent — see big_room.
@@ -526,6 +564,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_NURSERY}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_NURSERY}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # Frigate 0.17 defaults this to FALSE when absent — see big_room.
@@ -556,6 +596,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BASEMENT}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BASEMENT}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           enabled: true
@@ -580,6 +622,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BEDROOM}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BEDROOM}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           enabled: true
@@ -611,6 +655,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_GARAGE}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_GARAGE}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           enabled: true
