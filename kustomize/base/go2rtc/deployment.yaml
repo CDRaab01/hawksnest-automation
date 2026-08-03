@@ -46,11 +46,20 @@ spec:
               set -eu
               echo "re-seeding go2rtc.yaml from ConfigMap"
               cp /seed/go2rtc.yaml /config/go2rtc.yaml
+              # Quick Reply audio. Re-copied every boot like the config above, so the
+              # ConfigMap stays the source of truth — replacing a message means editing
+              # replies-configmap.yaml and redeploying, not hand-copying a file onto a PVC.
+              # Deliberately NOT first-boot-only: these have no runtime state to preserve.
+              echo "re-seeding quick-reply audio"
+              mkdir -p /config/replies
+              cp /replies/*.wav /config/replies/
           volumeMounts:
             - name: config
               mountPath: /config
             - name: seed
               mountPath: /seed
+            - name: replies
+              mountPath: /replies
       containers:
         - name: go2rtc
           # PINNED (2026-07-30, was :latest). Same rationale as the Frigate pin,
@@ -126,3 +135,6 @@ spec:
         - name: seed
           configMap:
             name: go2rtc-seed
+        - name: replies
+          configMap:
+            name: go2rtc-replies
