@@ -155,7 +155,19 @@ spec:
               # Checked against the node before raising, per the neighbour argument
               # above: the Dragonfly WSL distro has 23 GB with ~13 GB available, so the
               # extra 1 GB does not put ring-mqtt at risk.
-              memory: 5Gi
+              #
+              # RAISED 5Gi -> 7Gi, 2026-08-02. The 60-second-segment estimate above was
+              # too optimistic: measured 4764 MiB against the 5 GiB limit, i.e. 93%,
+              # with ~120 MiB of headroom — the same squeeze the previous note set out
+              # to fix, arrived at again from the other side. Semantic search reindexes
+              # and a recording backlog both spike from here, and there is deliberately
+              # no liveness probe, so an OOMKill would rely on the kubelet alone with
+              # nothing alerting on the way down.
+              #
+              # Node re-checked before raising, same as last time: 16 GB used of 24 GB
+              # (66%), so 2 GB more of ceiling — which is headroom, not an allocation —
+              # still does not put ring-mqtt at risk.
+              memory: 7Gi
       volumes:
         - name: config
           persistentVolumeClaim:

@@ -98,6 +98,10 @@ jobs:
 
       - name: Run Home Assistant check_config on the seed
         run: |
+          # Pinned to match the Deployment (kustomize/base/home-assistant/deployment.yaml).
+          # `stable` here would validate the seed against a different HA version than the one
+          # that will actually load it — which is exactly the failure this gate exists to
+          # prevent. Bump both together.
           docker run --rm -v /tmp/ha-config:/config \
-            ghcr.io/home-assistant/home-assistant:stable \
+            ghcr.io/home-assistant/home-assistant:2026.6.4 \
             python -m homeassistant --script check_config --config /config
