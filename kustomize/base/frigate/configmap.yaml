@@ -212,9 +212,33 @@ data:
       #
       # The endpoint itself is NOT the host's LAN IP — it goes through the
       # lmstudio-fwd socat unit. See plan.md before changing OPENAI_BASE_URL.
+      #
+      # `{VAR}` DOES NOT INTERPOLATE HERE. Frigate substitutes environment
+      # variables in a limited set of fields — ffmpeg input paths and a few
+      # credential slots — and `genai.*` is not among them. `model:` used to read
+      # `'{FRIGATE_GENAI_MODEL}'` and Frigate sent that string to the endpoint
+      # verbatim, so the model name is written out literally below.
+      #
+      # It hid for a while behind LM Studio's behaviour: with exactly one model
+      # loaded, LM Studio serves an unrecognised identifier from whatever is
+      # loaded. That was the coder model, which has no vision, so the failure
+      # read "Model does not support images" — a plausible wrong answer that sent
+      # the 2026-08-02 audit looking at the model choice rather than the config.
+      # Loading a second model made it say what it actually meant:
+      # `Invalid model identifier "{FRIGATE_GENAI_MODEL}"`.
+      #
+      # api_key stays a placeholder deliberately: it does not interpolate either,
+      # so Frigate sends the literal string — which is fine, because LM Studio
+      # does not check it. Do NOT read this line as "the key comes from the
+      # secret"; it does not. A real key would have to be written here, which is
+      # why this endpoint is a local one that needs none.
       provider: openai
       api_key: "{FRIGATE_GENAI_API_KEY}"
-      model: "{FRIGATE_GENAI_MODEL}"
+      # Literal, for the reason above. Must name a VISION model — a text-only one
+      # returns "Model does not support images" and every event description and
+      # semantic-search enrichment silently fails, with only a WARNING in the log.
+      # Must also be loaded in LM Studio; listing it is not enough.
+      model: google/gemma-4-e4b
       # DO NOT ADD `runtime_options:` HERE. It is a real key on this schema
       # (frigate.config.config.GenAIConfig) and genai/openai.py does splat it into
       # the chat.completions call — but adding it took the whole NVR down on
