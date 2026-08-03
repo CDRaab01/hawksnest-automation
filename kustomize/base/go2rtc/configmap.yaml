@@ -27,8 +27,29 @@ data:
       listen: ":1984"
 
     rtsp:
-      # Not needed here — HA already consumes ring-mqtt's RTSP for video. Disable.
-      listen: ""
+      # LOOPBACK ONLY, and it is NOT optional — every `ffmpeg:` source below depends
+      # on it.
+      #
+      # This was `listen: ""` on the reasoning that nothing external consumes RTSP
+      # here (HA takes ring-mqtt's stream for video), which is true and beside the
+      # point. A go2rtc `ffmpeg:` source does not hand frames back in-process: it
+      # runs ffmpeg as a child and **publishes the transcoded result back into
+      # go2rtc over RTSP at 127.0.0.1:8554**. With no listener there is nowhere to
+      # publish, so the audio producers added 2026-07-31 could never start — the
+      # bare RTSP producer served video, WebRTC dropped the camera's AAC because it
+      # cannot carry it, and every Reolink was silent. Diagnosed 2026-08-02:
+      # `ffmpeg -f lavfi -i sine -c:a libopus -f rtsp rtsp://127.0.0.1:8554/x`
+      # inside the pod returned "Connection refused".
+      #
+      # The note further down about the `ffmpeg:<stream>#...` shorthand needing this
+      # listener for its INPUT was right, and stopped one step short: the OUTPUT
+      # needs it too, for the full-URL form as well.
+      #
+      # 127.0.0.1 rather than :8554 keeps the exposure exactly where it was. The
+      # pod's loopback is not reachable from other pods, the node, or the network —
+      # only from ffmpeg children in this same container, which is the whole point.
+      # Do not widen it to ":8554" without a reason; go2rtc's RTSP has no auth.
+      listen: "127.0.0.1:8554"
 
     webrtc:
       # TCP-only on 8555, published to the host via a hostPort so ICE can reach it
@@ -44,8 +65,9 @@ data:
       # The MAIN stream only. Frigate is NOT fed from here — it opens its own
       # connection to the camera's SUB stream. Two independent paths on purpose:
       # routing 24/7 recording through this pod would make a go2rtc restart a hole
-      # in the timeline, and go2rtc's RTSP listener stays disabled (see `rtsp:`
-      # above). main vs sub are different streams on the camera, so there is no
+      # in the timeline, and go2rtc's RTSP listener is loopback-only (see `rtsp:`
+      # above), so nothing outside this pod could consume it anyway.
+      # main vs sub are different streams on the camera, so there is no
       # contention to avoid by sharing one connection.
       #
       # Live view therefore runs at full sensor resolution over WebRTC while
@@ -99,9 +121,14 @@ data:
       # bare producer above, and nothing runs at all while nobody is watching.
       #
       # THE FULL URL, NOT the `ffmpeg:big_room#...` shorthand. The shorthand feeds
-      # ffmpeg from go2rtc's own internal RTSP endpoint, and this config sets
-      # `rtsp: listen: ""` (see the rtsp block above) — there is no listener to read
-      # from, so the shorthand would fail.
+      # ffmpeg from go2rtc's own internal RTSP endpoint, which would mean the camera's
+      # stream making a second round trip through go2rtc for no gain. Going straight
+      # to the camera keeps it to one hop.
+      #
+      # (This note used to say the shorthand would fail because the RTSP listener was
+      # disabled. That was true, and it was also the bug: the listener is required for
+      # the ffmpeg OUTPUT regardless of which input form is used. It is now
+      # loopback-enabled — see the `rtsp:` block.)
       #
       # NO `#video=` ON PURPOSE. Adding `#video=copy` would make this producer offer
       # H264 as well, and a WebRTC consumer could then start BOTH producers — two RTSP
