@@ -19,6 +19,7 @@ resources:
   - zwave-js-ui/deployment.yaml
   - zwave-js-ui/service.yaml
   - home-assistant/configmap.yaml
+  - home-assistant/custom-components-configmap.yaml
   - home-assistant/deployment.yaml
   - home-assistant/service.yaml
   - ring-mqtt/configmap.yaml

@@ -53,6 +53,20 @@ spec:
                 printf 'recorder_db_url: "mysql://%s:%s@mariadb:3306/%s?charset=utf8mb4"\n' \
                   "$MYSQL_USER" "$MYSQL_PASSWORD" "$MYSQL_DATABASE" > /config/secrets.yaml
               fi
+              # Vendored third-party integrations. Re-extracted EVERY boot, unlike the config
+              # files above: these carry no user state, and the ConfigMap being the source of
+              # truth is the point — upgrading is a commit, not a copy onto a PVC.
+              #
+              # Untars rather than syncing, deliberately. The Frigate integration was installed by
+              # hand and lives only on this volume; a sync would delete it.
+              if [ -d /custom-components ]; then
+                mkdir -p /config/custom_components
+                for t in /custom-components/*.tar.gz; do
+                  [ -e "$t" ] || continue
+                  echo "extracting $(basename "$t") into custom_components"
+                  tar xzf "$t" -C /config/custom_components
+                done
+              fi
           envFrom:
             - secretRef:
                 name: mariadb-credentials
@@ -61,6 +75,8 @@ spec:
               mountPath: /config
             - name: seed
               mountPath: /seed
+            - name: custom-components
+              mountPath: /custom-components
       containers:
         - name: home-assistant
           # Pinned, not :stable. `stable` is a moving tag, so any pod recreate —
@@ -108,3 +124,6 @@ spec:
         - name: seed
           configMap:
             name: home-assistant-seed
+        - name: custom-components
+          configMap:
+            name: ha-custom-components
