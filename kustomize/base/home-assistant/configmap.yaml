@@ -1253,6 +1253,65 @@ data:
       mode: queued
       max: 5
 
+    # ── Nursery fan follows the nursery temperature ──────────────────────────
+    # SET THE ENTITY ID BELOW. The Dreo integration is vendored (see
+    # custom-components-configmap.yaml) but the fan still has to be added through the HA UI, and
+    # only then does it get an entity id. Until `fan.upstairs_dreo` is corrected to whatever it
+    # actually is, HA logs "Referenced entities ... are missing" on every run and the fan never
+    # moves — loudly wrong rather than quietly wrong, which is the intent.
+    #
+    # SAME SENSOR AS THE NURSERY LED, deliberately: the mains-powered switch's own thermometer,
+    # not the ZSE44. That choice was made 2026-08-02 and the reasoning applies at least as much
+    # here — the ZSE44 is battery powered and sleeps, and on 2026-08-01 it had last reported five
+    # hours earlier while the switch's reading was seconds old. A fan driven by a five-hour-old
+    # temperature is worse than no fan.
+    #
+    # 74 ON / 72 OFF IS A DEADBAND, NOT A TYPO. A single threshold makes the fan chatter on and
+    # off around it, which on a Wi-Fi fan is also a burst of cloud calls each time. Two degrees of
+    # separation costs nothing and stops that.
+    #
+    # Both edges need the temperature to HOLD for two minutes. The deadband handles oscillation;
+    # this handles one bad reading. Between 72 and 74 nothing happens at all, so a fan switched on
+    # by hand in that range is left alone.
+    #
+    # Sits below the LED bar's 78 "too hot" alert on purpose: the fan tries to prevent the state
+    # the light exists to warn about. If both fire, the room got hot faster than the fan could
+    # help and the alert is doing its job.
+    #
+    # float(0) matches the LED automation: a dropped sensor reads 0, which means "not hot", which
+    # means the fan does not run forever on a dead thermometer.
+    - id: hawksnest_nursery_fan
+      alias: "Nursery: fan follows temperature"
+      mode: single
+      triggers:
+        - trigger: numeric_state
+          entity_id: sensor.nursery_on_off_switch_air_temperature
+          above: 74
+          for: "00:02:00"
+          id: hot
+        - trigger: numeric_state
+          entity_id: sensor.nursery_on_off_switch_air_temperature
+          below: 72
+          for: "00:02:00"
+          id: cool
+        # On restart, settle to whatever the current temperature implies rather than leaving the
+        # fan wherever it happened to be when HA went down.
+        - trigger: homeassistant
+          event: start
+      variables:
+        temp: "{{ states('sensor.nursery_on_off_switch_air_temperature') | float(0) }}"
+      actions:
+        - choose:
+            - conditions: "{{ trigger.id == 'hot' or (trigger.platform == 'homeassistant' and temp >= 74) }}"
+              sequence:
+                - action: fan.turn_on
+                  target:
+                    entity_id: fan.upstairs_dreo
+            - conditions: "{{ trigger.id == 'cool' or (trigger.platform == 'homeassistant' and temp <= 72) }}"
+              sequence:
+                - action: fan.turn_off
+                  target:
+                    entity_id: fan.upstairs_dreo
 
   scripts.yaml: |
     master_bedroom_strip_power_up:
