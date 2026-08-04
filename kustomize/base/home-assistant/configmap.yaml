@@ -783,6 +783,13 @@ data:
         platform: homeassistant
       - event_type: nursery_led_restore
         platform: event
+      conditions:
+      # Same startup race as the Master Bedroom twin, and it failed at the same two moments
+      # on 2026-08-03 22:16. See that automation for the reasoning; the guard is identical
+      # except for which node's sensor stands in for "this device answers".
+      - condition: template
+        value_template: '{{ has_value(''sensor.nursery_on_off_switch_air_temperature'')
+          }}'
       actions:
       - default:
         - target:
@@ -924,22 +931,32 @@ data:
       mode: single
     - id: '1785540000001'
       alias: Master Bedroom ZEN32 - WLED presets
-      description: Small keys 1-3 pick a WLED preset; each LED colour matches its preset
-        (1 blue = Blue Relax, 2 magenta = Rainbow, 3 cyan = Noisemeter). Key 4 is unassigned
-        and its LED is off. Every key powers the strip first via script.master_bedroom_strip_power_up,
-        because the big key's relay is the strip's mains supply - without that, pressing
-        a scene key on a dark strip would do nothing at all and look broken. Key-to-scene
-        mapping (scene_001..004 = small keys) confirmed live on this unit 2026-08-01.
+      description: 'Small keys 1-4 pick a WLED preset on a single tap; a DOUBLE TAP sets
+        the same preset at 10%. Each key''s LED colour matches its preset (1 magenta = Nebula,
+        2 cyan = Ocean, 3 white = Warm White, 4 yellow = Campfire - the ZEN32 has no orange,
+        so Campfire takes the closest warm option). REWIRED 2026-08-04. Before this, only
+        keys 1-3 single tap did anything, so five of the eight small-key gestures were silent
+        - and a key that does nothing is indistinguishable from a key whose press was dropped,
+        which is most of why this pad felt broken next to Cooper''s. Double tap is the SAME
+        look rather than a different one, because what a bedroom wants twice is a sleep-safe
+        brightness, not eight presets. Warm White drives the SK6812''s dedicated white channel
+        instead of mixing RGB, which is the one thing an RGBW strip does that an RGB one
+        cannot. Key-to-scene mapping (scene_001..004 = small keys) confirmed live on this
+        unit 2026-08-01. Every key powers the strip first via script.master_bedroom_strip_power_up,
+        because the big key''s relay is the strip''s mains supply - without that, pressing
+        a scene key on a dark strip would do nothing at all and look broken.'
       triggers:
       - platform: state
         entity_id:
         - event.master_bedroom_scene_controller_scene_001
         - event.master_bedroom_scene_controller_scene_002
         - event.master_bedroom_scene_controller_scene_003
+        - event.master_bedroom_scene_controller_scene_004
       conditions:
       - condition: template
         value_template: '{{ trigger.to_state.state not in [''unknown'',''unavailable'',''none'']
-          and chosen not in [none,''None'',''''] }}'
+          and chosen not in [none,''None'',''''] and ev in [''KeyPressed'',''KeyPressed2x'']
+          }}'
       actions:
       - action: script.master_bedroom_strip_power_up
       - action: select.select_option
@@ -947,13 +964,25 @@ data:
           entity_id: select.master_bedroom_preset
         data:
           option: '{{ chosen }}'
+      - if:
+        - condition: template
+          value_template: '{{ ev == ''KeyPressed2x'' }}'
+        then:
+        - delay:
+            seconds: 1
+        - action: light.turn_on
+          target:
+            entity_id: light.master_bedroom
+          data:
+            brightness_pct: 10
       variables:
         presets:
-          1_KeyPressed: Blue Relax
-          2_KeyPressed: Rainbow
-          3_KeyPressed: Noisemeter
-        chosen: '{{ presets.get(trigger.entity_id[-1] ~ ''_'' ~ trigger.to_state.attributes.event_type)
-          }}'
+          '1': Nebula
+          '2': Ocean
+          '3': Warm White
+          '4': Campfire
+        chosen: '{{ presets.get(trigger.entity_id[-1]) }}'
+        ev: '{{ trigger.to_state.attributes.event_type }}'
       mode: queued
       max: 10
     - id: '1785540000002'
@@ -1036,16 +1065,17 @@ data:
       mode: single
     - id: '1785540000004'
       alias: Master Bedroom ZEN32 - LEDs off at night
-      description: 'Four lit LEDs point at the bed all night, so after sunset the pad
-        goes fully dark and at sunrise it comes back. Only the LED MODE parameters (1-4)
-        are toggled: Always on (3) by day, Always off (2) by night. Colour and brightness
-        are deliberately NOT part of this - they are set once, statically, to the daytime
-        look (relay green, key1 blue, key2 magenta, key3 cyan at Medium), because an LED
-        that is off has no colour and rewriting eight parameters twice a day to no visible
-        effect is just Z-Wave traffic. Earlier versions recoloured to red and then blue
+      description: 'Five lit LEDs point at the bed all night, so after sunset the pad
+        goes fully dark and at sunrise it comes back. Only the LED MODE parameters (1-5)
+        are toggled: Always on (3) by day, Always off (2) by night. Colour is deliberately
+        NOT part of this - it is written once at startup by "Master Bedroom ZEN32 - LED
+        colours", because an LED that is off has no colour and rewriting ten parameters
+        twice a day to no visible effect is just Z-Wave traffic, on a link that measured
+        -86 dBm median and cannot spare it. Earlier versions recoloured to red and then blue
         at Low; both still read as too bright on the wall, and 30% is this device''s floor,
-        so the answer was fewer lit LEDs rather than a different colour. Key 4 is omitted:
-        its LED is already permanently off. Night comes from sun.sun rather than from
+        so the answer was fewer lit LEDs rather than a different colour. KEY 4 JOINED THE
+        LOOP 2026-08-04, when it stopped being an unassigned key with a permanently dark
+        LED and became Campfire. Night comes from sun.sun rather than from
         which trigger fired, so a Home Assistant restart at 3am re-applies the correct
         state instead of leaving the pad lit - this host has an intermittent RAM fault
         and does restart unexpectedly. Consequence accepted by the owner: at night the
@@ -1064,6 +1094,7 @@ data:
           - 2
           - 3
           - 4
+          - 5
           sequence:
           - action: zwave_js.set_config_parameter
             target:
@@ -1075,6 +1106,49 @@ data:
               milliseconds: 400
       variables:
         night: '{{ is_state(''sun.sun'',''below_horizon'') }}'
+      mode: single
+      max_exceeded: silent
+    - id: '1785540000007'
+      alias: Master Bedroom ZEN32 - LED colours
+      description: 'Writes the four small-key LED colours so the pad says what the keys
+        actually do - 1 magenta = Nebula, 2 cyan = Ocean, 3 white = Warm White, 4 yellow
+        = Campfire. This device''s palette is White/Blue/Green/Red/Magenta/Yellow/Cyan with
+        no orange, so Campfire takes yellow as the closest warm option. These used to be
+        set by hand in Z-Wave JS UI and recorded only in a comment, which is exactly how
+        the comment ended up describing a key mapping that no longer existed; holding them
+        here makes git the source of truth, and a re-include or factory reset self-heals
+        on the next restart. Runs ONLY on Home Assistant start, deliberately not on the
+        sunset/sunrise schedule - the night automation avoids rewriting colour twice a day
+        because an LED that is off has no colour, and that reasoning still holds. Waits for
+        the pad to actually answer first. This fires during startup, when zwave_js may not
+        have finished loading, and a write then fails with "No zwave_js nodes found for given
+        targets" - the same race that was breaking the LED-effect automations.'
+      triggers:
+      - platform: homeassistant
+        event: start
+      actions:
+      - wait_template: '{{ has_value(''switch.master_bedroom_scene_controller'') }}'
+        timeout: '00:05:00'
+        continue_on_timeout: false
+      - repeat:
+          for_each:
+          - parameter: 7
+            value: 4
+          - parameter: 8
+            value: 6
+          - parameter: 9
+            value: 0
+          - parameter: 10
+            value: 5
+          sequence:
+          - action: zwave_js.set_config_parameter
+            target:
+              device_id: a62df2c050dc5f0aca52cb9e302ef98e
+            data:
+              parameter: '{{ repeat.item.parameter }}'
+              value: '{{ repeat.item.value }}'
+          - delay:
+              milliseconds: 400
       mode: single
       max_exceeded: silent
     - id: '1785540000005'
@@ -1163,6 +1237,17 @@ data:
         event: start
       - platform: event
         event_type: master_bedroom_led_restore
+      conditions:
+      # Do not write to the node before zwave_js can resolve it. Without this, every run in
+      # the first minute after a restart failed with "No zwave_js nodes found for given
+      # targets" - six such errors on 2026-08-03 at 22:16, because a state trigger on this
+      # switch's own sensor fires while the integration is still loading. Guarding on the
+      # sensor having a real value is the closest available proxy for "this device answers",
+      # since the sensor belongs to the same node the actions write to. A dropped node now
+      # skips the run instead of erroring; the write would have failed anyway.
+      - condition: template
+        value_template: '{{ has_value(''sensor.master_bedroom_on_off_switch_air_temperature'')
+          }}'
       actions:
       - choose:
         - conditions:
