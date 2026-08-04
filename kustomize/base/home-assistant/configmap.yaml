@@ -142,6 +142,40 @@ data:
         # time somebody happens to look at an event.
         scan_interval: 300
 
+      # The nursery temperature with the dither taken out. This is what drives
+      # the nursery fan's speed (automations.yaml, hawksnest_nursery_fan).
+      #
+      # THE RAW SENSOR IS NOISY, MEASURED NOT ASSUMED. 113 reports over the nine
+      # hours to 2026-08-04 17:00 EDT, and consecutive ones alternate about a
+      # degree apart while the room is plainly steady:
+      #     72.2498, 73.2002, 72.1562, 73.1660, 72.1382, 73.0886
+      # That is ~0.5C of dither around a true value near 72.7, which reads like
+      # the switch quantising its ADC rather than the room doing anything.
+      #
+      # WHY IT MATTERS HERE AND NOT FOR THE LED BAR. The LED compares against a
+      # single 78F threshold with the whole room on one side of it. The fan maps
+      # 73-78F onto six speeds, so one speed step is ~1.1F — NARROWER THAN THE
+      # DITHER. Driven from the raw sensor the fan would change speed every few
+      # minutes, all night, in a room with a sleeping baby in it, and every one
+      # of those changes is also a round trip to Dreo's cloud.
+      #
+      # 15 MINUTES flattens an alternation whose period is minutes, and is far
+      # shorter than the thermal time constant of a room — a nursery that is
+      # genuinely warming is still followed within a few minutes. The lag is a
+      # feature on the way down too: it will not chase a door being opened.
+      #
+      # Deliberately its own entity rather than folded into the automation: it
+      # is worth being able to graph the smoothed signal against the raw one
+      # when the fan does something surprising.
+      - platform: filter
+        name: Nursery temperature average
+        unique_id: nursery_temperature_average
+        entity_id: sensor.nursery_on_off_switch_air_temperature
+        filters:
+          - filter: time_simple_moving_average
+            window_size: "00:15:00"
+            precision: 2
+
     # Household policy for camera object alerts, toggled from Hawksnest's Settings
     # (added 2026-07-30). Server-side ON PURPOSE rather than filtered on the phone:
     # this stops the push being *generated*, so it applies to every device and
@@ -1265,52 +1299,136 @@ data:
     # hours earlier while the switch's reading was seconds old. A fan driven by a five-hour-old
     # temperature is worse than no fan.
     #
-    # 74 ON / 72 OFF IS A DEADBAND, NOT A TYPO. A single threshold makes the fan chatter on and
-    # off around it, which on a Wi-Fi fan is also a burst of cloud calls each time. Two degrees of
-    # separation costs nothing and stops that.
+    # ...but NOT the raw sensor: it reads `sensor.nursery_temperature_average`, the 15-minute
+    # mean of that same thermometer (defined in configuration.yaml, where the measurement that
+    # justifies it is written down). In one sentence: the raw sensor dithers by about a degree
+    # between consecutive reports and a speed step here is only about 1.1F wide, so the raw
+    # signal would change fan speed every few minutes in a room where nothing is happening.
     #
-    # Both edges need the temperature to HOLD for two minutes. The deadband handles oscillation;
-    # this handles one bad reading. Between 72 and 74 nothing happens at all, so a fan switched on
-    # by hand in that range is left alone.
+    # 73 ON / 72 OFF IS A DEADBAND, NOT A TYPO. A single threshold makes the fan chatter on and
+    # off around it, which on a Wi-Fi fan is also a burst of cloud calls each time. A degree of
+    # separation costs nothing and stops that. Both edges need the temperature to HOLD for two
+    # minutes on top of the averaging. Between 72 and 73 nothing happens at all, so a fan
+    # switched on by hand in that range is left alone.
+    #
+    # SPEED SCALES WITH HEAT: 25% at 73F rising to 100% at 78F, 15 points per degree, clamped
+    # at both ends (asked for 2026-08-04). The fan has SIX speeds, so those percentages are not
+    # what you get back — HA hands the percentage to the Dreo integration, which rounds UP to
+    # the nearest of six (`math.ceil(percentage * 6 / 100)`). So 25% is really speed 2 of 6, and
+    # the fan is already flat out at 77 because six steps cannot tell 85% and 100% apart. The
+    # speeds change at 73.0 / 73.6 / 74.7 / 75.8 / 76.9.
+    #
+    # It sends a percentage, never a speed number, and derives the step count from the entity's
+    # own `percentage_step` — a different Dreo model has a different count and this should not
+    # have to be rewritten for it.
+    #
+    # ONLY ACTS WHEN THE SPEED WOULD ACTUALLY CHANGE (`target_speed != current_speed`), because
+    # everything here is a round trip to Dreo's cloud. `current_speed` reads back with `round`
+    # while `target_speed` computes with `ceil`: ceil is the integration's forward mapping, and
+    # rounding is its inverse. Using ceil for both reads speed 4 (reported as 67%) back as 5 and
+    # the automation would fight itself forever.
+    #
+    # PRESET MODES ARE THE OTHER THING THAT SETS SPEED — `auto` from the fan's own thermometer,
+    # `sleep` by ramping down on a timer — so one of those left engaged quietly undoes whatever
+    # speed this sets. It forces `normal` when taking control, and only when it is not already
+    # normal.
     #
     # Sits below the LED bar's 78 "too hot" alert on purpose: the fan tries to prevent the state
     # the light exists to warn about. If both fire, the room got hot faster than the fan could
     # help and the alert is doing its job.
     #
-    # float(0) matches the LED automation: a dropped sensor reads 0, which means "not hot", which
-    # means the fan does not run forever on a dead thermometer.
+    # WHAT IT DELIBERATELY WILL NOT DO: start a fan somebody has just switched off. Only the
+    # held 73 crossing and a restart may turn it ON; the per-report `track` trigger adjusts a
+    # fan that is already running. Switch it off by hand at 76 and it stays off until the room
+    # drops below 73 and climbs back through it.
+    #
+    # A DEAD THERMOMETER STOPS THE FAN rather than leaving it running on a stale number, which
+    # is what the old float(0) achieved. That needs saying out loud now: an average sensor keeps
+    # its last value when its source goes away, so `has_value` is checked on the RAW entity and
+    # there is a trigger for it going unavailable. Ten minutes, so a brief Z-Wave hiccup does
+    # not stop the fan.
     - id: hawksnest_nursery_fan
       alias: "Nursery: fan follows temperature"
-      mode: single
+      # restart, not single: the startup branch below can sit waiting for the average sensor to
+      # come up, and a temperature report arriving during that wait should supersede it rather
+      # than be dropped. Every branch is two service calls, so nothing is lost by cancelling.
+      mode: restart
       triggers:
         - trigger: numeric_state
-          entity_id: sensor.nursery_on_off_switch_air_temperature
-          above: 74
+          entity_id: sensor.nursery_temperature_average
+          above: 73
           for: "00:02:00"
           id: hot
         - trigger: numeric_state
-          entity_id: sensor.nursery_on_off_switch_air_temperature
+          entity_id: sensor.nursery_temperature_average
           below: 72
           for: "00:02:00"
           id: cool
+        # The thermometer itself dropping off the mesh. The average would happily keep serving
+        # its last value, so this is the only thing that notices.
+        - trigger: state
+          entity_id: sensor.nursery_on_off_switch_air_temperature
+          to: ["unavailable", "unknown"]
+          for: "00:10:00"
+          id: cool
+        # Every new average — this is what re-scales the speed as the room warms or cools.
+        - trigger: state
+          entity_id: sensor.nursery_temperature_average
+          id: track
         # On restart, settle to whatever the current temperature implies rather than leaving the
         # fan wherever it happened to be when HA went down.
         - trigger: homeassistant
           event: start
-      variables:
-        temp: "{{ states('sensor.nursery_on_off_switch_air_temperature') | float(0) }}"
+          id: start
       actions:
+        # The average sensor is not ready the instant HA is. Settling against an unknown would
+        # read as "cold" and switch the fan off on every restart, and nothing would switch it
+        # back on until the temperature crossed 73 from below — which on a hot day never happens.
+        - if: "{{ trigger.id == 'start' }}"
+          then:
+            - wait_template: "{{ has_value('sensor.nursery_temperature_average') }}"
+              timeout: "00:10:00"
+              continue_on_timeout: true
+        # Bound HERE rather than in `variables:`, which would evaluate them before that wait.
+        - variables:
+            ready: "{{ has_value('sensor.nursery_temperature_average') }}"
+            alive: "{{ has_value('sensor.nursery_on_off_switch_air_temperature') }}"
+            temp: "{{ states('sensor.nursery_temperature_average') | float(0) }}"
+            steps: "{{ (100 / (state_attr('fan.tower_fan', 'percentage_step') | float(100 / 6))) | round | int }}"
+            target_pct: "{{ [[25 + (temp - 73) * 15, 25] | max, 100] | min | round | int }}"
+            target_speed: "{{ (target_pct * steps / 100) | round(0, 'ceil') | int }}"
+            current_speed: >-
+              {{ 0 if not is_state('fan.tower_fan', 'on')
+                 else (state_attr('fan.tower_fan', 'percentage') | float(0) * steps / 100) | round | int }}
         - choose:
-            - conditions: "{{ trigger.id == 'hot' or (trigger.platform == 'homeassistant' and temp >= 74) }}"
-              sequence:
-                - action: fan.turn_on
-                  target:
-                    entity_id: fan.tower_fan
-            - conditions: "{{ trigger.id == 'cool' or (trigger.platform == 'homeassistant' and temp <= 72) }}"
+            - alias: Cool enough, or flying blind — release the fan
+              conditions:
+                - "{{ trigger.id in ['cool', 'start'] }}"
+                - "{{ not alive or (ready and temp <= 72) }}"
               sequence:
                 - action: fan.turn_off
                   target:
                     entity_id: fan.tower_fan
+            - alias: Warm — run at the speed this temperature asks for
+              conditions:
+                - "{{ ready and alive and temp >= 73 }}"
+                - "{{ trigger.id in ['hot', 'start'] or is_state('fan.tower_fan', 'on') }}"
+                - "{{ target_speed != current_speed }}"
+              sequence:
+                - if:
+                    - condition: template
+                      value_template: "{{ not is_state_attr('fan.tower_fan', 'preset_mode', 'normal') }}"
+                  then:
+                    - action: fan.set_preset_mode
+                      target:
+                        entity_id: fan.tower_fan
+                      data:
+                        preset_mode: normal
+                - action: fan.turn_on
+                  target:
+                    entity_id: fan.tower_fan
+                  data:
+                    percentage: "{{ target_pct }}"
 
   scripts.yaml: |
     master_bedroom_strip_power_up:
