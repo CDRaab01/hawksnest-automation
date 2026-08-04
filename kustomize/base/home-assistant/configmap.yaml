@@ -1254,11 +1254,10 @@ data:
       max: 5
 
     # ── Nursery fan follows the nursery temperature ──────────────────────────
-    # SET THE ENTITY ID BELOW. The Dreo integration is vendored (see
-    # custom-components-configmap.yaml) but the fan still has to be added through the HA UI, and
-    # only then does it get an entity id. Until `fan.upstairs_dreo` is corrected to whatever it
-    # actually is, HA logs "Referenced entities ... are missing" on every run and the fan never
-    # moves — loudly wrong rather than quietly wrong, which is the intent.
+    # ENTITY ID IS REAL, not a placeholder: `fan.tower_fan`, confirmed in the entity registry
+    # after the Dreo integration was added through the HA UI on 2026-08-04. It is per-install
+    # though — re-adding the integration, or renaming the fan in the Dreo app, can change it. The
+    # symptom would be HA logging "Referenced entities ... are missing" while the fan never moves.
     #
     # SAME SENSOR AS THE NURSERY LED, deliberately: the mains-powered switch's own thermometer,
     # not the ZSE44. That choice was made 2026-08-02 and the reasoning applies at least as much
@@ -1306,12 +1305,12 @@ data:
               sequence:
                 - action: fan.turn_on
                   target:
-                    entity_id: fan.upstairs_dreo
+                    entity_id: fan.tower_fan
             - conditions: "{{ trigger.id == 'cool' or (trigger.platform == 'homeassistant' and temp <= 72) }}"
               sequence:
                 - action: fan.turn_off
                   target:
-                    entity_id: fan.upstairs_dreo
+                    entity_id: fan.tower_fan
 
   scripts.yaml: |
     master_bedroom_strip_power_up:
