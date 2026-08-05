@@ -207,19 +207,45 @@ data:
       # or in ring-mqtt). The refresh_token is shared via env. Duplicate per camera.
       # Stream name = the HA camera base (verify against Developer Tools -> States;
       # rename if ring-mqtt slugged a name differently, e.g. first_floor_stairway).
+      #
+      # FOUR OF THESE READ WRONG AND ARE RIGHT, corrected 2026-08-05. The key is the HA
+      # ENTITY BASE, not the camera's name — and on this account those two stopped
+      # agreeing. ring-mqtt slugs an entity id once, at first discovery, and never
+      # revisits it; the names in the Ring app were changed afterwards. So:
+      #
+      #   key         HA entity                      Ring app calls it
+      #   front_door  camera.front_door_snapshot     Front Door
+      #   front       camera.front_snapshot          Front Driveway
+      #   back        camera.back_snapshot           Back Yard Patio
+      #   back2       camera.back2_snapshot          Back Side Yard
+      #   office      camera.office_snapshot         Puzzle Room
+      #   pet_camera  camera.pet_camera_snapshot     Basement Storage Room
+      #
+      # Named by the friendly slug until now, which is why TALK WAS DEAD on those four:
+      # both Hawksnest clients derive the go2rtc `src` from the entity id, so they asked
+      # for a stream called `front` while this file called it `front_driveway`. It failed
+      # silently — the button was there, the WebSocket opened, and the negotiation just
+      # never completed. The RING_DEVICE_ID_* env names still carry the friendly names on
+      # purpose: those identify the physical device, they live in a gitignored secret, and
+      # nothing reads them but this file.
+      #
+      # If a camera's talk stops working, check its entity base FIRST (Developer Tools ->
+      # States). Renaming in the Ring app will not move it; only a fresh ring-mqtt
+      # discovery would, and that would break automations, so the entity id is the stable
+      # side and this file follows it.
       front_door: "ring:?device_id=${RING_DEVICE_ID_FRONT_DOOR}&refresh_token=${RING_REFRESH_TOKEN}"
-      front_driveway: "ring:?device_id=${RING_DEVICE_ID_FRONT_DRIVEWAY}&refresh_token=${RING_REFRESH_TOKEN}"
+      front: "ring:?device_id=${RING_DEVICE_ID_FRONT_DRIVEWAY}&refresh_token=${RING_REFRESH_TOKEN}"
       # NOTE: no `basement` entry here — the Reolink above claims that slug
       # (2026-07-31). `RING_DEVICE_ID_BASEMENT` joins RING_DEVICE_ID_BIG_ROOM,
       # RING_DEVICE_ID_KITCHEN and RING_DEVICE_ID_FIRST_FLOOR_STAIRWAY as
       # unused-but-harmless keys in go2rtc.env; leave it in place.
-      puzzle_room: "ring:?device_id=${RING_DEVICE_ID_PUZZLE_ROOM}&refresh_token=${RING_REFRESH_TOKEN}"
-      back_yard_patio: "ring:?device_id=${RING_DEVICE_ID_BACK_YARD_PATIO}&refresh_token=${RING_REFRESH_TOKEN}"
+      office: "ring:?device_id=${RING_DEVICE_ID_PUZZLE_ROOM}&refresh_token=${RING_REFRESH_TOKEN}"
+      back: "ring:?device_id=${RING_DEVICE_ID_BACK_YARD_PATIO}&refresh_token=${RING_REFRESH_TOKEN}"
       # NOTE: no `kitchen` entry here — the Reolink above claims that slug
       # (2026-07-29). `RING_DEVICE_ID_KITCHEN` joins RING_DEVICE_ID_BIG_ROOM and
       # RING_DEVICE_ID_FIRST_FLOOR_STAIRWAY as unused-but-harmless keys in go2rtc.env.
       pet_camera: "ring:?device_id=${RING_DEVICE_ID_PET_CAMERA}&refresh_token=${RING_REFRESH_TOKEN}"
-      back_side_yard: "ring:?device_id=${RING_DEVICE_ID_BACK_SIDE_YARD}&refresh_token=${RING_REFRESH_TOKEN}"
+      back2: "ring:?device_id=${RING_DEVICE_ID_BACK_SIDE_YARD}&refresh_token=${RING_REFRESH_TOKEN}"
       # NOTE: no `first_floor_stairway` entry here — the Reolink above claims that
       # slug (2026-07-29, same swap as big_room). The Ring stairway camera is retired.
       # `RING_DEVICE_ID_FIRST_FLOOR_STAIRWAY` joins RING_DEVICE_ID_BIG_ROOM as an

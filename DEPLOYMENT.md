@@ -414,14 +414,33 @@ NodePort 30855).
    MagicDNS) or `localhost`. The **Android** app has no such constraint (runtime
    `RECORD_AUDIO` permission).
 
+> **Step 4 was never actually done, and that is why talk never worked** (found 2026-08-05).
+> No `go2rtc-forwarder.service` had ever existed in the distro, nothing listened on `:8555`
+> (`Test-NetConnection 127.0.0.1 -Port 8555` → False, against True for 8090/8123/8391), and no
+> `Go2rtc-8555` firewall rule existed. go2rtc advertised an ICE candidate pointing at a port
+> with no socket behind it, so every talk session opened its WebSocket, negotiated, and simply
+> never connected — on **every** camera, doorbell included. Nothing in the app looked broken and
+> nothing logged an error.
+>
+> Quick replies kept working throughout, which is what made this hard to see: they are a
+> server-side `dst=` call to go2rtc's API on `:1984` through the nginx proxy, so they never touch
+> `:8555`. **"Replies work" is not evidence that the media path is up.** The check that is
+> evidence is the `Test-NetConnection` above.
+
 **Verification checklist:**
 
 - [ ] `curl http://localhost:1984/api/streams` (port-forwarded) lists each camera by its
       `<base>` name, producers present (Ring online).
+      **The name is the HA ENTITY BASE, not the camera's friendly name** — four Ring streams
+      were named by the friendly slug until 2026-08-05 and were unreachable the whole time.
+      See the ConfigMap's Ring block for the mapping and why the entity id is the stable side.
+- [ ] Something is listening on the host: `Test-NetConnection -ComputerName 127.0.0.1 -Port 8555`
+      returns True. This is step 4 and it is the one that gets skipped.
 - [ ] In go2rtc's web UI, the camera's **stream** plays *with* a microphone option
-      (two-way) — confirms the native `ring:` back-channel.
+      (two-way) — confirms the back-channel. True for the native `ring:` sources and for the
+      Reolinks, which carry it over ONVIF (they advertise `PCMU/8000` sendonly).
 - [ ] From the app over Tailscale, opening a camera and pressing **Talk** connects (ICE
-      reaches `GO2RTC_HOST_IP:8555`); audio is heard from the Ring device.
+      reaches `GO2RTC_HOST_IP:8555`); audio is heard from the camera.
 - [ ] After a host reboot, talk still connects with no re-auth (the socat unit auto-starts).
 
 > `go2rtc-config` is node-local (`local-path`), not backed up: it only caches the rotated
