@@ -1525,7 +1525,7 @@ data:
     # — and what it names it — depends on the device config file revision; candidates seen
     # elsewhere include `_window_door_is_open`, `_access_control_window_door_is_open` and
     # `_door_state`. Rather than let this file depend on that, the two open/closed entities
-    # are RENAMED after pairing to `binary_sensor.garage_bay_{left,right}_open`. If those ids
+    # are RENAMED after pairing to `binary_sensor.garage_bay_{main,side}_open`. If those ids
     # ever stop existing the symptom is silence, not an error.
     #
     # WHY NOT `garage_door` ANYTHING. `binary_sensor.garage_door` IS ALREADY TAKEN: it is the
@@ -1572,25 +1572,25 @@ data:
     # be expired by the reminder at minute 55 — a silently broken image, which is worse than no
     # image at all.
     - id: hawksnest_garage_bay_open_too_long
-      alias: "Garage: bay left open too long"
+      alias: "Garage: bay open too long"
       mode: parallel
       max: 4
       triggers:
         - trigger: template
-          id: left
+          id: main
           value_template: >-
-            {{ is_state('binary_sensor.garage_bay_left_open', 'on')
-               and now() - states.binary_sensor.garage_bay_left_open.last_changed
+            {{ is_state('binary_sensor.garage_bay_main_open', 'on')
+               and now() - states.binary_sensor.garage_bay_main_open.last_changed
                    > timedelta(minutes=10) }}
         - trigger: template
-          id: right
+          id: side
           value_template: >-
-            {{ is_state('binary_sensor.garage_bay_right_open', 'on')
-               and now() - states.binary_sensor.garage_bay_right_open.last_changed
+            {{ is_state('binary_sensor.garage_bay_side_open', 'on')
+               and now() - states.binary_sensor.garage_bay_side_open.last_changed
                    > timedelta(minutes=10) }}
       variables:
         bay: "binary_sensor.garage_bay_{{ trigger.id }}_open"
-        bay_name: "{{ 'Left garage bay' if trigger.id == 'left' else 'Right garage bay' }}"
+        bay_name: "{{ 'Main garage bay' if trigger.id == 'main' else 'Side garage bay' }}"
         opened_at: >-
           {{ states[bay].last_changed.timestamp() if states[bay] is not none else 0 }}
         front: "https://dragonfly.tail2ce561.ts.net:8443"
@@ -1673,14 +1673,14 @@ data:
       triggers:
         - trigger: state
           entity_id:
-            - binary_sensor.garage_bay_left_open
-            - binary_sensor.garage_bay_right_open
+            - binary_sensor.garage_bay_main_open
+            - binary_sensor.garage_bay_side_open
           from: "off"
           to: "on"
       variables:
         bay_name: >-
-          {{ {'binary_sensor.garage_bay_left_open': 'Left garage bay',
-              'binary_sensor.garage_bay_right_open': 'Right garage bay'}
+          {{ {'binary_sensor.garage_bay_main_open': 'Main garage bay',
+              'binary_sensor.garage_bay_side_open': 'Side garage bay'}
              .get(trigger.entity_id, 'A garage bay') }}
         alarm: "{{ states('alarm_control_panel.mfa_alarm') }}"
         armed: "{{ states('alarm_control_panel.mfa_alarm') != 'disarmed' }}"
@@ -1752,8 +1752,8 @@ data:
       triggers:
         - trigger: state
           entity_id:
-            - binary_sensor.garage_bay_left_open
-            - binary_sensor.garage_bay_right_open
+            - binary_sensor.garage_bay_main_open
+            - binary_sensor.garage_bay_side_open
           from: "off"
           to: "on"
       conditions:
