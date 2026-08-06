@@ -142,6 +142,40 @@ data:
         # time somebody happens to look at an event.
         scan_interval: 300
 
+      # The nursery temperature with the dither taken out. This is what drives
+      # the nursery fan's speed (automations.yaml, hawksnest_nursery_fan).
+      #
+      # THE RAW SENSOR IS NOISY, MEASURED NOT ASSUMED. 113 reports over the nine
+      # hours to 2026-08-04 17:00 EDT, and consecutive ones alternate about a
+      # degree apart while the room is plainly steady:
+      #     72.2498, 73.2002, 72.1562, 73.1660, 72.1382, 73.0886
+      # That is ~0.5C of dither around a true value near 72.7, which reads like
+      # the switch quantising its ADC rather than the room doing anything.
+      #
+      # WHY IT MATTERS HERE AND NOT FOR THE LED BAR. The LED compares against a
+      # single 78F threshold with the whole room on one side of it. The fan maps
+      # 73-78F onto six speeds, so one speed step is ~1.1F — NARROWER THAN THE
+      # DITHER. Driven from the raw sensor the fan would change speed every few
+      # minutes, all night, in a room with a sleeping baby in it, and every one
+      # of those changes is also a round trip to Dreo's cloud.
+      #
+      # 15 MINUTES flattens an alternation whose period is minutes, and is far
+      # shorter than the thermal time constant of a room — a nursery that is
+      # genuinely warming is still followed within a few minutes. The lag is a
+      # feature on the way down too: it will not chase a door being opened.
+      #
+      # Deliberately its own entity rather than folded into the automation: it
+      # is worth being able to graph the smoothed signal against the raw one
+      # when the fan does something surprising.
+      - platform: filter
+        name: Nursery temperature average
+        unique_id: nursery_temperature_average
+        entity_id: sensor.nursery_on_off_switch_air_temperature
+        filters:
+          - filter: time_simple_moving_average
+            window_size: "00:15:00"
+            precision: 2
+
     # Household policy for camera object alerts, toggled from Hawksnest's Settings
     # (added 2026-07-30). Server-side ON PURPOSE rather than filtered on the phone:
     # this stops the push being *generated*, so it applies to every device and
@@ -1350,52 +1384,579 @@ data:
     # hours earlier while the switch's reading was seconds old. A fan driven by a five-hour-old
     # temperature is worse than no fan.
     #
-    # 74 ON / 72 OFF IS A DEADBAND, NOT A TYPO. A single threshold makes the fan chatter on and
-    # off around it, which on a Wi-Fi fan is also a burst of cloud calls each time. Two degrees of
-    # separation costs nothing and stops that.
+    # ...but NOT the raw sensor: it reads `sensor.nursery_temperature_average`, the 15-minute
+    # mean of that same thermometer (defined in configuration.yaml, where the measurement that
+    # justifies it is written down). In one sentence: the raw sensor dithers by about a degree
+    # between consecutive reports and a speed step here is only about 1.1F wide, so the raw
+    # signal would change fan speed every few minutes in a room where nothing is happening.
     #
-    # Both edges need the temperature to HOLD for two minutes. The deadband handles oscillation;
-    # this handles one bad reading. Between 72 and 74 nothing happens at all, so a fan switched on
-    # by hand in that range is left alone.
+    # 73 ON / 72 OFF IS A DEADBAND, NOT A TYPO. A single threshold makes the fan chatter on and
+    # off around it, which on a Wi-Fi fan is also a burst of cloud calls each time. A degree of
+    # separation costs nothing and stops that. Both edges need the temperature to HOLD for two
+    # minutes on top of the averaging. Between 72 and 73 nothing happens at all, so a fan
+    # switched on by hand in that range is left alone.
+    #
+    # SPEED SCALES WITH HEAT: 25% at 73F rising to 100% at 78F, 15 points per degree, clamped
+    # at both ends (asked for 2026-08-04). The fan has SIX speeds, so those percentages are not
+    # what you get back — HA hands the percentage to the Dreo integration, which rounds UP to
+    # the nearest of six (`math.ceil(percentage * 6 / 100)`). So 25% is really speed 2 of 6, and
+    # the fan is already flat out at 77 because six steps cannot tell 85% and 100% apart. The
+    # speeds change at 73.0 / 73.6 / 74.7 / 75.8 / 76.9.
+    #
+    # It sends a percentage, never a speed number, and derives the step count from the entity's
+    # own `percentage_step` — a different Dreo model has a different count and this should not
+    # have to be rewritten for it.
+    #
+    # ONLY ACTS WHEN THE SPEED WOULD ACTUALLY CHANGE (`target_speed != current_speed`), because
+    # everything here is a round trip to Dreo's cloud. `current_speed` reads back with `round`
+    # while `target_speed` computes with `ceil`: ceil is the integration's forward mapping, and
+    # rounding is its inverse. Using ceil for both reads speed 4 (reported as 67%) back as 5 and
+    # the automation would fight itself forever.
+    #
+    # PRESET MODES ARE THE OTHER THING THAT SETS SPEED — `auto` from the fan's own thermometer,
+    # `sleep` by ramping down on a timer — so one of those left engaged quietly undoes whatever
+    # speed this sets. It forces `normal` when taking control, and only when it is not already
+    # normal.
     #
     # Sits below the LED bar's 78 "too hot" alert on purpose: the fan tries to prevent the state
     # the light exists to warn about. If both fire, the room got hot faster than the fan could
     # help and the alert is doing its job.
     #
-    # float(0) matches the LED automation: a dropped sensor reads 0, which means "not hot", which
-    # means the fan does not run forever on a dead thermometer.
+    # WHAT IT DELIBERATELY WILL NOT DO: start a fan somebody has just switched off. Only the
+    # held 73 crossing and a restart may turn it ON; the per-report `track` trigger adjusts a
+    # fan that is already running. Switch it off by hand at 76 and it stays off until the room
+    # drops below 73 and climbs back through it.
+    #
+    # A DEAD THERMOMETER STOPS THE FAN rather than leaving it running on a stale number, which
+    # is what the old float(0) achieved. That needs saying out loud now: an average sensor keeps
+    # its last value when its source goes away, so `has_value` is checked on the RAW entity and
+    # there is a trigger for it going unavailable. Ten minutes, so a brief Z-Wave hiccup does
+    # not stop the fan.
     - id: hawksnest_nursery_fan
       alias: "Nursery: fan follows temperature"
-      mode: single
+      # restart, not single: the startup branch below can sit waiting for the average sensor to
+      # come up, and a temperature report arriving during that wait should supersede it rather
+      # than be dropped. Every branch is two service calls, so nothing is lost by cancelling.
+      mode: restart
       triggers:
         - trigger: numeric_state
-          entity_id: sensor.nursery_on_off_switch_air_temperature
-          above: 74
+          entity_id: sensor.nursery_temperature_average
+          above: 73
           for: "00:02:00"
           id: hot
         - trigger: numeric_state
-          entity_id: sensor.nursery_on_off_switch_air_temperature
+          entity_id: sensor.nursery_temperature_average
           below: 72
           for: "00:02:00"
           id: cool
+        # The thermometer itself dropping off the mesh. The average would happily keep serving
+        # its last value, so this is the only thing that notices.
+        - trigger: state
+          entity_id: sensor.nursery_on_off_switch_air_temperature
+          to: ["unavailable", "unknown"]
+          for: "00:10:00"
+          id: cool
+        # Every new average — this is what re-scales the speed as the room warms or cools.
+        - trigger: state
+          entity_id: sensor.nursery_temperature_average
+          id: track
         # On restart, settle to whatever the current temperature implies rather than leaving the
         # fan wherever it happened to be when HA went down.
         - trigger: homeassistant
           event: start
-      variables:
-        temp: "{{ states('sensor.nursery_on_off_switch_air_temperature') | float(0) }}"
+          id: start
       actions:
+        # The average sensor is not ready the instant HA is. Settling against an unknown would
+        # read as "cold" and switch the fan off on every restart, and nothing would switch it
+        # back on until the temperature crossed 73 from below — which on a hot day never happens.
+        - if: "{{ trigger.id == 'start' }}"
+          then:
+            - wait_template: "{{ has_value('sensor.nursery_temperature_average') }}"
+              timeout: "00:10:00"
+              continue_on_timeout: true
+        # Bound HERE rather than in `variables:`, which would evaluate them before that wait.
+        - variables:
+            ready: "{{ has_value('sensor.nursery_temperature_average') }}"
+            alive: "{{ has_value('sensor.nursery_on_off_switch_air_temperature') }}"
+            temp: "{{ states('sensor.nursery_temperature_average') | float(0) }}"
+            steps: "{{ (100 / (state_attr('fan.tower_fan', 'percentage_step') | float(100 / 6))) | round | int }}"
+            target_pct: "{{ [[25 + (temp - 73) * 15, 25] | max, 100] | min | round | int }}"
+            target_speed: "{{ (target_pct * steps / 100) | round(0, 'ceil') | int }}"
+            current_speed: >-
+              {{ 0 if not is_state('fan.tower_fan', 'on')
+                 else (state_attr('fan.tower_fan', 'percentage') | float(0) * steps / 100) | round | int }}
         - choose:
-            - conditions: "{{ trigger.id == 'hot' or (trigger.platform == 'homeassistant' and temp >= 74) }}"
-              sequence:
-                - action: fan.turn_on
-                  target:
-                    entity_id: fan.tower_fan
-            - conditions: "{{ trigger.id == 'cool' or (trigger.platform == 'homeassistant' and temp <= 72) }}"
+            - alias: Cool enough, or flying blind — release the fan
+              conditions:
+                - "{{ trigger.id in ['cool', 'start'] }}"
+                - "{{ not alive or (ready and temp <= 72) }}"
               sequence:
                 - action: fan.turn_off
                   target:
                     entity_id: fan.tower_fan
+            - alias: Warm — run at the speed this temperature asks for
+              conditions:
+                - "{{ ready and alive and temp >= 73 }}"
+                - "{{ trigger.id in ['hot', 'start'] or is_state('fan.tower_fan', 'on') }}"
+                - "{{ target_speed != current_speed }}"
+              sequence:
+                - if:
+                    - condition: template
+                      value_template: "{{ not is_state_attr('fan.tower_fan', 'preset_mode', 'normal') }}"
+                  then:
+                    - action: fan.set_preset_mode
+                      target:
+                        entity_id: fan.tower_fan
+                      data:
+                        preset_mode: normal
+                - action: fan.turn_on
+                  target:
+                    entity_id: fan.tower_fan
+                  data:
+                    percentage: "{{ target_pct }}"
+
+    # ── Garage overhead bays: left open too long ─────────────────────────────
+    # Two Ecolink TILT-ZWAVE2.5-ECO tilt sensors, one per overhead bay. Added 2026-08-06.
+    # UNTESTED AGAINST HARDWARE at the time of writing — the sensors were paired in the same
+    # session but nothing below had yet fired on a real door movement.
+    #
+    # THE ENTITY IDS ARE PINNED BY HAND, NOT AUTO-GENERATED. The Ecolink advertises both
+    # Notification CC (type 6, Access Control) and Binary Sensor CC, and which one HA surfaces
+    # — and what it names it — depends on the device config file revision; candidates seen
+    # elsewhere include `_window_door_is_open`, `_access_control_window_door_is_open` and
+    # `_door_state`. Rather than let this file depend on that, the two open/closed entities
+    # are RENAMED after pairing to `binary_sensor.garage_bay_{left,right}_open`. If those ids
+    # ever stop existing the symptom is silence, not an error.
+    #
+    # WHY NOT `garage_door` ANYTHING. `binary_sensor.garage_door` IS ALREADY TAKEN: it is the
+    # Ring Alarm contact sensor on the garage-to-house INTERIOR door. `lock.garage_door` is the
+    # Schlage on that same door, and that lock node also owns
+    # `binary_sensor.garage_door_current_status_of_the_door`. A tilt sensor named "Garage Door"
+    # would have been silently suffixed to `_2`, and would have made every future `garage_door*`
+    # glob ambiguous. `garage_bay_*` cannot collide with any of them.
+    #
+    # TEMPLATE TRIGGER, NOT `state ... for: "00:10:00"`. A state trigger with `for:` does not
+    # re-arm across a restart, and this stack restarts more than you would like — every pod in
+    # the namespace showed 7 restarts after the host reboot earlier today, and DEPLOYMENT.md §10
+    # documents a boot-ordering race that costs another one. A bay left open across a 3am reboot
+    # would never have been reported. A template containing now() is re-rendered at the top of
+    # every minute, and after a restart the entity's last_changed IS the restart time, so this
+    # self-arms exactly 10 minutes later. The `is_state(...)` half also short-circuits the
+    # `.last_changed` lookup, so this does not throw once a minute if an entity is ever renamed.
+    #
+    # 10 MINUTES, THEN 25 / 40 / 55, THEN STOP. Under ten minutes is unloading the car. Past an
+    # hour the reminder has already failed and a fifth one will not work either; the last one
+    # says so out loud and escalates to urgent, so the silence afterwards is information rather
+    # than a bug. Capping also bounds a stuck door on a bad night to 4 pushes instead of 96.
+    # REASONED, NOT MEASURED — revisit after a month of real use.
+    #
+    # REJECTED: suppressing while the `garage` Frigate camera sees motion or a person. It would
+    # mute exactly the case worth catching (someone in the garage with the door up who then
+    # walks inside and forgets), the door panel itself moving IS motion, and it would make this
+    # alert's SILENCE depend on Frigate detection — which is a known silent-failure mode here,
+    # and is why hawksnest_frigate_detection_watchdog above exists at all.
+    #
+    # FAILS QUIET: an unavailable or unknown tilt sensor reads as NOT OPEN. These are sleeping
+    # battery devices and dropping out is their normal resting state; a flat cell is the battery
+    # watchdog's job, not this automation's.
+    #
+    # `opened_at` GUARDS AGAINST A STALE RUN. Cars leave and come back: if a bay closes and
+    # reopens inside the hour, the original run has to die instead of counting from the wrong
+    # zero while a second run starts its own clock. Timestamps are floats on purpose — automation
+    # `variables:` round-trip through a render, so numbers and strings survive and datetime
+    # objects do not. `| float(0)` at every use site because that round-trip is literal_eval and
+    # is not worth trusting blind.
+    #
+    # THE SNAPSHOT URL IS RE-RENDERED AT EVERY PUSH rather than captured once in a variable: the
+    # camera `entity_picture` carries a SIGNED token, and one captured at minute 10 would already
+    # be expired by the reminder at minute 55 — a silently broken image, which is worse than no
+    # image at all.
+    - id: hawksnest_garage_bay_open_too_long
+      alias: "Garage: bay left open too long"
+      mode: parallel
+      max: 4
+      triggers:
+        - trigger: template
+          id: left
+          value_template: >-
+            {{ is_state('binary_sensor.garage_bay_left_open', 'on')
+               and now() - states.binary_sensor.garage_bay_left_open.last_changed
+                   > timedelta(minutes=10) }}
+        - trigger: template
+          id: right
+          value_template: >-
+            {{ is_state('binary_sensor.garage_bay_right_open', 'on')
+               and now() - states.binary_sensor.garage_bay_right_open.last_changed
+                   > timedelta(minutes=10) }}
+      variables:
+        bay: "binary_sensor.garage_bay_{{ trigger.id }}_open"
+        bay_name: "{{ 'Left garage bay' if trigger.id == 'left' else 'Right garage bay' }}"
+        opened_at: >-
+          {{ states[bay].last_changed.timestamp() if states[bay] is not none else 0 }}
+        front: "https://dragonfly.tail2ce561.ts.net:8443"
+      actions:
+        - action: rest_command.ntfy_publish
+          data:
+            topic: "hawksnest-alerts"
+            title: "Garage bay open"
+            message: "{{ bay_name }} has been open for 10 minutes."
+            # `warning` is an EXISTING client routing key (the Frigate watchdog publishes with
+            # it), so this lands on a channel the phone already knows how to file. `door` would
+            # render a nicer emoji in the plain ntfy app but is an unknown key to
+            # PushRoute.kindOf and would fall through to the default channel.
+            tags: "warning"
+            priority: "high"
+            click: "{{ front }}/?camera=camera.garage"
+            attach: >-
+              {% set p = state_attr('camera.garage', 'entity_picture') %}
+              {{ (front ~ p) if p else '' }}
+        - repeat:
+            count: 3
+            sequence:
+              - delay: "00:15:00"
+              # A false condition inside a sequence ABORTS THE WHOLE RUN, which is exactly what
+              # is wanted here: door closed — or closed and reopened, so this is a different
+              # opening — means stop reminding, immediately and for good.
+              - condition: template
+                value_template: >-
+                  {{ is_state(bay, 'on')
+                     and (states[bay].last_changed.timestamp() - (opened_at | float(0)))
+                         | abs < 1 }}
+              - action: rest_command.ntfy_publish
+                data:
+                  topic: "hawksnest-alerts"
+                  title: "Garage bay still open"
+                  message: >-
+                    {{ bay_name }} is still open ({{ ((now().timestamp()
+                    - (opened_at | float(0))) / 60) | round(0) | int }} minutes).
+                    {{ 'This is the last reminder.' if repeat.index == 3 else '' }}
+                  tags: "warning"
+                  priority: "{{ 'urgent' if repeat.index == 3 else 'high' }}"
+                  click: "{{ front }}/?camera=camera.garage"
+                  attach: >-
+                    {% set p = state_attr('camera.garage', 'entity_picture') %}
+                    {{ (front ~ p) if p else '' }}
+
+    # ── Garage overhead bays: opened while armed, or overnight ───────────────
+    # The security half of the tilt-sensor rollout. Added 2026-08-06, UNTESTED — nothing below
+    # has fired on a real door movement yet.
+    #
+    # `from: "off"` IS LOAD-BEARING, NOT DECORATION. On an HA restart these entities go
+    # unavailable -> on, and without the explicit `from` that transition is indistinguishable
+    # from a door opening: every reboot after 22:00 would fire an urgent push claiming the garage
+    # had just opened. Given that every pod here restarted 7 times after this morning's host
+    # reboot, that would have discredited the alert within a week. ACCEPTED CONSEQUENCE: a bay
+    # that opens during the seconds HA is restarting is never reported by THIS automation — the
+    # left-open automation above still catches it ten minutes later.
+    #
+    # NIGHT IS A FIXED 22:00-06:00, DELIBERATELY NOT `sun.sun` BELOW_HORIZON, even though the
+    # Master Bedroom LED automation uses sun and matching it would look more consistent. Sunset
+    # here is around 17:00 in December, so a sun-based rule turns "the garage opened after dark"
+    # into "someone got home from work", and an URGENT push every winter evening is precisely how
+    # an alert becomes a thing you permanently mute. Dimming a light bar at dusk is right; paging
+    # a phone at dusk is not. The armed branch already covers everyone-out and everyone-asleep
+    # whenever the panel is actually armed, so the fixed hours only have to cover the
+    # disarmed-and-late case.
+    #
+    # ASYMMETRIC FAILURE, matching the house rule set by hawksnest_push_camera_object: the ALARM
+    # read fails OPEN (unknown, unavailable, or a renamed panel all count as armed and alert — a
+    # renamed entity must never silently disable a security feature), while the TILT read fails
+    # QUIET (no state change, no push).
+    #
+    # NOTHING ELSE WATCHES THESE BAYS. The tilt sensors are Z-Wave and are NOT part of the Ring
+    # alarm, so arming the panel with an overhead bay standing open does not fault the panel and
+    # does not arm anything over that opening. This automation is the only thing that will say so.
+    - id: hawksnest_garage_bay_open_while_armed
+      alias: "Garage: bay opened while armed or overnight"
+      mode: parallel
+      max: 4
+      triggers:
+        - trigger: state
+          entity_id:
+            - binary_sensor.garage_bay_left_open
+            - binary_sensor.garage_bay_right_open
+          from: "off"
+          to: "on"
+      variables:
+        bay_name: >-
+          {{ {'binary_sensor.garage_bay_left_open': 'Left garage bay',
+              'binary_sensor.garage_bay_right_open': 'Right garage bay'}
+             .get(trigger.entity_id, 'A garage bay') }}
+        alarm: "{{ states('alarm_control_panel.mfa_alarm') }}"
+        armed: "{{ states('alarm_control_panel.mfa_alarm') != 'disarmed' }}"
+        night: "{{ now().hour >= 22 or now().hour < 6 }}"
+        front: "https://dragonfly.tail2ce561.ts.net:8443"
+      conditions:
+        - condition: template
+          value_template: "{{ armed or night }}"
+      actions:
+        - action: rest_command.ntfy_publish
+          data:
+            topic: "hawksnest-alerts"
+            title: "Garage bay opened"
+            message: >-
+              {{ bay_name }} opened at {{ now().strftime('%H:%M') }}
+              {%- if armed %} while the alarm is {{ alarm | replace('_', ' ') }}
+              {%- else %} — overnight, alarm disarmed
+              {%- endif %}.
+            # `rotating_light` is the routing key a TRIGGERED alarm already publishes with, so
+            # this lands on the loudest channel the phone has. That is the intent: an overhead
+            # bay opening at 3am is the same class of event.
+            tags: "rotating_light"
+            priority: "urgent"
+            click: "{{ front }}/?camera=camera.garage"
+            attach: >-
+              {% set p = state_attr('camera.garage', 'entity_picture') %}
+              {{ (front ~ p) if p else '' }}
+
+    # ── Garage overhead bays: LED pulse on both bars ─────────────────────────
+    # Cyan pulse on the Nursery AND Master Bedroom LED bars when an overhead bay opens, then both
+    # bars are handed back to their arbiters. Added 2026-08-06. UNTESTED against the tilt sensors;
+    # the parameter-99 mechanism itself is the one verified on hardware 2026-08-02 on the Master
+    # Bedroom twin.
+    #
+    # A NEW AUTOMATION RATHER THAN EXTENDING '1785527100005'. That one pulses the Nursery GREEN
+    # for the Ring contact on the garage-to-house INTERIOR door, and it stays exactly as it is.
+    # Merging would have needed a colour variable and a rewrite anyway, it would have to drive
+    # two nodes and fire two restore events, and '1785527100005' lives in the mechanically
+    # reconciled UI block — hand-editing that block is precisely the drift that
+    # scripts/ha-config-drift-check.sh exists to catch.
+    #
+    # COLOUR 130 (CYAN) IS THE WHOLE POINT OF SEPARATING THEM. Green 85 already means "the door
+    # between the garage and the house". Cyan is not 170 blue (disarmed base), not 0 red
+    # (armed-home and alarm), not 190 violet (armed-away), not 7 orange (arming and too-hot). So:
+    # green flash = interior door, cyan flash = an overhead bay. The bar cannot say WHICH bay and
+    # does not try — the push does that.
+    #
+    # Parameter 99 is written as FOUR PARTIALS because a whole-parameter write 500s on this
+    # firmware. Level 100 / duration 5 / effect 4 (pulse) and the 9-second delay before restore
+    # are copied verbatim from the existing garage pulse so the two read as one family.
+    #
+    # STARTUP RACE GUARD, PER BAR rather than shared. A garage door opening is not usually near a
+    # restart, but a bay left open across a reboot produces off->on the moment zwave_js restores
+    # it, which lands in the exact window that produced six "No zwave_js nodes found for given
+    # targets" errors on 2026-08-03 at 22:16. Each bar is guarded on ITS OWN node's temperature
+    # sensor standing in for "this device answers", so a dropped Nursery node does not also cost
+    # the Master Bedroom pulse. The restore events fire unconditionally — they are cheap and the
+    # arbiters carry their own guards.
+    #
+    # Skipped entirely while the alarm is triggered, matching '1785527100005': the sustained red
+    # fast-blink is the more important thing on the bar and must not be stomped by a door.
+    #
+    # `mode: single` with `max_exceeded: silent` — if both bays open within seconds of each other
+    # the bar is already pulsing cyan, and a second run would only race the eight writes.
+    - id: hawksnest_garage_bay_led_pulse
+      alias: "Garage: bay opened - LED pulse (nursery + master bedroom)"
+      mode: single
+      max_exceeded: silent
+      triggers:
+        - trigger: state
+          entity_id:
+            - binary_sensor.garage_bay_left_open
+            - binary_sensor.garage_bay_right_open
+          from: "off"
+          to: "on"
+      conditions:
+        - condition: template
+          value_template: "{{ states('alarm_control_panel.mfa_alarm') != 'triggered' }}"
+      actions:
+        - if:
+            - condition: template
+              value_template: "{{ has_value('sensor.nursery_on_off_switch_air_temperature') }}"
+          then:
+            - action: zwave_js.set_value
+              target:
+                device_id: 83fde5fed357870364f7dc7b9c127ac5
+              data:
+                command_class: 112
+                property: 99
+                property_key: 16711680
+                value: 130
+            - action: zwave_js.set_value
+              target:
+                device_id: 83fde5fed357870364f7dc7b9c127ac5
+              data:
+                command_class: 112
+                property: 99
+                property_key: 65280
+                value: 100
+            - action: zwave_js.set_value
+              target:
+                device_id: 83fde5fed357870364f7dc7b9c127ac5
+              data:
+                command_class: 112
+                property: 99
+                property_key: 255
+                value: 5
+            - action: zwave_js.set_value
+              target:
+                device_id: 83fde5fed357870364f7dc7b9c127ac5
+              data:
+                command_class: 112
+                property: 99
+                property_key: 4278190080
+                value: 4
+        - if:
+            - condition: template
+              value_template: >-
+                {{ has_value('sensor.master_bedroom_on_off_switch_air_temperature') }}
+          then:
+            - action: zwave_js.set_value
+              target:
+                device_id: 4921442741687644efb1bd60b30c377d
+              data:
+                command_class: 112
+                property: 99
+                property_key: 16711680
+                value: 130
+            - action: zwave_js.set_value
+              target:
+                device_id: 4921442741687644efb1bd60b30c377d
+              data:
+                command_class: 112
+                property: 99
+                property_key: 65280
+                value: 100
+            - action: zwave_js.set_value
+              target:
+                device_id: 4921442741687644efb1bd60b30c377d
+              data:
+                command_class: 112
+                property: 99
+                property_key: 255
+                value: 5
+            - action: zwave_js.set_value
+              target:
+                device_id: 4921442741687644efb1bd60b30c377d
+              data:
+                command_class: 112
+                property: 99
+                property_key: 4278190080
+                value: 4
+        - delay:
+            seconds: 9
+        - event: nursery_led_restore
+        - event: master_bedroom_led_restore
+
+    # ── Z-Wave battery watchdog ──────────────────────────────────────────────
+    # Added 2026-08-06. NOTHING HAS EVER WATCHED THESE. As of today this instance already carries
+    # binary_sensor.front_door_lock_replace_battery_{soon,now}, the same pair for the back door
+    # lock (binary_sensor.lock_*) and for the garage interior lock (binary_sensor.garage_door_*),
+    # plus sensor.*_battery_level on all three and on the ZSE44 — and every one of them can go
+    # flat with no signal anywhere except a lock that quietly stops answering. Two Ecolink tilt
+    # sensors on CR123A cells are about to join that list, which is what finally forced this.
+    #
+    # SCOPED BY INTEGRATION, NOT BY ENTITY GLOB. `integration_entities('zwave_js')` is what makes
+    # this entity-ID-free in the sense the rest of this file means: a Z-Wave device paired next
+    # year is covered with no edit here, and the phone batteries (mobile_app) and the Ring camera
+    # batteries (ring-mqtt) are excluded STRUCTURALLY rather than by a hand-maintained deny-list
+    # that goes stale the moment a camera is renamed. The Ring cams are the noisy ones — they
+    # legitimately run down and get recharged, they already report their own low battery in the
+    # Ring app, and mixing them in would have made this a daily push about a camera nobody was
+    # going to go and fetch right then.
+    #
+    # TWO RULES, BECAUSE EITHER ALONE HAS A HOLE:
+    #   * `_replace_battery_soon` / `_replace_battery_now` binary sensors that are ON — the
+    #     device's own judgement, and the ONLY signal for anything that reports battery as a
+    #     coarse 100/0. Whether the Ecolinks do that is UNCONFIRMED until a cell runs down.
+    #   * any device_class `battery` sensor under 25% — catches devices that report a real
+    #     percentage and never set the notification flag. 25 rather than 10 because the Schlages
+    #     report in roughly 10% steps and a lock that reaches 10% can die between six-hour
+    #     sweeps; rather than 50 because a warning you get for three months is not a warning.
+    #
+    # EACH VARIABLE RE-EXPANDS FROM SCRATCH, which looks wasteful and is not: automation
+    # `variables:` are rendered through a string round-trip, so a list of plain strings survives
+    # and a list of State objects does not. Every template here therefore ends in strings.
+    #
+    # RE-ALERT CADENCE WITHOUT A HELPER: gated on this automation's OWN last_triggered, which is
+    # restored across restarts, so there is no input_datetime to create, seed or forget. Three
+    # days normally, one day if anything says REPLACE NOW. Sweeps four times a day so a "now"
+    # flag is seen within six hours — fast enough for devices whose wakeup interval is four hours
+    # in the first place. ACCEPTED CONSEQUENCE, because the gate is global rather than per-device:
+    # a SECOND device going low inside an open window waits up to three days to be named.
+    # Per-device state would need a helper per device or a stored dict, and this is a household,
+    # not a fleet.
+    #
+    # NO `homeassistant: start` TRIGGER, on purpose. A sweep thirty seconds into boot sees a
+    # half-loaded zwave_js, reports a short list, and burns the three-day budget on it.
+    #
+    # FAILS QUIET: `float(101)` means an unavailable or unknown battery sensor counts as HEALTHY.
+    # Deliberate — these are sleeping devices, unavailable is their normal resting state, and the
+    # other direction would page every three days forever about a device that is fine. The cost
+    # is that a genuinely DEAD node is invisible here; a "node has not reported in N days"
+    # watchdog is the right tool for that and is NOT built.
+    - id: hawksnest_zwave_battery_watchdog
+      alias: "Hawksnest: Z-Wave battery watchdog"
+      mode: single
+      triggers:
+        # :41 keeps this clear of the :07 (Ring snapshot policy) and :23 (Frigate watchdog) slots.
+        - trigger: time_pattern
+          hours: "/6"
+          minutes: "41"
+      variables:
+        replace_now: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for s in expand(integration_entities('zwave_js')) -%}
+            {%- if s.domain == 'binary_sensor' and s.state == 'on'
+                  and s.entity_id.endswith('_replace_battery_now') -%}
+              {%- set ns.out = ns.out + [s.name | replace(' Replace battery now', '')] -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        replace_soon: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for s in expand(integration_entities('zwave_js')) -%}
+            {%- if s.domain == 'binary_sensor' and s.state == 'on'
+                  and s.entity_id.endswith('_replace_battery_soon') -%}
+              {%- set ns.out = ns.out + [s.name | replace(' Replace battery soon', '')] -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.out }}
+        low_pct: >-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for s in expand(integration_entities('zwave_js')) -%}
+            {%- if s.domain == 'sensor'
+                  and s.attributes.get('device_class') == 'battery'
+                  and (s.state | float(101)) < 25 -%}
+              {%- set ns.out = ns.out + [s.name ~ ' (' ~ s.state ~ '%)'] -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.out }}
+      conditions:
+        - condition: template
+          value_template: >-
+            {{ (replace_now | count) + (replace_soon | count) + (low_pct | count) > 0 }}
+        - condition: template
+          value_template: >-
+            {%- set gap = 1 if (replace_now | count) > 0 else 3 -%}
+            {%- set last = this.attributes.get('last_triggered') -%}
+            {{ last is none or (now() - last) > timedelta(days=gap) }}
+      actions:
+        - action: rest_command.ntfy_publish
+          data:
+            topic: "hawksnest-alerts"
+            title: >-
+              {{ 'Z-Wave battery: replace now' if replace_now | count > 0
+                 else 'Z-Wave battery low' }}
+            message: >-
+              {%- if replace_now | count > 0 %}
+              REPLACE NOW: {{ replace_now | join(', ') }}.
+              {%- endif %}
+              {%- if replace_soon | count > 0 %}
+              Replace soon: {{ replace_soon | join(', ') }}.
+              {%- endif %}
+              {%- if low_pct | count > 0 %}
+              Low: {{ low_pct | join(', ') }}.
+              {%- endif %}
+              {%- if replace_now | count > 0 %}
+              A flat lock battery is a door that stops locking and a keypad that stops
+              answering — worth doing today.
+              {%- else %}
+              Repeats every 3 days until the cells are changed.
+              {%- endif %}
+            tags: "warning"
+            priority: "{{ 'high' if replace_now | count > 0 else 'default' }}"
+            click: "https://dragonfly.tail2ce561.ts.net:8443/"
 
   scripts.yaml: |
     master_bedroom_strip_power_up:
