@@ -1418,6 +1418,85 @@ data:
       mode: queued
       max: 5
 
+    # ── Master Bedroom LED effect - interior garage door opened ──────────────
+    # The twin of the Nursery's '1785527100005', added 2026-08-06. The two rooms are deliberate
+    # twins for everything else on these bars — alarm colour, night dimming, alarm-and-too-hot —
+    # and this was the one effect that existed in only one of them. There was no reason for the
+    # asymmetry; the Nursery one was simply written first, in the UI, and never copied across.
+    #
+    # GREEN 85 IS THE INTERIOR DOOR, and that is the whole point of it being a different colour
+    # from the overhead bays. `binary_sensor.garage_door` is the Ring Alarm CONTACT SENSOR on the
+    # garage-to-house door — the one somebody walks through — not a tilt sensor on an overhead
+    # bay. Those are cyan 130. Same bar, same shape of pulse, two colours, two meanings:
+    #     green 85  = someone came through the door between the garage and the house
+    #     cyan 130  = an overhead bay went up
+    # Both were verified on this hardware 2026-08-06, so neither is a guess.
+    #
+    # Parameter 99 as FOUR PARTIALS, level 100 / duration 5 / effect 4 (pulse) / 9s before the
+    # restore — copied verbatim from the Nursery twin so the two rooms cannot drift apart.
+    #
+    # ONE DELIBERATE DIFFERENCE FROM THE TWIN: the startup-race guard. The Nursery version
+    # predates that lesson and does not have it; writing to a zwave_js node before the
+    # integration can resolve it is what produced six "No zwave_js nodes found for given
+    # targets" errors on 2026-08-03 at 22:16. A contact sensor restored to `on` at boot lands in
+    # exactly that window. Guarded on this node's own temperature sensor standing in for "this
+    # device answers". The Nursery twin should get the same guard, but that is its change, not
+    # this one — it lives in the mechanically reconciled UI block.
+    #
+    # Skipped entirely while the alarm is triggered, matching the twin: the sustained red fast
+    # blink is the more important thing on the bar and a door must not stomp it.
+    - id: hawksnest_master_bedroom_led_garage_door
+      alias: "Master Bedroom LED effect - garage door opened"
+      mode: single
+      max_exceeded: silent
+      triggers:
+        - trigger: state
+          entity_id: binary_sensor.garage_door
+          from: "off"
+          to: "on"
+      conditions:
+        - condition: template
+          value_template: "{{ states('alarm_control_panel.mfa_alarm') != 'triggered' }}"
+        - condition: template
+          value_template: >-
+            {{ has_value('sensor.master_bedroom_on_off_switch_air_temperature') }}
+      actions:
+        - action: zwave_js.set_value
+          target:
+            device_id: 4921442741687644efb1bd60b30c377d
+          data:
+            command_class: 112
+            property: 99
+            property_key: 16711680
+            value: 85
+        - action: zwave_js.set_value
+          target:
+            device_id: 4921442741687644efb1bd60b30c377d
+          data:
+            command_class: 112
+            property: 99
+            property_key: 65280
+            value: 100
+        - action: zwave_js.set_value
+          target:
+            device_id: 4921442741687644efb1bd60b30c377d
+          data:
+            command_class: 112
+            property: 99
+            property_key: 255
+            value: 5
+        - action: zwave_js.set_value
+          target:
+            device_id: 4921442741687644efb1bd60b30c377d
+          data:
+            command_class: 112
+            property: 99
+            property_key: 4278190080
+            value: 4
+        - delay:
+            seconds: 9
+        - event: master_bedroom_led_restore
+
     # ── Nursery fan follows the nursery temperature ──────────────────────────
     # ENTITY ID IS REAL, not a placeholder: `fan.tower_fan`, confirmed in the entity registry
     # after the Dreo integration was added through the HA UI on 2026-08-04. It is per-install
@@ -1794,11 +1873,13 @@ data:
     # reconciled UI block — hand-editing that block is precisely the drift that
     # scripts/ha-config-drift-check.sh exists to catch.
     #
-    # COLOUR 130 (CYAN) IS THE WHOLE POINT OF SEPARATING THEM. Green 85 already means "the door
-    # between the garage and the house". Cyan is not 170 blue (disarmed base), not 0 red
-    # (armed-home and alarm), not 190 violet (armed-away), not 7 orange (arming and too-hot). So:
-    # green flash = interior door, cyan flash = an overhead bay. The bar cannot say WHICH bay and
-    # does not try — the push does that.
+    # COLOUR 130 (CYAN) IS THE WHOLE POINT OF SEPARATING THEM, and it is VERIFIED ON HARDWARE
+    # 2026-08-06 — 130 does render cyan on the VZW30-SN, not the teal or blue-green it could
+    # plausibly have been. Green 85 already means "the door between the garage and the house".
+    # Cyan is not 170 blue (disarmed base), not 0 red (armed-home and alarm), not 190 violet
+    # (armed-away), not 7 orange (arming and too-hot). So: green flash = interior door, cyan
+    # flash = an overhead bay. The bar cannot say WHICH bay and does not try — the push does
+    # that. Both rooms carry both effects, so this reads the same wherever you are standing.
     #
     # Parameter 99 is written as FOUR PARTIALS because a whole-parameter write 500s on this
     # firmware. Level 100 / duration 5 / effect 4 (pulse) and the 9-second delay before restore
