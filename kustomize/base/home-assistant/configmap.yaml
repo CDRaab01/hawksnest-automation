@@ -1517,16 +1517,31 @@ data:
 
     # ── Garage overhead bays: left open too long ─────────────────────────────
     # Two Ecolink TILT-ZWAVE2.5-ECO tilt sensors, one per overhead bay. Added 2026-08-06.
-    # UNTESTED AGAINST HARDWARE at the time of writing — the sensors were paired in the same
-    # session but nothing below had yet fired on a real door movement.
+    # UNTESTED AGAINST A MOVING DOOR at the time of writing — the main bay's sensor was paired
+    # and reporting in this session, but neither sensor had been mounted and nothing below had
+    # fired on a real door movement.
     #
-    # THE ENTITY IDS ARE PINNED BY HAND, NOT AUTO-GENERATED. The Ecolink advertises both
-    # Notification CC (type 6, Access Control) and Binary Sensor CC, and which one HA surfaces
-    # — and what it names it — depends on the device config file revision; candidates seen
-    # elsewhere include `_window_door_is_open`, `_access_control_window_door_is_open` and
-    # `_door_state`. Rather than let this file depend on that, the two open/closed entities
-    # are RENAMED after pairing to `binary_sensor.garage_bay_{main,side}_open`. If those ids
-    # ever stop existing the symptom is silence, not an error.
+    # THE ENTITY IDS ARE PINNED BY HAND, AND THE GUESS WOULD HAVE BEEN WRONG. This was written
+    # expecting the Ecolink to surface open/closed through Notification CC (type 6, Access
+    # Control) as something like `_window_door_is_open`. MEASURED AT PAIRING 2026-08-06: it does
+    # not. HA builds the entity from BINARY SENSOR CC instead, as
+    # `binary_sensor.<device>_sensor_state_any`, with NO device_class at all — so left alone it
+    # reads "On/Off" rather than "Open/Closed" and nothing in HA treats it as a door. Both
+    # entities are therefore renamed by hand after pairing, and the open/closed one is given
+    # `device_class: garage_door` in the entity settings:
+    #     binary_sensor.garage_bay_main_open    binary_sensor.garage_bay_main_tamper
+    #     binary_sensor.garage_bay_side_open    binary_sensor.garage_bay_side_tamper
+    # If those ids ever stop existing the symptom is silence, not an error.
+    #
+    # THREE MORE THINGS THE HARDWARE SETTLED, all measured at pairing rather than assumed:
+    #   * The battery reports a REAL PERCENTAGE (100.0 on a fresh CR123A), not the coarse 100/0
+    #     that the watchdog below hedges against — and the watchdog swept it with NO EDIT AT
+    #     ALL, which is exactly what scoping that automation by integration rather than by an
+    #     id glob was for.
+    #   * The tamper entity exists and reads `on` while the cover is off. It is deliberately
+    #     wired to nothing; it is named here so the next person does not rediscover it.
+    #   * The node also produces a spurious `light.*_basic` from its Group 2 Basic Set. It
+    #     controls nothing. Left in place rather than disabled, but do not wire anything to it.
     #
     # WHY NOT `garage_door` ANYTHING. `binary_sensor.garage_door` IS ALREADY TAKEN: it is the
     # Ring Alarm contact sensor on the garage-to-house INTERIOR door. `lock.garage_door` is the
