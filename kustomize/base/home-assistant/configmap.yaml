@@ -196,50 +196,56 @@ data:
         name: Pet alerts
         icon: mdi:dog-side
 
-    # The garage tilt sensors, with their polarity turned the right way round.
+    # The garage tilt sensors, given door semantics the device does not carry itself.
     #
-    # MEASURED 2026-08-06, BY HAND, BEFORE MOUNTING: the Ecolink's own entity reads `on` when
-    # the housing stands VERTICAL and `off` when it lies FLAT. On a garage door that is exactly
-    # backwards — an overhead door's panel stands vertical when the door is CLOSED and lies
-    # horizontal overhead when it is OPEN. Left alone, every automation downstream would have
-    # had the door's state precisely inverted: silent while it stood open all night, and
-    # pushing "opened while armed" every time it shut.
+    # MEASURED ON A MOVING DOOR, 2026-08-06 19:58 — this is the authoritative measurement and
+    # the only one that should ever be trusted here:
+    #     door CLOSED -> raw `off`      door OPEN -> raw `on`
+    # So the raw value already means what a door means, and these templates pass it straight
+    # through. No inversion.
     #
-    # ROTATING THE SENSOR 180 DEGREES DOES NOT FIX IT — tried it, still `on` when vertical, so
-    # the tilt switch is symmetric about that axis and there is no mounting orientation that
-    # gets this right. There is no config parameter for it either: the node exposes exactly two
-    # (Group 2 Basic Set, Binary Sensor Reports) and both are on/off switches for WHETHER it
-    # reports, not for polarity.
+    # THIS FILE BRIEFLY INVERTED THEM, AND THAT WAS WRONG. The inversion came from bench-testing
+    # a sensor in the hand before mounting: upright read `on`, lying flat read `off`, and the
+    # reasoning was that an overhead door's panel is upright when CLOSED, so `on` must mean
+    # closed. That reasoning is sound and the conclusion was still wrong, because "upright in
+    # someone's hand" and "mounted flat against a door panel" are not the same orientation —
+    # this switch responds to rotation about an axis the hand test never isolated. Two further
+    # hand tests (rotating 180 degrees end-for-end; lying it face-down) each produced a
+    # confident, wrong model of the mechanism.
     #
-    # AND NOTHING WAS EVER GOING TO GET IT RIGHT ON ITS OWN, which is the real point. zwave-js
-    # surfaces this device through BINARY SENSOR CC with NO device_class — it is reporting "the
-    # tilt switch is engaged", not "the door is open". Nothing in the chain knows this hardware
-    # is on a door. Deciding that engaged means CLOSED is ours to make, so it is made here, in
-    # one place, written down, rather than by inverting a comparison in three automations where
-    # the next person would have to reverse-engineer it.
+    # THE LESSON WORTH KEEPING: for a tilt sensor, no amount of handling it on a desk
+    # substitutes for one observation of the actual door moving. Open a door, watch the raw
+    # entity, believe that. It cost an inversion, a restart and an hour to learn.
     #
-    # The raw entities keep `_tilt_raw` names so it stays obvious which is the device and which
-    # is the interpretation. Everything downstream references only the ids below, which is why
-    # discovering the inversion cost zero changes to any automation.
+    # THE TEMPLATE STAYS EVEN THOUGH IT NO LONGER INVERTS. Three automations name these two ids
+    # and nothing else, and that indirection is what made the polarity mistake a one-line fix
+    # in this file instead of an edit to every automation. It also adds two things the raw
+    # entity does not have: `device_class: garage_door`, so it reads Open/Closed rather than
+    # On/Off, and an availability rule. zwave-js exposes this device through BINARY SENSOR CC
+    # with no device_class at all — it reports "the tilt switch is engaged", and nothing in the
+    # chain knows the hardware is on a door. That meaning is ours to supply, and it is supplied
+    # here, once.
     #
     # AVAILABILITY IS DELIBERATE. If a raw entity is missing or unavailable — a flat cell, a
     # dropped node, a sensor not yet paired — the template entity goes unavailable rather than
-    # guessing a state. The automations already fail quiet on that, by design.
+    # guessing a state. The automations already fail quiet on that, by design. It is why the
+    # side sensor's entity sat `unavailable` rather than lying about a door that did not exist
+    # yet, and why it started working the moment that node was paired, with no restart.
     #
-    # NEEDS A RESTART, NOT A RELOAD, the first time only: `template:` was not previously in this
-    # file, so the integration is not set up and `template.reload` does not exist yet. It will
-    # after the first restart.
+    # `template:` NEEDED ONE RESTART when it was first added to this file, because the
+    # integration was not set up and `template.reload` did not exist. It does now, so further
+    # changes here are a reload.
     template:
       - binary_sensor:
           - name: "Garage bay main open"
             unique_id: garage_bay_main_open
             device_class: garage_door
-            state: "{{ is_state('binary_sensor.garage_bay_main_tilt_raw', 'off') }}"
+            state: "{{ is_state('binary_sensor.garage_bay_main_tilt_raw', 'on') }}"
             availability: "{{ has_value('binary_sensor.garage_bay_main_tilt_raw') }}"
           - name: "Garage bay side open"
             unique_id: garage_bay_side_open
             device_class: garage_door
-            state: "{{ is_state('binary_sensor.garage_bay_side_tilt_raw', 'off') }}"
+            state: "{{ is_state('binary_sensor.garage_bay_side_tilt_raw', 'on') }}"
             availability: "{{ has_value('binary_sensor.garage_bay_side_tilt_raw') }}"
 
     # Modular config splits so automations/scripts/scenes can grow independently
@@ -1653,21 +1659,21 @@ data:
     # `binary_sensor.<device>_sensor_state_any`, with NO device_class at all — so left alone it
     # reads "On/Off" rather than "Open/Closed" and nothing in HA treats it as a door.
     #
-    # AND ITS POLARITY IS BACKWARDS FOR A DOOR — measured by hand before mounting: `on` when the
-    # housing stands vertical, `off` when it lies flat, which on an overhead door means it calls
-    # a CLOSED door open. Rotating the sensor 180 degrees does not fix it and there is no config
-    # parameter for it. So the raw device entities are renamed to `_tilt_raw` and the ids these
-    # automations actually use are TEMPLATE binary sensors that invert them, defined in
-    # configuration.yaml where the full reasoning lives:
-    #     binary_sensor.garage_bay_main_open  <- inverts binary_sensor.garage_bay_main_tilt_raw
-    #     binary_sensor.garage_bay_side_open  <- inverts binary_sensor.garage_bay_side_tilt_raw
+    # SO THE RAW DEVICE ENTITIES ARE RENAMED to `_tilt_raw`, and the ids these automations
+    # actually use are TEMPLATE binary sensors defined in configuration.yaml, where the door
+    # semantics and the measurement behind them are written down:
+    #     binary_sensor.garage_bay_main_open   <- binary_sensor.garage_bay_main_tilt_raw
+    #     binary_sensor.garage_bay_side_open   <- binary_sensor.garage_bay_side_tilt_raw
     #     binary_sensor.garage_bay_main_tamper / _side_tamper  (raw, wired to nothing)
     # If those ids ever stop existing the symptom is silence, not an error.
     #
-    # THAT INVERSION COST ZERO CHANGES DOWN HERE, which is the argument for having pinned the
-    # ids by hand in the first place. Every automation below names only the pinned id, so
-    # discovering mid-rollout that the hardware reports the opposite of what a door means was a
-    # configuration.yaml edit and nothing else.
+    # THAT INDIRECTION EARNED ITS KEEP TWICE. The polarity of these sensors was got WRONG first
+    # time — inverted, on the strength of bench-testing a sensor in the hand, then corrected
+    # once a real door was watched moving (2026-08-06 19:58: closed -> `off`, open -> `on`).
+    # Because every automation below names only the pinned id, both the original inversion and
+    # its removal were single-line edits to configuration.yaml. Nothing down here was touched
+    # either time. That is the entire argument for pinning ids by hand rather than writing
+    # automations against whatever the integration happens to generate.
     #
     # THREE MORE THINGS THE HARDWARE SETTLED, all measured at pairing rather than assumed:
     #   * The battery reports a REAL PERCENTAGE (100.0 on a fresh CR123A), not the coarse 100/0
