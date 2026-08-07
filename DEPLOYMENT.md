@@ -42,20 +42,23 @@ config-validation gates — see §11). Original V1 bring-up was 2026-06-22.
 | Other WSL distros (ignore) | `Ubuntu` (default, unrelated), `docker-desktop`, `Pi-hole` (WSL1) |
 | K3s | `v1.35.5+k3s1`, single node named `dragonfly`, containerd |
 | kubeconfig | `~/.kube/config` on Dragonfly (`export KUBECONFIG=~/.kube/config` in `~/.bashrc`) |
-| **NAS** | Synology DS214 at **`192.168.4.21`** (DSM web UI on `:5000`/`http`). Was `192.168.5.78` until the LAN was renumbered; see §"Moving the NAS" — the PVs pin this and cannot be patched in place |
-| **NFS** | **v3 only** — the DS214 does *not* support NFSv4.1 (mount returns "Protocol not supported") |
-| NFS export | **`/volume3/home-automation`** (chosen over the near-full Volume 1) |
+| **NAS** | Synology **DS925+** (NOT the DS214 — that was retired and its drives migrated into bays 1-2). **Both 2.5GbE NICs are on DHCP, so it answers on `192.168.4.21` AND `192.168.4.57`** — one machine, verified 2026-08-04 by identical `showmount -e` output and the same inode via each address. The PVs pin `.21`. `192.168.5.78` was its address before the LAN renumber and still appears in the dormant `plex` namespace's PVs |
+| **NFS** | PVs use **v3**. The DS925+ *does* support NFSv4.1 (unlike the DS214, which this row used to describe) — v3 is now a deliberate choice, not a limitation: it is what every working PV uses against this box, and Synology's NFSv4 pseudo-filesystem root changes export-path semantics |
+| NFS exports | **`/volume3/home-automation`** (HA/Z-Wave/Ring/mosquitto) and **`/volume4/frigate`** (Frigate recordings, added 2026-08-04) |
 | NFS export rule | allow **`192.168.4.0/24`**, Read/Write, **Map all users to admin**, async, non-privileged ports allowed |
-| NFS subfolders (must exist) | `ha-config`, `zwavejs-config`, `mosquitto-data`, `ring-mqtt-data` under the export |
-| Repo location | `~/hawksnest-automation` on Dragonfly |
-| Active branch | `claude/happy-babbage-07raqh` |
+| NFS subfolders (must exist) | `ha-config`, `zwavejs-config`, `mosquitto-data`, `ring-mqtt-data` under `/volume3/home-automation` |
+| Repo location | **`C:\Code\hawksnest-automation` on the Windows host**, reached from WSL as `/mnt/c/Code/hawksnest-automation`. ⚠️ A stale clone also exists at `~/hawksnest-automation` on Dragonfly — it is pinned at PR #4, does not even contain `frigate/`, and **does not deploy anything**. Editing it is a silent no-op |
+| Active branch | see `git branch --show-current` — this row goes stale fast (it said `claude/happy-babbage-07raqh` long after main had moved on) |
 | Secrets | `kustomize/overlays/prod/secrets/{mariadb.env,mosquitto.passwd,ring-mqtt.env}` (gitignored; **inside** the kustomize root on purpose — see §6) |
 
-> ⚠️ **Cross-subnet gotcha:** the PC (`192.168.4.x`) and the NAS (`192.168.5.x`) are on
-> **different /24s** that the router bridges. WSL2 NATs outbound traffic so the NAS sees
-> the *PC's* LAN IP (`192.168.4.34`), **not** the internal WSL IP (`172.20.x`). The NFS
-> rule therefore allows `192.168.4.0/24`. If NFS mounts start failing with
-> "access denied by server," first check whether the PC's LAN IP changed subnet.
+> ⚠️ **Why the NFS rule is a /24 and not a single IP:** WSL2 NATs outbound traffic, so the
+> NAS sees the *PC's* LAN IP (`192.168.4.34`), **not** the internal WSL IP (`172.20.x`).
+> The rule therefore allows `192.168.4.0/24`. If NFS mounts start failing with
+> "access denied by server," first check whether the PC's LAN IP changed.
+>
+> *(Corrected 2026-08-04: this used to describe the PC and NAS as being on different /24s
+> bridged by the router. That was true before the renumber; both are now on
+> `192.168.4.0/24`. The WSL2-NAT reason for the /24 rule is unchanged and still the point.)*
 
 ---
 

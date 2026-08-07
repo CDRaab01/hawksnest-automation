@@ -174,7 +174,10 @@ spec:
             claimName: frigate-config
         - name: media
           persistentVolumeClaim:
-            claimName: frigate-media
+            # DS925+ NFS since 2026-08-04. The old node-local `frigate-media` PVC is
+            # kept (see storage/pvcs.yaml) as the rollback — switch this line back and
+            # redeploy to return to local disk.
+            claimName: frigate-media-nas
         - name: seed
           configMap:
             name: frigate-seed

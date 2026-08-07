@@ -1,4 +1,9 @@
-# Static NFS PersistentVolumes backed by the Synology DS214.
+# Static NFS PersistentVolumes backed by the Synology NAS.
+#
+# CORRECTION 2026-08-04: this is a **DS925+**, not the DS214 these comments used to name.
+# The DS214 was retired and its drives migrated into bays 1-2. The box has both 2.5GbE
+# NICs on DHCP, so it answers on 192.168.4.21 *and* 192.168.4.57 — same machine, proved by
+# identical `showmount -e` output and the same inode on read-only mounts via each address.
 #
 # REPLACE the two placeholders in each PV before applying:
 #   spec.nfs.server  -> the NAS IP or hostname (e.g. 192.168.1.10)
@@ -101,3 +106,38 @@ spec:
   nfs:
     server: 192.168.4.21        # Synology DS214 (LAN renumbered 5.x -> 4.x, 2026-07-24)
     path: /volume3/home-automation/ring-mqtt-data
+---
+# Frigate's recordings + snapshots, moved off the node-local disk 2026-08-04.
+#
+# Lives on the DS925+ Storage Pool 3 (bays 3-4, SHR-1) -> Volume 4, ext4, 3 TB, share
+# `frigate`. ext4 and no btrfs checksums on purpose: 24/7 video gains nothing from
+# copy-on-write, and DSM itself advises against checksums for surveillance recordings.
+#
+# nfsvers=3 deliberately, NOT 4.1. The DS925+ supports 4.1, but every other PV here is
+# v3 against this same box, and Synology's NFSv4 pseudo-filesystem root changes export
+# path semantics — matching the pattern that demonstrably works beats a protocol bump
+# worth nothing to large sequential writes. No `nolock`: unlike ha-config, Frigate takes
+# no flock() on this volume (its SQLite index is on frigate-config, which stays local-path).
+#
+# NOTE (2026-08-04): the DS925+ is one machine with BOTH 2.5GbE NICs on DHCP, answering
+# on 192.168.4.21 AND 192.168.4.57. This pins .21 to match the PVs above, so all five
+# share a single address dependency rather than two. `spec.nfs` is immutable — read the
+# header of this file before changing it.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: frigate-media-nas
+spec:
+  capacity:
+    storage: 2900Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-manual
+  mountOptions:
+    - nfsvers=3
+    - hard
+    - noatime
+  nfs:
+    server: 192.168.4.21        # Synology DS925+ (see NOTE above re: dual NIC / DHCP)
+    path: /volume4/frigate
