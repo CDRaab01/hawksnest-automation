@@ -167,10 +167,19 @@ data:
       # Deliberately its own entity rather than folded into the automation: it
       # is worth being able to graph the smoothed signal against the raw one
       # when the fan does something surprising.
+      #
+      # SOURCE CHANGED 2026-08-07, from the switch's own sensor to
+      # `sensor.nursery_room_temperature` (defined under `template:` below, where
+      # the measurement that justifies it is written down). The dither argument
+      # above still applies: that composite passes the switch's reading straight
+      # through whenever the switch is trustworthy, so the ADC quantisation is
+      # still in the signal. The smoothing now does a second job as well — it
+      # ramps the ~6F step that happens when the composite changes which
+      # thermometer it believes, instead of stepping the fan in one jump.
       - platform: filter
         name: Nursery temperature average
         unique_id: nursery_temperature_average
-        entity_id: sensor.nursery_on_off_switch_air_temperature
+        entity_id: sensor.nursery_room_temperature
         filters:
           - filter: time_simple_moving_average
             window_size: "00:15:00"
@@ -247,6 +256,68 @@ data:
             device_class: garage_door
             state: "{{ is_state('binary_sensor.garage_bay_side_tilt_raw', 'on') }}"
             availability: "{{ has_value('binary_sensor.garage_bay_side_tilt_raw') }}"
+
+      # ── Which nursery thermometer to believe ──────────────────────────────────────
+      # THE SWITCH'S SENSOR IS NOT A ROOM THERMOMETER, and the vendor never said it was.
+      # Inovelli parameter 32 is labelled "Internal Temperature" and described in the
+      # device config as "Temperature inside of the switch"; it is read-only and exists
+      # to feed parameter 33, the overheat cutout (load off at 90C/194F, back at
+      # 70C/158F). The VZW30-SN has no calibration or offset parameter, so the bias
+      # cannot be trimmed on the device — it has to be handled here.
+      #
+      # MEASURED 2026-08-07. With `light.nursery_on_off_switch` OFF the switch tracks the
+      # ZSE44 to 0.3-0.7F, which is the 0.45F agreement that justified moving the fan and
+      # the LED alert onto it on 2026-08-02. That measurement only ever sampled the off
+      # state. The switch turned on at 15:54:20 and climbed to a plateau 6-8F above the
+      # room — 79.9F against the ZSE44's 74.1F at 18:28 — with the load meter reading
+      # 0.0W throughout, so the heat is the relay coil and the LED bar, not the lamp.
+      # `sensor.nursery_temperature_average` followed it to 79.5F and the fan sat at 100%
+      # in a 74F room for over two hours.
+      #
+      # WHY DIVERGENCE RATHER THAN "IS THE SWITCH ON". The switch keeps reporting inflated
+      # for roughly 45 minutes after the relay opens. A light-state gate would hand back a
+      # still-hot reading the instant it switched off; divergence clears itself as the
+      # switch actually cools.
+      #
+      # 2.0F SITS IN AN EMPTY BAND: 0.3-0.7F apart with the switch off against 6-8F with
+      # it on, and nothing observed in between, so the threshold is nowhere near either
+      # population.
+      #
+      # THE `or` IS A SAFETY INTERLOCK, NOT BELT AND BRACES. `switch - room > 2` has one
+      # false positive — the room genuinely warming while the ZSE44 sleeps — and believing
+      # the stale reading there would SUPPRESS a real heat alert in a baby's room. The
+      # ZSE44 does sleep: over the four days to 2026-08-07 its median reporting gap was
+      # 13 min, but p95 was 131 min and the worst case 241 min. So the room reading is
+      # believed only when the divergence is explainable, either because the switch has
+      # been on recently (self-heat accounts for it) or because the room reading is fresh
+      # (staleness cannot). If neither holds the switch wins, which fails toward running
+      # the fan rather than toward missing heat.
+      - sensor:
+          - name: "Nursery room temperature"
+            unique_id: nursery_room_temperature
+            unit_of_measurement: "°F"
+            device_class: temperature
+            state_class: measurement
+            # Unavailable only if BOTH thermometers are gone — either one alone is enough
+            # to serve a number, and the automations' own guards read this entity.
+            availability: >-
+              {{ has_value('sensor.nursery_on_off_switch_air_temperature')
+                 or has_value('sensor.nursery_temperature_humidity_xs_sensor_air_temperature') }}
+            state: >-
+              {% set sw_e = 'sensor.nursery_on_off_switch_air_temperature' %}
+              {% set room_e = 'sensor.nursery_temperature_humidity_xs_sensor_air_temperature' %}
+              {% if not has_value(room_e) %}{{ states(sw_e) | float | round(2) }}
+              {% elif not has_value(sw_e) %}{{ states(room_e) | float | round(2) }}
+              {% else %}
+              {% set sw = states(sw_e) | float %}
+              {% set room = states(room_e) | float %}
+              {% set l = states.light.nursery_on_off_switch %}
+              {% set diverged = (sw - room) > 2.0 %}
+              {% set self_heat = l is not none and (l.state == 'on'
+                                 or (now() - l.last_changed).total_seconds() < 3600) %}
+              {% set fresh = (now() - states[room_e].last_reported).total_seconds() < 5400 %}
+              {{ (room if (diverged and (self_heat or fresh)) else sw) | round(2) }}
+              {% endif %}
 
     # Modular config splits so automations/scripts/scenes can grow independently
     # (WLED, Zigbee, Plex, presence/auto-lock all slot in here later).
@@ -848,14 +919,16 @@ data:
       alias: Nursery LED effect - alarm + too hot
       description: 'Sustained overlay on the Nursery LED bar. Priority: alarm triggered
         (red fast blink) > room at or over 78F (orange pulse) > nothing (clear). TEMPERATURE
-        SOURCE CHANGED 2026-08-02, from the ZSE44 to the switch''s OWN sensor. The original
-        note here claimed the in-wall sensor runs warm; measurement says otherwise - on
-        2026-08-01 the switch read 72.6F against the ZSE44''s 72.2F in the same room,
-        0.45F apart. What the ZSE44 does have is a battery, so it sleeps: on that same
-        day it had last reported five hours earlier while the mains-powered switch was
-        seconds old. For an alert whose whole job is to fire promptly when a baby''s room
-        gets hot, a sensor that reports every few minutes beats one that is accurate but
-        hours stale. Fails safe: if the sensor drops out, float(0) makes ''hot'' false
+        SOURCE CHANGED TWICE. 2026-08-02 moved it from the ZSE44 to the switch''s OWN sensor:
+        the ZSE44 is battery powered and sleeps - on 2026-08-01 it had last reported five
+        hours earlier while the switch was seconds old - and the two agreed to 0.45F, so the
+        prompt one won. 2026-08-07 found the hole in that measurement: 0.45F is only true
+        while the switch is OFF. Under load the switch self-heats to 6-8F above the room
+        (Inovelli parameter 32 is the chipset''s INTERNAL temperature, feeding the parameter
+        33 overheat cutout - not a room thermometer, and the VZW30-SN has no offset
+        parameter to trim it). It now reads `sensor.nursery_room_temperature`, which chooses
+        between the two thermometers; the measurement justifying that lives in
+        configuration.yaml. Fails safe: if that drops out, float(0) makes ''hot'' false
         rather than firing. Parameter 99 is written as FOUR partials because a whole-parameter
         write 500s on this firmware; effect 255 is ''Clear'' (releases the bar), not 0
         which is ''Off'' and would hold it dark. The override-beats-base behaviour this
@@ -863,7 +936,7 @@ data:
       triggers:
       - entity_id: alarm_control_panel.mfa_alarm
         platform: state
-      - entity_id: sensor.nursery_on_off_switch_air_temperature
+      - entity_id: sensor.nursery_room_temperature
         platform: state
       - event: start
         platform: homeassistant
@@ -873,6 +946,12 @@ data:
       # Same startup race as the Master Bedroom twin, and it failed at the same two moments
       # on 2026-08-03 22:16. See that automation for the reasoning; the guard is identical
       # except for which node's sensor stands in for "this device answers".
+      #
+      # DELIBERATELY STILL THE SWITCH'S OWN SENSOR, not the composite this automation now
+      # reads for temperature (2026-08-07). This guard is not asking "do we have a usable
+      # temperature", it is asking "does the node we are about to write LED parameters to
+      # answer". The composite can be perfectly available off the ZSE44 alone while the
+      # switch is off the mesh, which is exactly the case this has to keep catching.
       - condition: template
         value_template: '{{ has_value(''sensor.nursery_on_off_switch_air_temperature'')
           }}'
@@ -960,8 +1039,7 @@ data:
           - condition: template
             value_template: '{{ hot }}'
       variables:
-        hot: '{{ states(''sensor.nursery_on_off_switch_air_temperature'') | float(0) >=
-          78 }}'
+        hot: '{{ states(''sensor.nursery_room_temperature'') | float(0) >= 78 }}'
         alarmed: '{{ states(''alarm_control_panel.mfa_alarm'') == ''triggered'' }}'
       mode: restart
     - id: '1785527100005'
@@ -1509,14 +1587,18 @@ data:
     # though — re-adding the integration, or renaming the fan in the Dreo app, can change it. The
     # symptom would be HA logging "Referenced entities ... are missing" while the fan never moves.
     #
-    # SAME SENSOR AS THE NURSERY LED, deliberately: the mains-powered switch's own thermometer,
-    # not the ZSE44. That choice was made 2026-08-02 and the reasoning applies at least as much
-    # here — the ZSE44 is battery powered and sleeps, and on 2026-08-01 it had last reported five
-    # hours earlier while the switch's reading was seconds old. A fan driven by a five-hour-old
-    # temperature is worse than no fan.
+    # SAME SENSOR AS THE NURSERY LED, deliberately — and since 2026-08-07 that is neither
+    # thermometer on its own but `sensor.nursery_room_temperature`, the composite that decides
+    # which to believe. The 2026-08-02 version of this note said "the switch's own thermometer,
+    # not the ZSE44", because the ZSE44 sleeps and a fan driven by a five-hour-old temperature is
+    # worse than no fan. That still holds; what it missed is that the switch self-heats 6-8F above
+    # the room whenever its load is on, and this fan is the thing that suffered for it — MEASURED
+    # 2026-08-07, the fan ran at 100% for over two hours in a 74F room because the switch was
+    # reporting 79.9F. The composite keeps the promptness and drops the bias; its reasoning and
+    # the measurements behind the thresholds are in configuration.yaml.
     #
     # ...but NOT the raw sensor: it reads `sensor.nursery_temperature_average`, the 15-minute
-    # mean of that same thermometer (defined in configuration.yaml, where the measurement that
+    # mean of that composite (defined in configuration.yaml, where the measurement that
     # justifies it is written down). In one sentence: the raw sensor dithers by about a degree
     # between consecutive reports and a speed step here is only about 1.1F wide, so the raw
     # signal would change fan speed every few minutes in a room where nothing is happening.
@@ -1581,9 +1663,11 @@ data:
           for: "00:02:00"
           id: cool
         # The thermometer itself dropping off the mesh. The average would happily keep serving
-        # its last value, so this is the only thing that notices.
+        # its last value, so this is the only thing that notices. Since 2026-08-07 that means
+        # BOTH thermometers gone, which is what the composite's availability encodes — one
+        # surviving sensor is still a usable temperature and the fan should keep running on it.
         - trigger: state
-          entity_id: sensor.nursery_on_off_switch_air_temperature
+          entity_id: sensor.nursery_room_temperature
           to: ["unavailable", "unknown"]
           for: "00:10:00"
           id: cool
@@ -1608,7 +1692,7 @@ data:
         # Bound HERE rather than in `variables:`, which would evaluate them before that wait.
         - variables:
             ready: "{{ has_value('sensor.nursery_temperature_average') }}"
-            alive: "{{ has_value('sensor.nursery_on_off_switch_air_temperature') }}"
+            alive: "{{ has_value('sensor.nursery_room_temperature') }}"
             temp: "{{ states('sensor.nursery_temperature_average') | float(0) }}"
             steps: "{{ (100 / (state_attr('fan.tower_fan', 'percentage_step') | float(100 / 6))) | round | int }}"
             target_pct: "{{ [[25 + (temp - 73) * 15, 25] | max, 100] | min | round | int }}"
