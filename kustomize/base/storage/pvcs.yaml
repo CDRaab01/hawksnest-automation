@@ -144,14 +144,17 @@ spec:
     requests:
       storage: 2Gi
 ---
-# Frigate's recordings and snapshots. local-path for now — 24/7 video is the most
-# write-heavy thing in this cluster and the DS214 is NFSv3-only and explicitly
-# "treat as replaceable". Migrates to the DS925+ once those drives are burned in.
+# SUPERSEDED 2026-08-04 by frigate-media-nas below. Frigate no longer mounts this.
 #
-# THE SIZE HERE IS NOT A LIMIT. k3s local-path is hostPath-backed with no quota
-# enforcement, so this will happily grow past 200Gi and fill the Dragonfly virtual
-# disk — which takes k3s, Home Assistant and the door locks down with it. The
-# actual guardrail is `record.continuous.days` in the frigate-seed ConfigMap.
+# Kept defined, and deliberately NOT deleted, as the rollback for the NAS migration:
+# it still holds the 41 GB of recordings and 30 days of alert clips that were copied
+# to the DS925+. local-path's reclaim policy is **Delete**, so deleting this PVC
+# destroys that data — do not remove it until the NAS side has proven itself over a
+# few days AND Storage Pool 3 has been repaired (it is running degraded on a single
+# drive until the DOA 10 TB replacement arrives).
+#
+# `deploy.sh` runs `kubectl apply -k` with no --prune, so removing this block would
+# orphan rather than delete the PVC — but leaving it here keeps the rollback explicit.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -163,3 +166,28 @@ spec:
   resources:
     requests:
       storage: 200Gi
+---
+# Frigate's recordings and snapshots — on the DS925+ since 2026-08-04.
+#
+# This replaced a node-local PVC that had no quota enforcement and would eventually
+# have filled the Dragonfly virtual disk, taking k3s, Home Assistant and the door
+# locks with it. That failure mode is now gone: the volume is a dedicated 3 TB ext4
+# volume on the NAS, so Frigate can only ever fill its own storage.
+#
+# `record.continuous.days` in the frigate-seed ConfigMap is still the retention
+# control, but it is no longer load-bearing for cluster survival — which is what
+# made it safe to raise it off the deliberately-low value of 3.
+#
+# Binds by volumeName to the static PV; nfs-manual disables dynamic provisioning.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: frigate-media-nas
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs-manual
+  volumeName: frigate-media-nas
+  resources:
+    requests:
+      storage: 2900Gi

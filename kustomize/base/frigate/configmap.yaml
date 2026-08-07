@@ -168,11 +168,21 @@ data:
       # carry its own SHORTER window set under that camera — do not raise this one and
       # assume it covers both.
       #
-      # THIS IS THE REAL DISK GUARDRAIL, not the PVC size: frigate-media is on k3s
-      # local-path, which is hostPath-backed with NO quota enforcement. Filling the
-      # Dragonfly virtual disk takes down k3s, Home Assistant and the door locks
-      # with it. Raise these numbers deliberately, and only after the DS925+
-      # migration gives the media volume somewhere of its own to grow.
+      # UPDATED 2026-08-04 — the DS925+ migration happened. Recordings now live on
+      # `frigate-media-nas` (NFS -> DS925+ Volume 4, a dedicated 3 TB ext4 volume),
+      # NOT on the unquotaed node-local hostPath. The old danger — Frigate filling the
+      # Dragonfly virtual disk and taking k3s, Home Assistant and the door locks with
+      # it — is gone: Frigate can now only ever fill its own volume.
+      #
+      # So these numbers are no longer load-bearing for cluster survival, and raising
+      # them is cheap: measured consumption is ~13 GB/day across all seven cameras
+      # (41 GB held 3 days continuous + 30 days of alerts), against 2.9 TB free. Even
+      # 30 days continuous is only ~400 GB.
+      #
+      # STILL HELD AT 3 for one reason only: Storage Pool 3 is running DEGRADED on a
+      # single drive after one of the two new 10 TB drives failed DOA on 2026-08-04.
+      # Raise this once the replacement lands and the pool reports Healthy — not before,
+      # because until then every extra day of footage sits on an unprotected disk.
       continuous:
         days: 3
       alerts:

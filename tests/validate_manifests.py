@@ -75,7 +75,9 @@ OVERLAYS = {
 }
 
 # The NFS-backed PVCs in prod (mariadb-data is always local-path, so excluded).
-NFS_PVCS = ("ha-config", "zwavejs-config", "mosquitto-data", "ring-mqtt-data")
+# frigate-media-nas joined 2026-08-04 when recordings moved to the DS925+.
+NFS_PVCS = ("ha-config", "zwavejs-config", "mosquitto-data", "ring-mqtt-data",
+            "frigate-media-nas")
 
 
 def by_kind(docs: list[dict], kind: str) -> list[dict]:
@@ -180,17 +182,22 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
     #    losing ring-mqtt-data = re-authenticate the Ring account with 2FA).
     for required in ("ha-config", "zwavejs-config", "mosquitto-data",
                      "mariadb-data", "ring-mqtt-data",
-                     "frigate-config", "frigate-media"):
+                     "frigate-config", "frigate-media", "frigate-media-nas"):
         check(required in pvcs, f"required PVC '{required}' is missing")
     # Datadirs that must stay node-local, never NFS — both envs. mariadb because a
     # database server's datadir over NFS reintroduces the file-locking risk we moved
     # off SQLite to avoid; frigate-config for the same reason (it IS a SQLite index,
-    # written on every detection); frigate-media because 24/7 video is the most
-    # write-heavy thing in the cluster and the DS214 is an aging NFSv3-only box.
+    # written on every detection).
+    #
+    # frigate-media is the RETIRED node-local PVC, kept only as the rollback for the
+    # 2026-08-04 DS925+ migration (it still holds the pre-migration recordings, and
+    # local-path's reclaim policy is Delete). It must stay local-path precisely because
+    # it is a local snapshot — the live volume is frigate-media-nas, which is NFS by
+    # design. Do not "fix" this by pointing frigate-media at the NAS.
     for local_only, why in (
         ("mariadb-data", "a database datadir over NFS reintroduces file-locking risk"),
         ("frigate-config", "Frigate's SQLite event index must not live on NFS"),
-        ("frigate-media", "24/7 recordings must not be written over NFS to the DS214"),
+        ("frigate-media", "it is the node-local rollback copy of the pre-NAS recordings"),
     ):
         if local_only in pvcs:
             check(
@@ -214,7 +221,9 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
             opts = pv["spec"].get("mountOptions", [])
             nfs = pv["spec"].get("nfs", {})
             check(any(o.startswith("nfsvers=3") for o in opts),
-                  f"PV '{pv_name}' must mount NFS v3 (the DS214 is v3-only)")
+                  f"PV '{pv_name}' must mount NFS v3 (the DS925+ supports 4.1, but "
+                  "every PV here is v3 against it and Synology's NFSv4 pseudo-root "
+                  "changes export-path semantics — keep the pattern that works)")
             server, path = str(nfs.get("server", "")), str(nfs.get("path", ""))
             check("REPLACE" not in server and bool(server),
                   f"PV '{pv_name}' nfs.server is unset/placeholder: '{server}'")
@@ -284,12 +293,18 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
             #     camera at once.
             check("memory" in main.get("resources", {}).get("limits", {}),
                   "frigate must declare a memory limit so it cannot evict ring-mqtt")
-        # (d) Frigate's SQLite index and 24/7 video must never reach the Synology.
+        # (d) Frigate mounts its SQLite index (node-local) and its media volume. Since
+        #     2026-08-04 the media volume is frigate-media-nas on the DS925+; the old
+        #     node-local frigate-media PVC still exists as the rollback but must NOT be
+        #     the one mounted, or recordings silently go back to filling the WSL vdisk.
         claims = {v["persistentVolumeClaim"]["claimName"]
                   for v in pod_spec(fr).get("volumes", [])
                   if "persistentVolumeClaim" in v}
-        for needed in ("frigate-config", "frigate-media"):
+        for needed in ("frigate-config", "frigate-media-nas"):
             check(needed in claims, f"frigate must mount the '{needed}' PVC")
+        check("frigate-media" not in claims,
+              "frigate must NOT mount the retired node-local 'frigate-media' PVC "
+              "(it is the rollback copy; the live volume is frigate-media-nas)")
 
     # 6. zwave-js-ui: always privileged; prod runs against a real device, staging parks.
     zwave = next((d for d in deployments if name(d) == "zwave-js-ui"), None)
