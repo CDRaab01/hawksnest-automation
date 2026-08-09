@@ -1368,16 +1368,21 @@ data:
           parameter: 98
           value: '{{ bri_off | int }}'
       variables:
+        # night from THE TRIGGER when a sun event fired, state only as the fallback —
+        # same race as the ZEN32 twin (fixed 2026-08-08): HA fires the sunset trigger
+        # before sun.sun flips below_horizon, so reading the state at the edges wrote
+        # DAY brightness (33/10) at sunset. Alarm-state triggers and restarts read the
+        # settled state, which is correct in those contexts.
+        night: '{{ trigger.event == ''sunset'' if trigger.platform == ''sun'' else
+          is_state(''sun.sun'',''below_horizon'') }}'
         colour: '{% set s = states(''alarm_control_panel.mfa_alarm'') %}
 
           {{ {''disarmed'':170,''armed_home'':0,''armed_away'':190,''triggered'':0,''pending'':0,''arming'':7}.get(s,
           170) }}'
-        bri_on: '{% set night = is_state(''sun.sun'',''below_horizon'') %}{% set armed
-          = states(''alarm_control_panel.mfa_alarm'') != ''disarmed'' %}{{ (8 if armed
-          else 0) if night else 33 }}'
-        bri_off: '{% set night = is_state(''sun.sun'',''below_horizon'') %}{% set armed
-          = states(''alarm_control_panel.mfa_alarm'') != ''disarmed'' %}{{ (1 if armed
-          else 0) if night else 10 }}'
+        bri_on: '{% set armed = states(''alarm_control_panel.mfa_alarm'') != ''disarmed''
+          %}{{ (8 if armed else 0) if night else 33 }}'
+        bri_off: '{% set armed = states(''alarm_control_panel.mfa_alarm'') != ''disarmed''
+          %}{{ (1 if armed else 0) if night else 10 }}'
       mode: queued
       max: 5
     - id: '1785540000006'
