@@ -1239,10 +1239,14 @@ data:
         at Low; both still read as too bright on the wall, and 30% is this device''s floor,
         so the answer was fewer lit LEDs rather than a different colour. KEY 4 JOINED THE
         LOOP 2026-08-04, when it stopped being an unassigned key with a permanently dark
-        LED and became Campfire. Night comes from sun.sun rather than from
-        which trigger fired, so a Home Assistant restart at 3am re-applies the correct
-        state instead of leaving the pad lit - this host has an intermittent RAM fault
-        and does restart unexpectedly. Consequence accepted by the owner: at night the
+        LED and became Campfire. NIGHT COMES FROM THE TRIGGER when a sun event fired,
+        and only falls back to sun.sun on restart. The original version read sun.sun
+        for every trigger, and MEASURED 2026-08-08 (trace run 31b827b0) the sunset
+        event fires before sun.sun flips below_horizon - so the pad was inverted at
+        both edges: day mode written at sunset (five bright LEDs at the bed all
+        night), night mode at sunrise. The restart fallback keeps the property the
+        state-read was chosen for - a 3am restart re-applies the correct state on
+        this RAM-faulted host. Consequence accepted by the owner: at night the
         pad is invisible and the big key has to be found by memory.'
       triggers:
       - platform: sun
@@ -1269,7 +1273,8 @@ data:
           - delay:
               milliseconds: 400
       variables:
-        night: '{{ is_state(''sun.sun'',''below_horizon'') }}'
+        night: '{{ trigger.event == ''sunset'' if trigger.platform == ''sun'' else
+          is_state(''sun.sun'',''below_horizon'') }}'
       mode: single
       max_exceeded: silent
     - id: '1785540000007'
