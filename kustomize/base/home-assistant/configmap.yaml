@@ -68,6 +68,25 @@ data:
     # ntfy Service (http://ntfy) — phones subscribe over Tailscale Serve. Generic,
     # entity-agnostic: the automations below pass topic/title/message/tags/etc.
     rest_command:
+      # Cooper's WLED strip doubles as the ambilight for the PS5 (HyperHDR on the Wyse
+      # 5070 at 192.168.4.65 streams to it). WLED's realtime input OVERRIDES everything
+      # else — presets, effects, even on/off — so while the ambilight is running, every
+      # other control in this file is silently ineffective on that strip.
+      # `lor` is WLED's live-override: 0 = accept the stream, 2 = ignore it and run our
+      # own effects. It is a runtime state field and CANNOT be stored in a WLED preset,
+      # so it has to be set explicitly here.
+      # Talking straight to WLED rather than via the wled integration because the
+      # integration exposes no control for this field.
+      ambilight_on:
+        url: "http://192.168.4.45/json/state"
+        method: POST
+        content_type: "application/json"
+        payload: '{"lor":0,"on":true}'
+      ambilight_off:
+        url: "http://192.168.4.45/json/state"
+        method: POST
+        content_type: "application/json"
+        payload: '{"lor":2}'
       ntfy_publish:
         url: "http://ntfy/{{ topic }}"
         method: POST
@@ -792,6 +811,9 @@ data:
       description: Small buttons 1-4 pick a WLED preset. Single tap = Starry Night / Campfire
         / Ocean / Nebula (matching each button's LED colour); double tap = New Sleep /
         Rocket / Rainbow 2 / Music. Button-to-scene mapping measured 2026-08-01, not assumed.
+        Clears the ambilight override FIRST (2026-08-09) - the strip is now also the PS5's
+        ambilight, and WLED realtime input outranks presets, so without this a button press
+        selected the preset silently and nothing on the wall changed.
       triggers:
       - entity_id:
         - event.cooper_s_bedroom_cooper_s_scene_controller_scene_001
@@ -804,6 +826,8 @@ data:
         value_template: '{{ trigger.to_state.state not in [''unknown'',''unavailable'',''none'']
           and chosen not in [none,''None'',''''] }}'
       actions:
+      # Hand the strip back from the TV before selecting, or the preset is invisible.
+      - action: rest_command.ambilight_off
       - target:
           entity_id: select.cooper_s_new_bedroom_preset
         data:
@@ -830,9 +854,15 @@ data:
         throws the relay in hardware and keeps working when Home Assistant or Z-Wave is
         down. That matters because the relay drives real loads in a child's bedroom and
         this host has an intermittent RAM fault. Double tap toggles the WLED strip and
-        press-and-hold sets Starry Night; both of those need HA, which costs nothing because
-        the strip is Wi-Fi and needed it anyway. Scene events still fire on a single press
-        - deliberately ignored, or the tap would toggle the relay twice over.
+        press-and-hold starts the PS5 ambilight; both of those need HA, which costs nothing
+        because the strip is Wi-Fi and needed it anyway. Scene events still fire on a single
+        press - deliberately ignored, or the tap would toggle the relay twice over.
+        CHANGED 2026-08-09 - press-and-hold used to select Starry Night. That preset is still
+        one tap away on small button 1, so nothing was lost, and hold was the only gesture
+        free on this key - every single/double tap on all five buttons is already spoken for.
+        Double tap now clears the ambilight override before toggling, because WLED realtime
+        outranks on/off - without it, "off" set the stored state but the LEDs stayed lit from
+        the stream.
       triggers:
       - platform: state
         entity_id:
@@ -848,6 +878,9 @@ data:
             value_template: '{{ trigger.to_state.attributes.event_type == ''KeyPressed2x''
               }}'
           sequence:
+          # Order matters: drop the override first, or the toggle is overridden by the
+          # incoming stream and the strip appears not to respond at all.
+          - action: rest_command.ambilight_off
           - action: light.toggle
             target:
               entity_id: light.cooper_s_new_bedroom
@@ -856,11 +889,7 @@ data:
             value_template: '{{ trigger.to_state.attributes.event_type == ''KeyHeldDown''
               }}'
           sequence:
-          - action: select.select_option
-            target:
-              entity_id: select.cooper_s_new_bedroom_preset
-            data:
-              option: Starry Night
+          - action: rest_command.ambilight_on
       mode: queued
       max: 5
     - id: '1785527100003'
