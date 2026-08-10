@@ -814,6 +814,11 @@ data:
         Clears the ambilight override FIRST (2026-08-09) - the strip is now also the PS5's
         ambilight, and WLED realtime input outranks presets, so without this a button press
         selected the preset silently and nothing on the wall changed.
+        REFIRE GUARD 2026-08-09 - not_from ignores transitions out of unavailable/unknown.
+        A Z-Wave JS reconnect restores every event entity to its last timestamp, and that
+        restore is a state change like any other, so it re-fires the automation as if the
+        key had been pressed. The to_state guard below only catches the DROP, not the
+        recovery - which is why it never helped.
       triggers:
       - entity_id:
         - event.cooper_s_bedroom_cooper_s_scene_controller_scene_001
@@ -821,6 +826,9 @@ data:
         - event.cooper_s_bedroom_cooper_s_scene_controller_scene_003
         - event.cooper_s_bedroom_cooper_s_scene_controller_scene_004
         platform: state
+        not_from:
+        - unavailable
+        - unknown
       conditions:
       - condition: template
         value_template: '{{ trigger.to_state.state not in [''unknown'',''unavailable'',''none'']
@@ -863,10 +871,18 @@ data:
         Double tap now clears the ambilight override before toggling, because WLED realtime
         outranks on/off - without it, "off" set the stored state but the LEDs stayed lit from
         the stream.
+        REFIRE GUARD 2026-08-09 - not_from ignores transitions out of unavailable/unknown.
+        Observed for real at 22:19 that day - a dropped Z-Wave connection re-fired all four
+        ZEN32 automations across two rooms within 4ms and switched the master bedroom relay.
+        The to_state guard below only catches the DROP; the RECOVERY restores the entity to
+        its last timestamp, which passes that check and looks exactly like a key press.
       triggers:
       - platform: state
         entity_id:
         - event.cooper_s_bedroom_cooper_s_scene_controller_scene_005
+        not_from:
+        - unavailable
+        - unknown
       conditions:
       - condition: template
         value_template: '{{ trigger.to_state.state not in [''unknown'',''unavailable'',''none'']
@@ -1137,7 +1153,11 @@ data:
         cannot. Key-to-scene mapping (scene_001..004 = small keys) confirmed live on this
         unit 2026-08-01. Every key powers the strip first via script.master_bedroom_strip_power_up,
         because the big key''s relay is the strip''s mains supply - without that, pressing
-        a scene key on a dark strip would do nothing at all and look broken.'
+        a scene key on a dark strip would do nothing at all and look broken. REFIRE GUARD
+        2026-08-09 - not_from ignores transitions out of unavailable/unknown. A Z-Wave JS
+        reconnect restores every event entity to its last timestamp, and that restore is a
+        state change like any other, so it re-fires this as if a key had been pressed. The
+        to_state guard below only catches the DROP, not the recovery.'
       triggers:
       - platform: state
         entity_id:
@@ -1145,6 +1165,9 @@ data:
         - event.master_bedroom_scene_controller_scene_002
         - event.master_bedroom_scene_controller_scene_003
         - event.master_bedroom_scene_controller_scene_004
+        not_from:
+        - unavailable
+        - unknown
       conditions:
       - condition: template
         value_template: '{{ trigger.to_state.state not in [''unknown'',''unavailable'',''none'']
@@ -1188,11 +1211,20 @@ data:
         first attempt used 12%, which is four times brighter than either and so brightened
         the room instead of dimming it. Press-and-hold sets solid red at 20% as a night-vision-friendly
         mode. Both power the strip first, since neither can reach a controller with no
-        mains.'
+        mains. REFIRE GUARD 2026-08-09 - not_from ignores transitions out of
+        unavailable/unknown. THIS automation is why the guard matters most: its actions
+        power the strip''s mains, so a spurious fire physically switches the relay. That
+        happened at 22:19 on 2026-08-09 - a dropped Z-Wave connection re-fired all four
+        ZEN32 automations across two rooms within 4ms and turned this relay on with nobody
+        in the room. The to_state guard below only catches the DROP; the RECOVERY restores
+        the entity to its last timestamp and passes it.'
       triggers:
       - platform: state
         entity_id:
         - event.master_bedroom_scene_controller_scene_005
+        not_from:
+        - unavailable
+        - unknown
       conditions:
       - condition: template
         value_template: '{{ trigger.to_state.state not in [''unknown'',''unavailable'',''none'']
