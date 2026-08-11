@@ -68,10 +68,15 @@ data:
     # ntfy Service (http://ntfy) — phones subscribe over Tailscale Serve. Generic,
     # entity-agnostic: the automations below pass topic/title/message/tags/etc.
     rest_command:
-      # Cooper's WLED strip doubles as the ambilight for the PS5 (HyperHDR on the Wyse
-      # 5070 at 192.168.4.65 streams to it). WLED's realtime input OVERRIDES everything
+      # Cooper's WLED strip (192.168.4.45) doubles as the ambilight for the PS5: HyperHDR on
+      # the Wyse 5070 streams to it. WLED's realtime input OVERRIDES everything
       # else — presets, effects, even on/off — so while the ambilight is running, every
       # other control in this file is silently ineffective on that strip.
+      # The Wyse's own address is deliberately NOT recorded here — nothing in this file talks
+      # to it, and the address this comment used to claim (192.168.4.65) was wrong: that is
+      # the MASTER BEDROOM strip, mac 0070077d2f2c, 748 LEDs, WLED 0.15.1, verified by probing
+      # /json/info from inside the pod on 2026-08-11. An unused wrong IP in a comment is worse
+      # than no IP, because the next person to add a rest_command will believe it.
       # `lor` is WLED's live-override: 0 = accept the stream, 2 = ignore it and run our
       # own effects. It is a runtime state field and CANNOT be stored in a WLED preset,
       # so it has to be set explicitly here.
@@ -924,6 +929,15 @@ data:
       - event: start
         platform: homeassistant
       actions:
+      # Startup race guard, added 2026-08-11, twin of the Master Bedroom's '1785540000005'.
+      # See '1785540000007' for why this asks the config ENTRY state rather than this node's
+      # own entities, which all answer before zwave_js finishes loading.
+      - wait_template: '{{ now().timestamp() > 0 and
+          has_value(''sensor.nursery_on_off_switch_air_temperature'') and
+          config_entry_attr(config_entry_id(''sensor.nursery_on_off_switch_air_temperature'')
+          or ''none'', ''state'') == ''loaded'' }}'
+        timeout: '00:02:00'
+        continue_on_timeout: false
       - target:
           device_id: 83fde5fed357870364f7dc7b9c127ac5
         data:
@@ -1001,6 +1015,16 @@ data:
         value_template: '{{ has_value(''sensor.nursery_on_off_switch_air_temperature'')
           }}'
       actions:
+      # The condition above stays and keeps its meaning ("does this node answer at all").
+      # It just cannot close the startup window, because this node's entities answer before
+      # the zwave_js config entry reaches LOADED. Twin of the Master Bedroom's
+      # '1785540000006'; full reasoning in '1785540000007'.
+      - wait_template: '{{ now().timestamp() > 0 and
+          has_value(''sensor.nursery_on_off_switch_air_temperature'') and
+          config_entry_attr(config_entry_id(''sensor.nursery_on_off_switch_air_temperature'')
+          or ''none'', ''state'') == ''loaded'' }}'
+        timeout: '00:02:00'
+        continue_on_timeout: false
       - default:
         - target:
             device_id: 83fde5fed357870364f7dc7b9c127ac5
@@ -1317,6 +1341,17 @@ data:
       - platform: homeassistant
         event: start
       actions:
+      # Startup race guard, added 2026-08-11. This automation had none at all, so its
+      # start-triggered run failed outright with "No zwave_js nodes found for given targets"
+      # on 2026-08-10 13:38 - meaning the pad silently kept whatever day/night mode it woke up
+      # with. See '1785540000007' for why the guard is the config ENTRY state and not this
+      # node's own entities, and why now() has to lead the template.
+      - wait_template: '{{ now().timestamp() > 0 and
+          has_value(''switch.master_bedroom_scene_controller'') and
+          config_entry_attr(config_entry_id(''switch.master_bedroom_scene_controller'')
+          or ''none'', ''state'') == ''loaded'' }}'
+        timeout: '00:02:00'
+        continue_on_timeout: false
       - repeat:
           for_each:
           - 1
@@ -1357,7 +1392,25 @@ data:
       - platform: homeassistant
         event: start
       actions:
-      - wait_template: '{{ has_value(''switch.master_bedroom_scene_controller'') }}'
+      # THE GUARD THIS AUTOMATION ALREADY HAD WAS THE WRONG QUESTION (fixed 2026-08-11).
+      # has_value() on the switch passed and the very next step still failed with "No zwave_js
+      # nodes found for given targets" on 2026-08-10 13:38. The live log records the real
+      # reason one line up: "Device a62df2c050dc5f0aca52cb9e302ef98e config entry is not
+      # loaded". zwave_js creates its entities INSIDE async_setup_entry, so every entity of
+      # this node - including sensor.*_node_status reading 'alive' - exists and answers before
+      # the config entry reaches LOADED, which is the precise state a device_id-targeted
+      # service call requires. Any guard built on this node's entities therefore cannot see
+      # the window it is meant to close; the entry state is the only signal that can.
+      # Term order is load-bearing. now() first: it is always true, so it is always evaluated,
+      # and it marks the template as time-dependent, which is what re-renders it every 60s -
+      # config_entry_attr registers no listener of its own, so without it this wait can sit
+      # forever. has_value second for the fast path. The `or 'none'` is a null guard;
+      # config_entry_attr raises if handed the None that config_entry_id returns for an entity
+      # that has left the registry.
+      - wait_template: '{{ now().timestamp() > 0 and
+          has_value(''switch.master_bedroom_scene_controller'') and
+          config_entry_attr(config_entry_id(''switch.master_bedroom_scene_controller'')
+          or ''none'', ''state'') == ''loaded'' }}'
         timeout: '00:05:00'
         continue_on_timeout: false
       - repeat:
@@ -1404,6 +1457,15 @@ data:
       - platform: homeassistant
         event: start
       actions:
+      # Startup race guard, added 2026-08-11 - this automation had none, and its start-triggered
+      # run failed with "No zwave_js nodes found for given targets" on 2026-08-10 13:38.
+      # See '1785540000007' for why this asks the config ENTRY, not the node's own entities.
+      - wait_template: '{{ now().timestamp() > 0 and
+          has_value(''sensor.master_bedroom_on_off_switch_air_temperature'') and
+          config_entry_attr(config_entry_id(''sensor.master_bedroom_on_off_switch_air_temperature'')
+          or ''none'', ''state'') == ''loaded'' }}'
+        timeout: '00:02:00'
+        continue_on_timeout: false
       - action: zwave_js.set_config_parameter
         target:
           device_id: 4921442741687644efb1bd60b30c377d
@@ -1484,6 +1546,17 @@ data:
         value_template: '{{ has_value(''sensor.master_bedroom_on_off_switch_air_temperature'')
           }}'
       actions:
+      # The condition above stays: it fails this run fast when the node is off the mesh, which
+      # is a different question from the one below. It just could not close the startup window
+      # it was written for - this node's entities all answer before the zwave_js config entry
+      # reaches LOADED, so the has_value passed and the write still failed on 2026-08-10 13:38.
+      # Full reasoning in '1785540000007'.
+      - wait_template: '{{ now().timestamp() > 0 and
+          has_value(''sensor.master_bedroom_on_off_switch_air_temperature'') and
+          config_entry_attr(config_entry_id(''sensor.master_bedroom_on_off_switch_air_temperature'')
+          or ''none'', ''state'') == ''loaded'' }}'
+        timeout: '00:02:00'
+        continue_on_timeout: false
       - choose:
         - conditions:
           - condition: template
@@ -1572,6 +1645,74 @@ data:
           >= 78 }}'
       mode: queued
       max: 5
+    - id: '1785540000008'
+      alias: Master Bedroom strip - WLED config entry watchdog
+      description: 'Reloads the WLED config entry when the strip has mains power but Home
+        Assistant still has it unavailable. MEASURED 2026-08-10/11: Home Assistant restarted
+        at 13:38 while the ZEN32''s relay - which IS this strip''s mains supply - was off, so
+        the strip was unpowered, unreachable, and entry 01KY6ARTV8HQ5A8KRVNVEX2GXG failed
+        setup into setup_retry. The relay came back on at 13:09 the next day and the entry
+        did not recover for another 23 minutes, with http://192.168.4.65/json/info answering
+        in 0.12s from inside the pod the whole time. Nothing was broken; SETUP_RETRY_MAX_WAIT
+        just caps Home Assistant''s own backoff at 600s, so the strip is dark to HA for up to
+        a retry interval after every power-up. That window is not an edge case here: because
+        the pad switches the strip''s mains, "strip unreachable" is a NORMAL state, and any
+        restart during one parks the entry. While it is parked every scene key logs
+        "Referenced entities select.master_bedroom_preset are missing" and does nothing, and
+        the strip sits on its own boot preset 5 (Amber Night) - which is what "stuck on yellow"
+        looked like from the bedroom. KEYED ON THE LIGHT BEING UNAVAILABLE, NOT ON THE ENTRY
+        STATE, deliberately: the same strip also produces "No PONG received after 15.0 seconds"
+        (logged 2026-08-11 11:51), which leaves the entry loaded and every entity unavailable.
+        One condition covers both shapes. The relay condition is what stops this from reloading
+        a strip that is simply switched off, which is not a fault. THROTTLE 570s, just under
+        HA''s own 600s, so a genuinely dead strip costs no more traffic than the native retry
+        this stands in for. Recovery is handed straight to 1785540000003, which already watches
+        light.master_bedroom leaving unavailable and sets the daytime Startup preset - doing it
+        here as well would race it.'
+      triggers:
+      # Fast path - someone just pressed the big key. ~4s ESP boot plus Wi-Fi association, so
+      # 20s is comfortably past "the strip would have answered by now".
+      - platform: state
+        entity_id: switch.master_bedroom_scene_controller
+        to: 'on'
+        for: '00:00:20'
+      # The strip dropped out while it still had power.
+      - platform: state
+        entity_id: light.master_bedroom
+        to: unavailable
+        for: '00:05:00'
+      # Safety net, and the only trigger that catches the case that actually happened. A
+      # restart with the relay off writes light.master_bedroom's unavailable placeholder
+      # during bootstrap, BEFORE automations attach their triggers, so the state trigger
+      # above never fires for it. It also covers the loaded-but-websocket-dead shape, which
+      # produces no state transition to trigger on at all.
+      - platform: time_pattern
+        minutes: /10
+      conditions:
+      - condition: state
+        entity_id: switch.master_bedroom_scene_controller
+        state: 'on'
+      - condition: template
+        value_template: '{{ states(''light.master_bedroom'') in [''unavailable'',''unknown'']
+          }}'
+      # last_triggered is the previous run that actually executed - conditions are evaluated
+      # before the action script runs, so a condition-blocked trigger never bumps it.
+      - condition: template
+        value_template: '{{ this.attributes.last_triggered is none or (now() -
+          this.attributes.last_triggered).total_seconds() > 570 }}'
+      actions:
+      # Targeting the entity rather than a literal entry_id: the service resolves targets
+      # through the entity registry, which still knows this entity while it is an unavailable
+      # placeholder, and this survives the integration being removed and re-added.
+      - action: homeassistant.reload_config_entry
+        target:
+          entity_id: light.master_bedroom
+      - wait_template: '{{ states(''light.master_bedroom'') not in [''unavailable'',''unknown'']
+          }}'
+        timeout: '00:00:30'
+        continue_on_timeout: true
+      mode: single
+      max_exceeded: silent
 
     # ── Master Bedroom LED effect - interior garage door opened ──────────────
     # The twin of the Nursery's '1785527100005', added 2026-08-06. The two rooms are deliberate
@@ -2275,12 +2416,25 @@ data:
   scripts.yaml: |
     master_bedroom_strip_power_up:
       alias: 'Master Bedroom strip: ensure powered'
-      description: The ZEN32's relay IS the WLED strip's mains supply, so anything that
+      description: 'The ZEN32''s relay IS the WLED strip''s mains supply, so anything that
         talks to the strip over Wi-Fi has to make sure it is actually powered first -
         otherwise the command goes to a controller that is not switched on and vanishes
         silently. Turns the relay on only if it is off, then waits for the ESP to finish
         booting (about 4 seconds, measured) rather than guessing with a fixed delay. Shared
-        by every key that sets a scene, so this wait exists once.
+        by every key that sets a scene, so this wait exists once. SECOND STEP ADDED
+        2026-08-11: powered is necessary and not sufficient. Mains is only half of what
+        "reachable" means - the other half is Home Assistant still having a live WLED config
+        entry, and a restart on a dark strip kills that. Then light.master_bedroom stays
+        unavailable no matter how long anyone waits, and the old wait could never succeed.
+        Worse, the case that actually failed was the relay ALREADY being on, where the if
+        below short-circuits and no wait ran at all: MEASURED 2026-08-11, four scene keys
+        pressed at 13:08 logged nothing but "Referenced entities select.master_bedroom_preset
+        are missing" while the strip sat on its own boot preset for the next 23 minutes. So
+        the entry is healed here too, and a single key press is now self-healing instead of a
+        silent no-op. The first wait''s continue_on_timeout flipped to true for the same
+        reason - stopping there is exactly what prevented the heal from ever being reached.
+        1785540000008 does the same reload unattended on a 10-minute heartbeat; this exists
+        because someone standing at the wall should not have to wait for it.'
       mode: single
       sequence:
       - if:
@@ -2295,7 +2449,22 @@ data:
             }}'
           timeout:
             seconds: 25
-          continue_on_timeout: false
+          continue_on_timeout: true
+        - delay:
+            seconds: 1
+      - if:
+        - condition: template
+          value_template: '{{ states(''light.master_bedroom'') in [''unavailable'',''unknown'']
+            }}'
+        then:
+        - action: homeassistant.reload_config_entry
+          target:
+            entity_id: light.master_bedroom
+        - wait_template: '{{ states(''light.master_bedroom'') not in [''unavailable'',''unknown'']
+            }}'
+          timeout:
+            seconds: 15
+          continue_on_timeout: true
         - delay:
             seconds: 1
 
