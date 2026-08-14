@@ -167,7 +167,10 @@ data:
         scan_interval: 300
 
       # The nursery temperature with the dither taken out. This is what drives
-      # the nursery fan's speed (automations.yaml, hawksnest_nursery_fan).
+      # the nursery fan's speed (automations.yaml, hawksnest_nursery_fan) and,
+      # since 2026-08-13, the LED bar's 78F "too hot" alert ('1785527100004') as
+      # well — the two are deliberately read off ONE entity so they cannot
+      # disagree about how warm the room is.
       #
       # THE RAW SENSOR IS NOISY, MEASURED NOT ASSUMED. 113 reports over the nine
       # hours to 2026-08-04 17:00 EDT, and consecutive ones alternate about a
@@ -176,12 +179,22 @@ data:
       # That is ~0.5C of dither around a true value near 72.7, which reads like
       # the switch quantising its ADC rather than the room doing anything.
       #
-      # WHY IT MATTERS HERE AND NOT FOR THE LED BAR. The LED compares against a
-      # single 78F threshold with the whole room on one side of it. The fan maps
-      # 73-78F onto six speeds, so one speed step is ~1.1F — NARROWER THAN THE
-      # DITHER. Driven from the raw sensor the fan would change speed every few
-      # minutes, all night, in a room with a sleeping baby in it, and every one
-      # of those changes is also a round trip to Dreo's cloud.
+      # WHY THE FAN NEEDED IT FIRST. The fan maps 73-78F onto six speeds, so one
+      # speed step is ~1.1F — NARROWER THAN THE DITHER. Driven from the raw sensor
+      # the fan would change speed every few minutes, all night, in a room with a
+      # sleeping baby in it, and every one of those changes is also a round trip
+      # to Dreo's cloud. The LED bar looked immune, because it compares against a
+      # single 78F threshold with the whole room on one side of it — a dither
+      # either side of that line is a rare event, not a per-report one.
+      #
+      # THAT ARGUMENT DID NOT SURVIVE 2026-08-07, and the LED moved onto this
+      # entity on 2026-08-13. Being a single threshold is exactly what makes a
+      # ~6F STEP dangerous: when the composite below changes which thermometer it
+      # believes, its output jumps in one report, and a jump that size crosses 78
+      # from anywhere in the normal range. Smoothing turns that cliff into a ramp
+      # the room has a chance to disprove. Chasing one threshold with a signal
+      # that can move 6F between reports is worse than chasing six with one that
+      # moves 1F.
       #
       # 15 MINUTES flattens an alternation whose period is minutes, and is far
       # shorter than the thermal time constant of a room — a nursery that is
@@ -978,24 +991,36 @@ data:
       alias: Nursery LED effect - alarm + too hot
       description: 'Sustained overlay on the Nursery LED bar. Priority: alarm triggered
         (red fast blink) > room at or over 78F (orange pulse) > nothing (clear). TEMPERATURE
-        SOURCE CHANGED TWICE. 2026-08-02 moved it from the ZSE44 to the switch''s OWN sensor:
-        the ZSE44 is battery powered and sleeps - on 2026-08-01 it had last reported five
-        hours earlier while the switch was seconds old - and the two agreed to 0.45F, so the
-        prompt one won. 2026-08-07 found the hole in that measurement: 0.45F is only true
+        SOURCE CHANGED THREE TIMES. 2026-08-02 moved it from the ZSE44 to the switch''s OWN
+        sensor: the ZSE44 is battery powered and sleeps - on 2026-08-01 it had last reported
+        five hours earlier while the switch was seconds old - and the two agreed to 0.45F, so
+        the prompt one won. 2026-08-07 found the hole in that measurement: 0.45F is only true
         while the switch is OFF. Under load the switch self-heats to 6-8F above the room
         (Inovelli parameter 32 is the chipset''s INTERNAL temperature, feeding the parameter
         33 overheat cutout - not a room thermometer, and the VZW30-SN has no offset
-        parameter to trim it). It now reads `sensor.nursery_room_temperature`, which chooses
-        between the two thermometers; the measurement justifying that lives in
-        configuration.yaml. Fails safe: if that drops out, float(0) makes ''hot'' false
-        rather than firing. Parameter 99 is written as FOUR partials because a whole-parameter
-        write 500s on this firmware; effect 255 is ''Clear'' (releases the bar), not 0
-        which is ''Off'' and would hold it dark. The override-beats-base behaviour this
-        relies on was verified on the Master Bedroom twin 2026-08-02.'
+        parameter to trim it), so it moved to `sensor.nursery_room_temperature`, the composite
+        that chooses between the two thermometers; the measurement justifying that lives in
+        configuration.yaml. 2026-08-13 moved it one step further, onto
+        `sensor.nursery_temperature_average` - the 15-minute mean OF that composite, which the
+        fan has read since 2026-08-04. The same thermometer choice, smoothed. Two things the
+        raw composite does that a bare 78F threshold should not have to survive: it dithers
+        about a degree between consecutive reports (the switch quantising its ADC), and it
+        steps ~6F the instant it changes which thermometer it believes. The alert now also
+        agrees with the fan BY CONSTRUCTION - one signal, so the bar cannot say "too hot"
+        while the fan sits idle, and the 73-78F fan ramp and the 78F alert are read off the
+        same number. It costs a few minutes of lag on a genuinely warming room, which is
+        nothing against a room''s thermal time constant. Fails safe unchanged: if the average
+        drops out, float(0) makes ''hot'' false rather than firing, and the alarm branch above
+        it does not read temperature at all. THE MASTER BEDROOM TWIN DELIBERATELY DID NOT
+        FOLLOW: that room has only the switch''s own sensor, so there is no composite and no
+        average to point it at. Parameter 99 is written as FOUR partials because a
+        whole-parameter write 500s on this firmware; effect 255 is ''Clear'' (releases the
+        bar), not 0 which is ''Off'' and would hold it dark. The override-beats-base behaviour
+        this relies on was verified on the Master Bedroom twin 2026-08-02.'
       triggers:
       - entity_id: alarm_control_panel.mfa_alarm
         platform: state
-      - entity_id: sensor.nursery_room_temperature
+      - entity_id: sensor.nursery_temperature_average
         platform: state
       - event: start
         platform: homeassistant
@@ -1006,11 +1031,12 @@ data:
       # on 2026-08-03 22:16. See that automation for the reasoning; the guard is identical
       # except for which node's sensor stands in for "this device answers".
       #
-      # DELIBERATELY STILL THE SWITCH'S OWN SENSOR, not the composite this automation now
-      # reads for temperature (2026-08-07). This guard is not asking "do we have a usable
-      # temperature", it is asking "does the node we are about to write LED parameters to
-      # answer". The composite can be perfectly available off the ZSE44 alone while the
-      # switch is off the mesh, which is exactly the case this has to keep catching.
+      # DELIBERATELY STILL THE SWITCH'S OWN SENSOR, not the smoothed composite this automation
+      # now reads for temperature (2026-08-07, 2026-08-13). This guard is not asking "do we
+      # have a usable temperature", it is asking "does the node we are about to write LED
+      # parameters to answer". The composite can be perfectly available off the ZSE44 alone
+      # while the switch is off the mesh, and the average on top of it holds its last value
+      # for longer still — which is exactly the case this has to keep catching.
       - condition: template
         value_template: '{{ has_value(''sensor.nursery_on_off_switch_air_temperature'')
           }}'
@@ -1108,7 +1134,7 @@ data:
           - condition: template
             value_template: '{{ hot }}'
       variables:
-        hot: '{{ states(''sensor.nursery_room_temperature'') | float(0) >= 78 }}'
+        hot: '{{ states(''sensor.nursery_temperature_average'') | float(0) >= 78 }}'
         alarmed: '{{ states(''alarm_control_panel.mfa_alarm'') == ''triggered'' }}'
       mode: restart
     - id: '1785527100005'
@@ -1799,9 +1825,12 @@ data:
     # though — re-adding the integration, or renaming the fan in the Dreo app, can change it. The
     # symptom would be HA logging "Referenced entities ... are missing" while the fan never moves.
     #
-    # SAME SENSOR AS THE NURSERY LED, deliberately — and since 2026-08-07 that is neither
-    # thermometer on its own but `sensor.nursery_room_temperature`, the composite that decides
-    # which to believe. The 2026-08-02 version of this note said "the switch's own thermometer,
+    # SAME SENSOR AS THE NURSERY LED, deliberately — and since 2026-08-13 that is the same
+    # entity, not merely the same family: both read `sensor.nursery_temperature_average`, so
+    # "hot enough for the fan" and "hot enough for the alert" are two thresholds on one number.
+    # Since 2026-08-07 the thing underneath it is neither thermometer on its own but
+    # `sensor.nursery_room_temperature`, the composite that decides which to believe.
+    # The 2026-08-02 version of this note said "the switch's own thermometer,
     # not the ZSE44", because the ZSE44 sleeps and a fan driven by a five-hour-old temperature is
     # worse than no fan. That still holds; what it missed is that the switch self-heats 6-8F above
     # the room whenever its load is on, and this fan is the thing that suffered for it — MEASURED
