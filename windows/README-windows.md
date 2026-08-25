@@ -4,11 +4,43 @@ Two things must happen on the Windows 11 host on every boot, because neither sur
 a reboot/replug on its own:
 
 1. **Attach the ZWA-2 USB stick into WSL2** (`attach-zwa2.ps1`).
-2. **Proxy the HA NodePort onto the LAN/Tailscale** (`portproxy-ha.ps1`).
+2. ~~**Proxy the HA NodePort onto the LAN/Tailscale** (`portproxy-ha.ps1`).~~ **OBSOLETE
+   under mirrored networking** — replaced by the socat units in this folder. See the
+   next section before you run it.
 
 > ⚠️ **This is the fragile link in the whole system.** If Z-Wave "goes dead" or HA is
 > unreachable after a reboot, 90% of the time it's because one of these two steps did
 > not run. Check here first.
+
+## ⛔ Do not run `portproxy-ha.ps1` / `heal-ha.ps1` (and check nothing did)
+
+Under `networkingMode=mirrored` these two scripts are worse than useless — they are
+actively harmful, and they fail in a way that reads as success.
+
+`netsh portproxy` is implemented by the **IP Helper** service (`iphlpsvc`), and its rules
+are **persistent across reboots**. So a single historical run leaves behind a rule that
+binds `0.0.0.0:8123` on the Windows host *forever*, pointing at a WSL address that no
+longer exists. Two consequences, both nasty:
+
+- The socat unit that is *supposed* to own that port (`ha-forwarder.service`) can never
+  bind it. It dies with `Address already in use` and, because it is `Restart=always`,
+  loops silently. **Found 2026-08-25 with restart counter 5738** — roughly five hours of
+  retrying every three seconds, with nothing surfacing the failure.
+- `Test-NetConnection -Port 8123` still returns **True**, because IP Helper *is*
+  listening. It just forwards into the void. This is the same "a listener is not a working
+  path" trap that hid the missing `:8555` forwarder for months (DEPLOYMENT.md §7c).
+
+Check for and remove leftovers (elevated):
+
+```powershell
+netsh interface portproxy show all
+# anything listening on 8123, or pointing at a 172.x / 169.254.x address, is stale:
+netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=8123
+```
+
+`ha-forwarder.service` picks the port up within ~3 s on its next restart; no reboot and no
+`systemctl` needed. Confirm with `systemctl is-active ha-forwarder.service` → `active`
+(not `activating`), and `ss -ltnp | grep 8123` inside the distro.
 
 ## One-time prerequisites
 

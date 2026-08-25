@@ -72,6 +72,11 @@ patches:
         path: /spec/ports/0/nodePort
   # go2rtc WebRTC Service -> ClusterIP (NodePort 30855 is cluster-unique; go2rtc
   # itself is also parked at replicas:0 in staging, so nothing serves it anyway).
+  # ONE remove op PER PORT: the Service carries two entries on the same port
+  # number, TCP and UDP (see the base Service for why), and the ci.yml invariant
+  # checks every port -- a patch that strips only ports/0 leaves the UDP nodePort
+  # behind and fails staging while prod passes. Removing a *field* from each entry
+  # does not reindex the list, so these two paths stay correct.
   - target:
       kind: Service
       name: go2rtc-webrtc
@@ -81,6 +86,8 @@ patches:
         value: ClusterIP
       - op: remove
         path: /spec/ports/0/nodePort
+      - op: remove
+        path: /spec/ports/1/nodePort
   # Frigate admin UI Service -> ClusterIP (NodePort 30897 is cluster-unique; Frigate
   # is also parked at replicas:0 in staging, so nothing serves it anyway).
   - target:

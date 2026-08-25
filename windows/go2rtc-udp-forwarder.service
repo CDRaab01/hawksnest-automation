@@ -1,0 +1,45 @@
+# WSL systemd unit (NOT a Windows service). The UDP twin of go2rtc-forwarder.service.
+#
+# Added 2026-08-25. go2rtc now listens on 8555 for BOTH transports (configmap
+# `webrtc.listen: ":8555"`), and offers both as ICE candidates; clients prefer UDP
+# and fall back to TCP by themselves. Without this unit the UDP candidate points at
+# a port with no socket behind it on the host -- the same silent failure mode that
+# made two-way talk look broken for months (DEPLOYMENT.md 7c) -- so the UDP half is
+# simply never used and nothing logs an error.
+#
+# WHY UDP AT ALL: WebRTC over TCP cannot drop a late frame. A transient Wi-Fi hiccup
+# becomes a head-of-line stall followed by a burst, which reads as a choppy picture.
+# The 1440p/~3.2 Mbps Reolink main streams made that visible; the smaller Ring
+# streams on the identical path never did.
+#
+# Install (in the Dragonfly distro):
+#   sudo cp windows/go2rtc-udp-forwarder.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now go2rtc-udp-forwarder.service
+#
+# One-time Windows-side firewall allow (elevated). A TCP rule does NOT cover UDP --
+# this is a SEPARATE rule from Go2rtc-8555:
+#   New-NetFirewallHyperVRule -Name 'Go2rtc-8555-UDP' -DisplayName 'go2rtc WebRTC 8555 UDP' `
+#     -Direction Inbound -Action Allow -Protocol UDP -LocalPorts 8555 `
+#     -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+#
+# VERIFY (both must be true, and the second is the one that actually matters):
+#   ss -lunp | grep 8555                     # a real UDP socket exists in the distro
+#   kubectl logs deploy/go2rtc -n home-automation | grep '\[webrtc\] listen'
+#                                            # must print BOTH a tcp and a udp line
+[Unit]
+Description=go2rtc WebRTC media forwarder, UDP (WSL mirrored networking)
+After=network-online.target k3s.service
+Wants=network-online.target
+
+[Service]
+# `fork` gives each client peer its own child; `reuseaddr` keeps every child bound to
+# 8555, so replies leave from the port the client sent to. That matters more here than
+# it does for TCP: ICE validates a candidate by matching the source address of the
+# reply, and a reply from an ephemeral port would fail that check and silently drop
+# the connection back to the TCP candidate.
+ExecStart=/usr/bin/socat UDP-LISTEN:8555,fork,reuseaddr UDP:127.0.0.1:30855
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

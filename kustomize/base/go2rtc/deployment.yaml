@@ -91,6 +91,14 @@ spec:
               # The ICE candidate go2rtc advertises stays GO2RTC_HOST_IP:8555.
               containerPort: 8555
               protocol: TCP
+            - name: webrtc-udp
+              # Same port, UDP. Added 2026-08-25 -- see the configmap's webrtc block
+              # for why (TCP-only WebRTC cannot drop a late frame, so the 1440p
+              # Reolink streams stalled-and-burst instead of degrading). Its own
+              # socat unit (windows/go2rtc-udp-forwarder.service) and its own
+              # Hyper-V firewall rule; a TCP allow does not cover UDP.
+              containerPort: 8555
+              protocol: UDP
           envFrom:
             - secretRef:
                 name: go2rtc-credentials
