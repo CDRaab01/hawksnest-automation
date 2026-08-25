@@ -15,14 +15,21 @@ spec:
     - name: rtsp
       port: 8554
       targetPort: rtsp
-    - name: webrtc-tcp
-      port: 8555
-      targetPort: webrtc-tcp
-      protocol: TCP
-    - name: webrtc-udp
-      port: 8555
-      targetPort: webrtc-udp
-      protocol: UDP
+    # NO webrtc ports. ring-mqtt's EMBEDDED go2rtc runs with its API and WebRTC
+    # disabled -- it bridges Ring as a one-way RTSP `exec:` source and nothing else
+    # (DEPLOYMENT.md 7c). Verified 2026-08-25 from inside the running pod: nothing
+    # is listening on 8555 at all, so the `webrtc-tcp` / `webrtc-udp` entries that
+    # used to sit here pointed at a port with no socket behind it.
+    #
+    # Removed for two reasons. First, it is precisely the decoy 7c warns about: a
+    # declared port reads as "this works", and that illusion is what hid the missing
+    # :8555 host forwarder for months. Second, the two entries shared port number
+    # 8555, and `Service.spec.ports` merges on `port` -- a duplicate survives object
+    # CREATION (which is why these were live) but gets silently collapsed on a later
+    # client-side apply. tests/validate_manifests.py now rejects duplicates outright.
+    #
+    # Two-way audio and real WebRTC come from the DEDICATED go2rtc deployment, which
+    # is a separate pod with its own Service, forwarders and firewall rules.
     - name: go2rtc-api
       port: 1984
       targetPort: go2rtc-api

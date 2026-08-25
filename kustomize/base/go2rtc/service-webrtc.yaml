@@ -23,11 +23,29 @@ spec:
       # Fixed NodePort so the socat forwarder target is stable.
       nodePort: 30855
     - name: webrtc-udp
-      port: 8555
-      targetPort: webrtc-udp
+      # DIFFERENT port/nodePort NUMBERS from the TCP entry above, and that is not
+      # cosmetic -- it is the whole reason this entry survives a deploy.
+      #
+      # Kubernetes is perfectly happy with two Service ports sharing a number when
+      # the protocols differ, and `kubectl apply --dry-run=server` reports success
+      # for it. But the ports list has **`port` as its strategic-merge key**, so
+      # CLIENT-side apply -- which is what `kubectl apply -k` in scripts/deploy.sh
+      # does -- merges the two entries into one and SILENTLY DROPS THE UDP HALF.
+      # Exit 0, "service/go2rtc-webrtc configured", no warning anywhere. That is
+      # exactly what happened on the first attempt at this (2026-08-25): the
+      # ConfigMap landed, the Service did not, and the only way to see it was to
+      # read back the live object instead of trusting the apply's verdict.
+      # `kubectl apply --server-side` keeps both, but switching the deploy to
+      # server-side apply for all 53 resources to buy one port is the wrong trade.
+      #
+      # tests/validate_manifests.py now fails the build on duplicate port numbers
+      # within a Service, so this cannot silently come back.
+      port: 8556
       protocol: UDP
-      # The SAME nodePort number as the TCP entry above, which is legal and
-      # intentional: a NodePort is unique per (protocol, port), not per port. Both
-      # socat units therefore target 30855 and differ only in transport, which keeps
-      # the two forwarders symmetrical and the docs honest.
-      nodePort: 30855
+      # NUMERIC targetPort, not the named one, for the same reason: a container's
+      # ports list merges on `containerPort`, so a second containerPort 8555 entry
+      # for UDP would be dropped from the Deployment the same way. Referring to the
+      # port by number means the Deployment needs no UDP entry at all -- container
+      # port declarations are informational in Kubernetes, they open nothing.
+      targetPort: 8555
+      nodePort: 30856
