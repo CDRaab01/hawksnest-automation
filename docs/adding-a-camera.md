@@ -105,13 +105,19 @@ Measured on the live cluster, 2026-07-31, with three cameras running:
 | | Measured | Headroom for 7 cameras |
 |---|---|---|
 | Detector (`ov`, OpenVINO **CPU**) | **1.64 ms** inference | ~610 inferences/s theoretical; current demand ~12 fps. Not the constraint. |
-| Recording disk | **3.9 GB/day** for 3 cameras (full day, 2026-07-30) | ~9 GB/day at 7 cameras · 3-day retention ≈ **27 GB** |
+| Recording disk *(sub-stream era — superseded, see below)* | **3.9 GB/day** for 3 cameras (full day, 2026-07-30) | ~9 GB/day at 7 cameras · 3-day retention ≈ **27 GB** |
 | Volume | 1007 GB, 62 GB used, **895 GB free** | Not the constraint either |
 
-**The disk warnings in `configmap.yaml` and `plan.md` are ~4x pessimistic.** They budgeted
-16.7 GB/day for three cameras from *nominal* sub-stream bitrates; the measured figure is 3.9. If
-you want longer retention than 3 days, the room is there — but change it *after* the new cameras
-have run a full day and you can measure again, not on this table.
+**The disk warnings in `configmap.yaml` and `plan.md` were ~4x pessimistic** for the sub stream:
+they budgeted 16.7 GB/day for three cameras from *nominal* bitrates against a measured 3.9.
+
+**Superseded 2026-08-24 — recording moved to the main stream.** Every disk figure above measures
+the *sub* stream, which is no longer what gets recorded. `detect` still runs on sub, so the
+detector and volume rows stand; `record` is now the 2560×1440 main stream at a measured
+**~180 GB/day across seven cameras** — roughly **16x** the sub-stream number — projecting to
+**~1.5 TB** at the current 3-day continuous + 30-day event retention, against 2.8 TB free. The
+per-camera bitrates and the trimming levers live in the `record:` comment in `configmap.yaml`;
+budget from there, not from this table.
 
 **Update, 2026-07-31 — measured at 7 cameras.** Adding four moved detector inference from
 **1.64 ms → 1.74 ms**, and `skipped_fps` stayed at 0 on every camera with `camera_fps` ≈ 5 and
@@ -252,11 +258,15 @@ for ip in <ip1> <ip2>; do
   ffprobe -v error -select_streams a -rtsp_transport tcp \
     -show_entries stream=codec_name,sample_rate,channels \
     -of default=noprint_wrappers=1 \
-    "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${ip}:554/h264Preview_01_sub" 2>&1 \
+    "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${ip}:554/h264Preview_01_main" 2>&1 \
     | sed "s/${REOLINK_PASS}/<redacted>/g"
   # 2. THE REAL GATE: does -c copy actually mux into mp4?
+  #    Probe the MAIN stream (2026-08-24): main carries the `record` role now, so main's
+  #    audio codec is the one that has to be MP4-legal. Sub only feeds `detect`, which
+  #    never muxes anything. The geometry probe above stays on sub — that is what
+  #    `detect:` width/height must match.
   ffmpeg -v error -rtsp_transport tcp \
-    -i "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${ip}:554/h264Preview_01_sub" \
+    -i "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${ip}:554/h264Preview_01_main" \
     -t 8 -c copy -f mp4 -y /tmp/probe.mp4 2>&1 | grep -v 'Overread VUI' \
     | sed "s/${REOLINK_PASS}/<redacted>/g"
   ffprobe -v error -select_streams a -show_entries stream=codec_name,bit_rate \
@@ -385,13 +395,23 @@ with the parts that are per-camera marked:
       <name>:
         ffmpeg:
           inputs:
-            # SUB stream, read directly rather than through go2rtc, so recording and live view
-            # have independent failure domains. NO input_args on purpose — 0.17's RTSP preset
-            # already supplies transport/timeout/timestamp flags; pinning them here freezes
-            # today's preset and opts out of upstream fixes on the next upgrade.
+            # Both inputs are read directly rather than through go2rtc, so recording and live
+            # view have independent failure domains. NO input_args on purpose — 0.17's RTSP
+            # preset already supplies transport/timeout/timestamp flags; pinning them here
+            # freezes today's preset and opts out of upstream fixes on the next upgrade.
+            #
+            # SUB stream -> detect. Detection wants geometry matching `detect:` below, not
+            # pixels; pointing it at main would cost decode CPU for no accuracy.
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_<NAME>}:554/h264Preview_01_sub"
               roles:
                 - detect
+            # MAIN stream -> record (2026-08-24). Both roles used to share the sub input, which
+            # made the recorded timeline the 10 fps detect stream — choppy playback, and the
+            # reason this split exists. Recording is `-c:v copy`, so it costs disk and NIC, not
+            # detector CPU. Budget ~25-45 GB/day per E1 Pro and ~10 GB/day per E1 Zoom; read
+            # the `record:` comment in configmap.yaml before adding a camera.
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_<NAME>}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # 0.17 defaults this to FALSE when absent. Frigate recorded for hours and detected
@@ -725,6 +745,10 @@ Per camera, in order — each step's failure has a different cause, so do not ba
 
 - [ ] the `frigate` service account exists ON the camera (`GetDevInfo` returns `code: 0`)
 - [ ] `ffprobe` against the sub stream returns the geometry you put in `detect:`
+- [ ] `ffprobe` against the **main** stream reports **H.264** and MP4-legal audio — main is what
+      gets recorded now, and h265 there breaks recorded playback as well as WebRTC live
+- [ ] the camera's RTSP session budget still fits: Frigate takes **two** sessions (sub + main),
+      go2rtc one, and each viewing phone one more
 - [ ] `tailscale status` `PrimaryRoutes` lists the camera's `/32` (advertised **and** approved)
 - [ ] Frigate `/api/stats` shows a live `pid`, `camera_fps` ≈ 5, `skipped_fps` = 0
 - [ ] `scripts/frigate-drift-check.sh` reports live == seed

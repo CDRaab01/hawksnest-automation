@@ -143,46 +143,59 @@ data:
 
     record:
       enabled: true
-      # 24/7 continuous. Budget from MEASURED sub-stream bitrates, not nominal specs,
-      # and note the cameras are not interchangeable:
-      #   big_room             (E1 Zoom)  256 kbps  ~2.8 GB/day
-      #   first_floor_stairway (E1 Zoom)  256 kbps  ~2.8 GB/day
-      #   kitchen              (E1 Pro)  1024 kbps ~11.1 GB/day   <-- 4x the others
-      # ~16.7 GB/day total, so 3 days is ~50 GB against ~900 GB free. Comfortable, but
-      # the kitchen alone is more than both Zooms combined — if disk ever becomes the
-      # constraint, lowering that camera's sub-stream bitrate is the biggest single
-      # lever, and it costs recorded quality rather than detection (detect only needs
-      # the geometry to match).
+      # 24/7 continuous, RECORDED FROM THE MAIN STREAM (2560x1440 @ 20-25 fps).
       #
-      # Still verify with `df -h` after 24h rather than trusting this arithmetic.
+      # Changed 2026-08-24: every camera used to feed ONE sub-stream input carrying
+      # roles [detect, record], so the recorded timeline was the 640x360/896x512
+      # @10 fps DETECT stream — visibly choppy, and the thing actually complained
+      # about. detect stays on the sub stream (detection wants matching geometry,
+      # not pixels; moving it to main would burn CPU for no accuracy) and record
+      # now has its own main-stream input. Recording is `-c:v copy`, so this costs
+      # disk and NIC, not detection CPU.
       #
-      # Retargeted 2026-07-29: the first camera is the BIG ROOM, not a bedroom. The
-      # original `3` was chosen specifically to avoid two weeks of bedroom footage on
-      # disk; that reasoning does not apply to a living space. Kept at 3 anyway for
-      # now — NOT for privacy, but because this is the first Frigate camera on an
-      # unquotaed hostPath volume and the disk-growth rate is still unmeasured
-      # (see the guardrail note below). Revisit once `df -h` after 24h gives a real
-      # number; 14 is reasonable for this room once the rate is known.
+      # MEASURED main-stream video bitrates, 2026-08-24, 20 s of `-c copy` each:
+      #   big_room             (E1 Zoom) 2560x1440@20   ~7.4 GB/day
+      #   first_floor_stairway (E1 Zoom) 2560x1440@20  ~10.4 GB/day
+      #   nursery              (E1 Pro)  2560x1440@25  ~11.1 GB/day
+      #   garage               (E1 Pro)  2560x1440@25  ~25.9 GB/day
+      #   kitchen              (E1 Pro)  2560x1440@25  ~34.0 GB/day
+      #   basement             (E1 Pro)  2560x1440@25  ~41.4 GB/day
+      #   bedroom              (E1 Pro)  2560x1440@25  ~45.3 GB/day
+      # ~175 GB/day of video plus ~5 GB/day of copied AAC = ~180 GB/day, about 16x
+      # the ~11 GB/day the sub streams cost. These are variable-bitrate cameras and
+      # the ranking CHANGED with the stream: basement and bedroom are now the
+      # expensive ones, not kitchen. Do not reuse the old sub-stream ranking when
+      # deciding what to trim.
       #
-      # Retention is per-camera. The bedroom Reolink planned for a later phase should
-      # carry its own SHORTER window set under that camera — do not raise this one and
-      # assume it covers both.
+      # PROJECTED steady state at the retention below, scaled from measured day
+      # sizes (a full continuous day was 11 GB, an event-only day 1.8-2.4 GB):
+      #   3 days continuous           ~540 GB
+      #   27 further days of events   ~975 GB
+      #   clips/snapshots              ~13 GB
+      #   total                       ~1.5 TB against 2.8 TB free on a 2.9 TB volume
+      # Verify with `df -h /media/frigate` after 30 days rather than trusting this;
+      # the event share depends on how much actually happens in frame.
       #
-      # UPDATED 2026-08-04 — the DS925+ migration happened. Recordings now live on
+      # If it needs trimming, the levers in order of bang-per-edit:
+      # `detections.retain.mode: motion` (stops holding dead air around events),
+      # then `detections.retain.days`, then `continuous.days`. Lowering a camera's
+      # main-stream bitrate on the Reolink itself is the LAST resort — it gives
+      # back exactly the quality this change was made to get.
+      #
+      # Retention is per-camera if it needs to be: a camera wanting a SHORTER
+      # window carries its own block rather than dragging this global down.
+      #
+      # HISTORY — 2026-08-04, the DS925+ migration. Recordings live on
       # `frigate-media-nas` (NFS -> DS925+ Volume 4, a dedicated 3 TB ext4 volume),
-      # NOT on the unquotaed node-local hostPath. The old danger — Frigate filling the
-      # Dragonfly virtual disk and taking k3s, Home Assistant and the door locks with
-      # it — is gone: Frigate can now only ever fill its own volume.
+      # NOT the unquotaed node-local hostPath. The old danger — Frigate filling the
+      # Dragonfly virtual disk and taking k3s, Home Assistant and the door locks
+      # with it — is gone: Frigate can only ever fill its own volume now.
       #
-      # So these numbers are no longer load-bearing for cluster survival, and raising
-      # them is cheap: measured consumption is ~13 GB/day across all seven cameras
-      # (41 GB held 3 days continuous + 30 days of alerts), against 2.9 TB free. Even
-      # 30 days continuous is only ~400 GB.
-      #
-      # STILL HELD AT 3 for one reason only: Storage Pool 3 is running DEGRADED on a
-      # single drive after one of the two new 10 TB drives failed DOA on 2026-08-04.
-      # Raise this once the replacement lands and the pool reports Healthy — not before,
-      # because until then every extra day of footage sits on an unprotected disk.
+      # STILL HELD AT 3 DAYS for one reason: Storage Pool 3 was running DEGRADED on
+      # a single drive after one of the two new 10 TB drives failed DOA 2026-08-04.
+      # Raise this only once the replacement has landed and the pool reports
+      # Healthy — until then every extra day sits on an unprotected disk, and note
+      # that the main-stream switch already put ~16x more data at risk there.
       continuous:
         days: 3
       alerts:
@@ -297,6 +310,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BIG_ROOM}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # MUST be set explicitly. Frigate 0.17 defaults detect.enabled to FALSE
@@ -427,6 +442,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # Frigate 0.17 defaults this to FALSE when absent — see the long note on
@@ -503,6 +520,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_KITCHEN}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_KITCHEN}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # Frigate 0.17 defaults this to FALSE when absent — see big_room.
@@ -560,6 +579,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_NURSERY}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_NURSERY}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # Frigate 0.17 defaults this to FALSE when absent — see big_room.
@@ -590,6 +611,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BASEMENT}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BASEMENT}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           enabled: true
@@ -614,6 +637,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BEDROOM}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BEDROOM}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           enabled: true
@@ -645,6 +670,8 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_GARAGE}:554/h264Preview_01_sub"
               roles:
                 - detect
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_GARAGE}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           enabled: true

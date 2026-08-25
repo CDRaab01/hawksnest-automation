@@ -402,11 +402,14 @@ changes it silently declines (below).
                                   Hawksnest RECORDED + SEARCH
 ```
 
-**Live is go2rtc on the main stream; recorded is Frigate on the sub stream. They never
-touch each other.** Frigate opens its own connection to the camera rather than pulling
-from go2rtc, so a go2rtc restart can't punch a hole in the 24/7 timeline, and go2rtc's
-RTSP listener stays off. main and sub are different streams, so nothing is gained by
-sharing one connection anyway. Cost: camera credentials appear in two secrets.
+**Live is go2rtc on the main stream; recorded is Frigate, which since 2026-08-24 opens
+BOTH streams — sub for `detect`, main for `record`. go2rtc and Frigate still never touch
+each other.** (Before that Frigate took only the sub stream and recorded it, which is why
+recorded playback was 10 fps and visibly choppy — the thing this split fixed.) Frigate
+opens its own connections to the camera rather than pulling from go2rtc, so a go2rtc
+restart can't punch a hole in the 24/7 timeline, and go2rtc's RTSP listener stays off.
+Cost: camera credentials appear in two secrets, and the per-camera RTSP session budget
+below is one higher than it used to be.
 
 **Recorded playback goes through Home Assistant, not a direct Frigate proxy.** Every URL
 `Hawksnest/src/lib/cameraEvents.ts` already builds (`/api/frigate/vod/...`,
@@ -959,8 +962,10 @@ both Zooms.
    frigate/frigate-ui Services (5000 is never NodePort-exposed), and Frigate's authenticated
    UI on `:8971`.
 
-1. **RTSP session budget.** Reolink cameras allow only a handful of concurrent sessions. Frigate
-   holds the sub stream, go2rtc holds the main, and **each viewing phone takes another main**. An
+1. **RTSP session budget.** Reolink cameras allow only a handful of concurrent sessions. Since
+   2026-08-24 **Frigate holds two** (sub for `detect`, main for `record`), go2rtc holds the main,
+   and **each viewing phone takes another main** — so the idle baseline is three sessions per
+   camera rather than two, and the first viewer makes four. An
    over-budget open is rejected by the camera, which the app treats as a fail-fast → go2rtc. That
    is the designed behaviour, but it means "live view got slower when two people watched at once"
    has a real cause. If it becomes common, point the phone at the sub stream instead.
