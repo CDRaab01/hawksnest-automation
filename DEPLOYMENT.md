@@ -422,6 +422,18 @@ NodePort 30855).
    | `":8555/udp"` | UDP only |
    | `":8555/tcp+udp"` | **nothing at all, and logs no error** |
 
+   **The UDP Service entry uses port/nodePort 8556/30856, not 8555/30855, and that
+   is load-bearing.** `Service.spec.ports` is a strategic-merge list keyed on
+   `port`, and `Container.ports` on `containerPort`. Two entries sharing that number
+   are legal Kubernetes and pass `--dry-run=server`, but **client-side** `kubectl
+   apply` -- what `scripts/deploy.sh` runs -- merges them and silently drops all but
+   the first. Exit 0, `service/... configured`, no warning. That is exactly what the
+   first attempt at this hit: the ConfigMap landed and the Service did not, and the
+   deploy looked entirely healthy. Verify by reading the object back, never by
+   trusting the apply's verdict. `tests/validate_manifests.py` now fails the build on
+   duplicate port numbers so it cannot recur. The client-facing port is unchanged at
+   **8555/udp** -- only the cluster-internal number differs.
+
    Always confirm from the startup log, which prints one line per transport:
    `kubectl logs deploy/go2rtc -n home-automation | grep '\[webrtc\] listen'` must show
    **both** a `tcp` and a `udp` line.

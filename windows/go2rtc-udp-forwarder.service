@@ -37,7 +37,13 @@ Wants=network-online.target
 # it does for TCP: ICE validates a candidate by matching the source address of the
 # reply, and a reply from an ephemeral port would fail that check and silently drop
 # the connection back to the TCP candidate.
-ExecStart=/usr/bin/socat UDP-LISTEN:8555,fork,reuseaddr UDP:127.0.0.1:30855
+# Target is nodePort **30856**, NOT 30855. The UDP Service entry has to carry a
+# different port number from the TCP one or client-side `kubectl apply` merges
+# the two and drops it (see kustomize/base/go2rtc/service-webrtc.yaml). The
+# client-facing port is still 8555/udp -- that is what this unit listens on and
+# what go2rtc advertises as its ICE candidate; only the cluster-internal number
+# differs.
+ExecStart=/usr/bin/socat UDP-LISTEN:8555,fork,reuseaddr UDP:127.0.0.1:30856
 Restart=always
 RestartSec=3
 

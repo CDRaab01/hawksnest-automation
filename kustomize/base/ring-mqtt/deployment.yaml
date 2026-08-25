@@ -107,12 +107,8 @@ spec:
           ports:
             - name: rtsp
               containerPort: 8554
-            - name: webrtc-tcp
-              containerPort: 8555
-              protocol: TCP
-            - name: webrtc-udp
-              containerPort: 8555
-              protocol: UDP
+            # No webrtc entries -- see service.yaml. Nothing listens on 8555 in this
+            # pod; its go2rtc has API/WebRTC disabled and bridges one-way RTSP only.
             - name: go2rtc-api
               containerPort: 1984
             - name: web-ui

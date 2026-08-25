@@ -407,6 +407,48 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
                       for labels in dep_labels.values())
         check(matched, f"Service '{name(svc)}' selector {sel} matches no Deployment")
 
+    # 9. No list that `kubectl apply` merges may contain duplicate merge keys.
+    #
+    # This is not a style rule -- it guards a SILENT deploy failure. Both of these
+    # lists are strategic-merge lists with a single-field merge key:
+    #
+    #     Service.spec.ports            -> merge key `port`
+    #     Container.ports               -> merge key `containerPort`
+    #
+    # Kubernetes itself allows two entries to share that number when the protocols
+    # differ (TCP + UDP on 8555 is a perfectly legal Service), and
+    # `kubectl apply --dry-run=server` reports success for it. But CLIENT-side
+    # apply -- what `kubectl apply -k` in scripts/deploy.sh does -- merges the
+    # duplicates into ONE entry and drops the rest. Exit 0, "configured", no
+    # warning. Live-verified 2026-08-25: a two-protocol go2rtc-webrtc Service
+    # applied cleanly and came back from the cluster with only its TCP half, while
+    # the ConfigMap in the same commit landed fine, so the deploy looked healthy.
+    #
+    # The fix is always to give the second entry a different number (the Service's
+    # own port number is internal; only the nodePort/host side has to match what
+    # clients dial). This check exists so that fix cannot be quietly undone.
+    for svc in services:
+        ports = svc.get("spec", {}).get("ports", []) or []
+        nums = [p.get("port") for p in ports]
+        dupes = {n for n in nums if nums.count(n) > 1}
+        check(
+            not dupes,
+            f"Service '{name(svc)}' repeats port number(s) {sorted(dupes)}; "
+            f"client-side `kubectl apply` merges Service ports on `port` and would "
+            f"silently drop all but the first. Use distinct port numbers.",
+        )
+    for dep in deployments:
+        for container in pod_spec(dep).get("containers", []) or []:
+            cports = [p.get("containerPort") for p in container.get("ports", []) or []]
+            cdupes = {n for n in cports if cports.count(n) > 1}
+            check(
+                not cdupes,
+                f"Deployment '{name(dep)}' container '{container.get('name')}' repeats "
+                f"containerPort {sorted(cdupes)}; client-side `kubectl apply` merges "
+                f"container ports on `containerPort` and would silently drop all but "
+                f"the first. Container port entries are informational -- just omit it.",
+            )
+
     return errors
 
 
