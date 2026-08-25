@@ -19,5 +19,15 @@ spec:
     - name: webrtc-tcp
       port: 8555
       targetPort: webrtc-tcp
+      protocol: TCP
       # Fixed NodePort so the socat forwarder target is stable.
+      nodePort: 30855
+    - name: webrtc-udp
+      port: 8555
+      targetPort: webrtc-udp
+      protocol: UDP
+      # The SAME nodePort number as the TCP entry above, which is legal and
+      # intentional: a NodePort is unique per (protocol, port), not per port. Both
+      # socat units therefore target 30855 and differ only in transport, which keeps
+      # the two forwarders symmetrical and the docs honest.
       nodePort: 30855

@@ -395,7 +395,51 @@ NodePort 30855).
 3. **Deploy + roll:** `./scripts/deploy.sh` (or `kubectl apply -k kustomize/overlays/prod/`);
    `kubectl rollout restart deploy/go2rtc` after any secret edit — stable secret names don't
    auto-roll. (`replicas: 1` already ships in base; staging stays parked via its overlay patch.)
-4. **Media-port exposure — socat, NOT netsh portproxy** (portproxy is dead under WSL
+4. **Media-port exposure — socat, NOT netsh portproxy** — **TWO units since 2026-08-25,
+   one per transport.**
+
+   go2rtc listens on 8555 for **both TCP and UDP** (`webrtc.listen: ":8555"`) and offers
+   both as ICE candidates. Clients prefer UDP and fall back to TCP on their own, so the
+   UDP half is a pure upgrade: if it is missing or blocked, behaviour is exactly what it
+   was before, and live view never goes down because of it.
+
+   **Why UDP was added.** It was TCP-only on the reasoning that "TCP avoids UDP/NAT pain
+   across Tailscale" — correct while go2rtc served only the small Ring streams. The
+   Reolinks (2026-07-29) are 2560x1440 at ~3.2 Mbps, and WebRTC over TCP **cannot drop a
+   late frame**: a momentary Wi-Fi hiccup becomes a head-of-line stall and then a burst,
+   i.e. a visibly choppy picture. Diagnosed 2026-08-25 — Reolink live was choppy on both
+   web and Android while Ring cameras on the *identical* path were fine, and the stream
+   itself was proven clean (25 fps, 3.2 Mbps, no timestamp gaps) both straight off the
+   camera and through go2rtc. The transport was the only thing left.
+
+   **The `listen:` syntax is load-bearing and fails silently.** Verified against
+   `alexxit/go2rtc:1.9.14`, not assumed:
+
+   | value | binds |
+   |---|---|
+   | `":8555/tcp"` | TCP only (what we had) |
+   | `":8555"` | **TCP and UDP** (what we want) |
+   | `":8555/udp"` | UDP only |
+   | `":8555/tcp+udp"` | **nothing at all, and logs no error** |
+
+   Always confirm from the startup log, which prints one line per transport:
+   `kubectl logs deploy/go2rtc -n home-automation | grep '\[webrtc\] listen'` must show
+   **both** a `tcp` and a `udp` line.
+
+   Install **both** units in the Dragonfly distro:
+   ```bash
+   sudo cp windows/go2rtc-forwarder.service windows/go2rtc-udp-forwarder.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now go2rtc-forwarder.service go2rtc-udp-forwarder.service
+   ```
+   And a **separate** Hyper-V firewall rule for UDP — a TCP allow does not cover it:
+   ```powershell
+   New-NetFirewallHyperVRule -Name 'Go2rtc-8555-UDP' -DisplayName 'go2rtc WebRTC 8555 UDP' `
+     -Direction Inbound -Action Allow -Protocol UDP -LocalPorts 8555 `
+     -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+   ```
+
+   The original TCP-only instructions follow and still apply verbatim to that unit: (portproxy is dead under WSL
    mirrored networking: it targeted a NAT-era 172.x WSL IP, and a NodePort/hostPort is DNAT
    with no listening socket, unreachable from Windows — same story as HA's
    `ha-forwarder.service`). Install the systemd unit once in the Dragonfly distro:

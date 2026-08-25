@@ -52,9 +52,36 @@ data:
       listen: "127.0.0.1:8554"
 
     webrtc:
-      # TCP-only on 8555, published to the host via a hostPort so ICE can reach it
-      # over Tailscale/LAN. TCP avoids UDP/NAT pain across Tailscale.
-      listen: ":8555/tcp"
+      # TCP **and** UDP on 8555, published to the host by the two socat forwarders
+      # in windows/ so ICE can reach it over Tailscale/LAN.
+      #
+      # This was ":8555/tcp" until 2026-08-25, on the reasoning that "TCP avoids
+      # UDP/NAT pain across Tailscale". That was a sound call when go2rtc served
+      # only Ring cameras, whose streams are small. It stopped being the right
+      # default once the Reolinks arrived (2026-07-29) at 2560x1440 / ~3.2 Mbps:
+      # WebRTC over TCP cannot DROP a late frame, so a transient Wi-Fi hiccup
+      # becomes a head-of-line stall and then a burst -- which is exactly what
+      # "the live view is choppy" looks like. Over UDP the same hiccup costs a
+      # frame and the stream adapts. Measured symptom: Reolink live was choppy on
+      # both web and Android while the Ring cameras on the same path were fine,
+      # and the source stream itself was verified clean (25 fps, 3.2 Mbps, no
+      # timestamp gaps) straight off the camera AND through go2rtc.
+      #
+      # This is ADDITIVE, deliberately. go2rtc offers both transports as ICE
+      # candidates, clients prefer UDP and fall back to TCP on their own. If the
+      # UDP path is broken or blocked, behaviour is exactly what it was before
+      # this change -- so the blast radius of the UDP half failing is "no
+      # improvement", never "live view is down".
+      #
+      # SYNTAX IS LOAD-BEARING, verified against alexxit/go2rtc:1.9.14 rather than
+      # assumed, because the failure is silent:
+      #   ":8555/tcp"      -> TCP only          (what we had)
+      #   ":8555"          -> TCP **and** UDP   (what we want)
+      #   ":8555/udp"      -> UDP only
+      #   ":8555/tcp+udp"  -> binds NOTHING, and logs no error
+      # Confirm after any edit with the startup log, which prints one line per
+      # transport: `[webrtc] listen tcp addr=...` and `[webrtc] listen udp addr=...`.
+      listen: ":8555"
       candidates:
         # The Windows host's Tailscale (or LAN) IP — the address clients can reach.
         # Injected from the GO2RTC_HOST_IP env (secrets/go2rtc.env).
