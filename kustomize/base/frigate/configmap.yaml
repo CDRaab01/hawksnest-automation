@@ -143,38 +143,62 @@ data:
 
     record:
       enabled: true
-      # 24/7 continuous, RECORDED FROM THE MAIN STREAM (2560x1440 @ 20-25 fps).
+      # 24/7 continuous, recorded from the SUB stream (roles [detect, record] on one
+      # input). This is what actually runs, and this comment says so on purpose.
       #
-      # Changed 2026-08-24: every camera used to feed ONE sub-stream input carrying
-      # roles [detect, record], so the recorded timeline was the 640x360/896x512
-      # @10 fps DETECT stream — visibly choppy, and the thing actually complained
-      # about. detect stays on the sub stream (detection wants matching geometry,
-      # not pixels; moving it to main would burn CPU for no accuracy) and record
-      # now has its own main-stream input. Recording is `-c:v copy`, so this costs
-      # disk and NIC, not detection CPU.
+      # REVERTED 2026-08-26. #64 moved `record` to its own main-stream input to fix
+      # visibly choppy recorded playback. That change was correct about the problem
+      # and is reverted for two independent reasons, both found by measurement:
       #
-      # MEASURED main-stream video bitrates, 2026-08-24, 20 s of `-c copy` each:
-      #   big_room             (E1 Zoom) 2560x1440@20   ~7.4 GB/day
-      #   first_floor_stairway (E1 Zoom) 2560x1440@20  ~10.4 GB/day
-      #   nursery              (E1 Pro)  2560x1440@25  ~11.1 GB/day
-      #   garage               (E1 Pro)  2560x1440@25  ~25.9 GB/day
-      #   kitchen              (E1 Pro)  2560x1440@25  ~34.0 GB/day
-      #   basement             (E1 Pro)  2560x1440@25  ~41.4 GB/day
-      #   bedroom              (E1 Pro)  2560x1440@25  ~45.3 GB/day
-      # ~175 GB/day of video plus ~5 GB/day of copied AAC = ~180 GB/day, about 16x
-      # the ~11 GB/day the sub streams cost. These are variable-bitrate cameras and
-      # the ranking CHANGED with the stream: basement and bedroom are now the
-      # expensive ones, not kitchen. Do not reuse the old sub-stream ranking when
-      # deciding what to trim.
+      # 1. IT NEVER TOOK EFFECT, AND COULD NOT. Frigate's seed initContainer copies
+      #    /seed/config.yml to the PVC ONLY IF /config/config.yml is absent (see
+      #    deployment.yaml) -- deliberately, so Frigate's own UI edits survive. The
+      #    PVC has had a config since first boot, so from 2026-08-24 to 2026-08-26
+      #    this file claimed main-stream recording while every camera actually
+      #    recorded from sub. A merged, applied, green-deployed change that does
+      #    nothing. Editing THIS FILE alone can never change a running Frigate;
+      #    the live file on the PVC has to be edited too.
       #
-      # PROJECTED steady state at the retention below, scaled from measured day
-      # sizes (a full continuous day was 11 GB, an event-only day 1.8-2.4 GB):
-      #   3 days continuous           ~540 GB
-      #   27 further days of events   ~975 GB
-      #   clips/snapshots              ~13 GB
-      #   total                       ~1.5 TB against 2.8 TB free on a 2.9 TB volume
-      # Verify with `df -h /media/frigate` after 30 days rather than trusting this;
-      # the event share depends on how much actually happens in frame.
+      # 2. IT WOULD HAVE BROKEN THE NURSERY. Seven simultaneous main streams take the
+      #    wireless fleet from ~1.4 Mbps to ~24 Mbps, and the nursery cannot hold a
+      #    main stream in that contention. Measured 2026-08-26, repeated 4x across
+      #    two pods (512Mi and 7Gi, so not a pod-resource artifact):
+      #
+      #      camera                signal   main alone   under 6 others
+      #      bedroom               -35 dBm   4315 kbps    4251 kbps   ok
+      #      garage                -40 dBm   4363 kbps    4276 kbps   ok
+      #      big_room              -60 dBm    937 kbps     941 kbps   ok
+      #      first_floor_stairway    --       734 kbps     789 kbps   ok
+      #      nursery               -61 dBm   3272 kbps     236 kbps   COLLAPSES
+      #
+      #    Its detect stream also began skipping (skipped_fps 0.0 -> 1.7) and, while
+      #    six others streamed main and the nursery streamed NOTHING, it still saw
+      #    40% packet loss and 229 ms RTT where garage saw 0% and 40 ms.
+      #
+      # THE CAUSE IS SIGNAL x DEMAND, NOT SIGNAL. big_room sits at -60 dBm, one dB
+      # off the nursery, and is completely unaffected -- because it only asks for
+      # 937 kbps. The nursery asks 3.5x that on an equally weak link. A weak link is
+      # fine until you ask it for real throughput, which is exactly why the nursery
+      # has never missed a detection: today it carries one ~213 kbps sub stream on a
+      # near-idle channel. Do not read "it works fine" as "it has headroom".
+      #
+      # WHAT WOULD UNBLOCK MAIN-STREAM RECORDING, best first:
+      #   1. Fix the nursery's RF (an AP/mesh node nearer that room). At -35/-40 like
+      #      the others it would carry 3.3 Mbps under contention and all seven could
+      #      record from main. Costs nothing in quality.
+      #   2. Lower the nursery's main bitrate to ~1 Mbps on the camera, which big_room
+      #      proves a -60 dBm link sustains. Trades that camera's LIVE quality.
+      #   3. Six on main with the nursery on sub -- REJECTED. Six cameras recording
+      #      main 24/7 makes the channel permanently busy, which is the exact
+      #      condition that costs the nursery 40% of its packets. It would protect
+      #      the nursery's recording by degrading its live view, permanently.
+      #
+      # Sub-stream budget, MEASURED, and the cameras are not interchangeable:
+      #   big_room             (E1 Zoom)  256 kbps  ~2.8 GB/day
+      #   first_floor_stairway (E1 Zoom)  256 kbps  ~2.8 GB/day
+      #   kitchen              (E1 Pro)  1024 kbps ~11.1 GB/day   <-- 4x the others
+      # ~16.7 GB/day total; 3 days is ~50 GB against ~900 GB free. Verify with
+      # `df -h /media/frigate` after 24h rather than trusting this arithmetic.
       #
       # If it needs trimming, the levers in order of bang-per-edit:
       # `detections.retain.mode: motion` (stops holding dead air around events),
@@ -310,8 +334,6 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BIG_ROOM}:554/h264Preview_01_sub"
               roles:
                 - detect
-            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
-              roles:
                 - record
         detect:
           # MUST be set explicitly. Frigate 0.17 defaults detect.enabled to FALSE
@@ -442,8 +464,6 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_sub"
               roles:
                 - detect
-            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_FIRST_FLOOR_STAIRWAY}:554/h264Preview_01_main"
-              roles:
                 - record
         detect:
           # Frigate 0.17 defaults this to FALSE when absent — see the long note on
@@ -520,8 +540,6 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_KITCHEN}:554/h264Preview_01_sub"
               roles:
                 - detect
-            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_KITCHEN}:554/h264Preview_01_main"
-              roles:
                 - record
         detect:
           # Frigate 0.17 defaults this to FALSE when absent — see big_room.
@@ -579,8 +597,6 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_NURSERY}:554/h264Preview_01_sub"
               roles:
                 - detect
-            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_NURSERY}:554/h264Preview_01_main"
-              roles:
                 - record
         detect:
           # Frigate 0.17 defaults this to FALSE when absent — see big_room.
@@ -611,8 +627,6 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BASEMENT}:554/h264Preview_01_sub"
               roles:
                 - detect
-            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BASEMENT}:554/h264Preview_01_main"
-              roles:
                 - record
         detect:
           enabled: true
@@ -637,8 +651,6 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BEDROOM}:554/h264Preview_01_sub"
               roles:
                 - detect
-            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BEDROOM}:554/h264Preview_01_main"
-              roles:
                 - record
         detect:
           enabled: true
@@ -670,8 +682,6 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_GARAGE}:554/h264Preview_01_sub"
               roles:
                 - detect
-            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_GARAGE}:554/h264Preview_01_main"
-              roles:
                 - record
         detect:
           enabled: true
