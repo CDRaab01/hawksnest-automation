@@ -316,8 +316,9 @@ See [`README.md`](./README.md) for the fuller post-deploy/pairing walkthrough an
 `ring-mqtt` bridges Ring devices to MQTT and exposes **on-demand** live video over RTSP.
 It is **not** a Frigate/NVR source — Ring has no continuous local stream, and streaming
 continuously would suppress Ring's own motion/ding events. **Frigate is LIVE since
-2026-07-29** with seven Reolink cameras (sub stream → Frigate `detect`, main stream →
-Frigate 24/7 `record` *and* go2rtc live — recording moved off the sub stream 2026-08-24);
+2026-07-29** with seven Reolink cameras (sub stream → Frigate `detect` **and** 24/7
+`record`; main stream → go2rtc live only). Moving `record` to the main stream was tried
+2026-08-24 and reverted 2026-08-26 — see the frigate ConfigMap for the measurements;
 bring-up findings and the operating rules are in [plan.md](./plan.md).
 
 1. Ensure the **`ring` user** is in `kustomize/overlays/prod/secrets/mosquitto.passwd` and

@@ -52,8 +52,10 @@ ask rather than guessing — this controls physical door locks, so correctness m
 - **Cameras / Doorbell:** Existing Ring devices (cloud integration). *(Since 2026-07-29
   no longer the whole story: seven local Reolink cameras — big_room + first_floor_stairway
   [E1 Zoom], kitchen + nursery + basement + bedroom + garage [E1 Pro] — feed **Frigate**
-  (sub-stream detect, main-stream 24/7 record since 2026-08-24) and **go2rtc** (main-stream
-  live); Ring remains for the doorbell + outdoor/battery cams. Details: plan.md.)*
+  (sub-stream detect **and** 24/7 record) and **go2rtc** (main-stream live); Ring remains
+  for the doorbell + outdoor/battery cams. Main-stream recording was tried 2026-08-24 and
+  reverted 2026-08-26 — it never reached the running Frigate, and the nursery cannot hold a
+  main stream once the other cameras do. Details: plan.md + the frigate ConfigMap.)*
 
 ## V1 Scope (this deliverable)
 

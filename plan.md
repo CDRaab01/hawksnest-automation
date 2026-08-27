@@ -402,14 +402,19 @@ changes it silently declines (below).
                                   Hawksnest RECORDED + SEARCH
 ```
 
-**Live is go2rtc on the main stream; recorded is Frigate, which since 2026-08-24 opens
-BOTH streams — sub for `detect`, main for `record`. go2rtc and Frigate still never touch
-each other.** (Before that Frigate took only the sub stream and recorded it, which is why
-recorded playback was 10 fps and visibly choppy — the thing this split fixed.) Frigate
-opens its own connections to the camera rather than pulling from go2rtc, so a go2rtc
-restart can't punch a hole in the 24/7 timeline, and go2rtc's RTSP listener stays off.
-Cost: camera credentials appear in two secrets, and the per-camera RTSP session budget
-below is one higher than it used to be.
+**Live is go2rtc on the main stream; recorded is Frigate on the sub stream. They never
+touch each other.** Frigate opens its own connection to the camera rather than pulling
+from go2rtc, so a go2rtc restart can't punch a hole in the 24/7 timeline, and go2rtc's
+RTSP listener stays off. Cost: camera credentials appear in two secrets.
+
+Recorded playback is therefore the 10 fps detect stream, and looks it. Splitting `record`
+onto the main stream was tried (#64, 2026-08-24) and **reverted 2026-08-26** — it never
+reached the running Frigate (the seed initContainer is first-boot-only), and the nursery
+collapses from 3272 kbps to 236 kbps once the other cameras also stream main. The full
+measurements, the cause (signal x demand, not signal — big_room is fine at the same
+-60 dBm because it only asks for 937 kbps), and what would unblock it are in the record
+comment of `kustomize/base/frigate/configmap.yaml`. **Do not re-attempt this without
+first fixing the nursery's RF or lowering its main bitrate.**
 
 **Recorded playback goes through Home Assistant, not a direct Frigate proxy.** Every URL
 `Hawksnest/src/lib/cameraEvents.ts` already builds (`/api/frigate/vod/...`,
@@ -962,10 +967,14 @@ both Zooms.
    frigate/frigate-ui Services (5000 is never NodePort-exposed), and Frigate's authenticated
    UI on `:8971`.
 
-1. **RTSP session budget.** Reolink cameras allow only a handful of concurrent sessions. Since
-   2026-08-24 **Frigate holds two** (sub for `detect`, main for `record`), go2rtc holds the main,
-   and **each viewing phone takes another main** — so the idle baseline is three sessions per
-   camera rather than two, and the first viewer makes four. An
+1. **RTSP session budget.** Reolink cameras allow only a handful of concurrent sessions.
+   Frigate holds ONE per camera (the sub stream, carrying `detect` + `record`), go2rtc opens
+   the main only while someone is watching, and **each viewing phone takes another main** — so
+   the idle baseline is one session per camera and the first viewer makes two. (Verified
+   2026-08-26 by decoding `/proc/net/tcp` in both pods: exactly one ESTABLISHED :554 session
+   per camera from Frigate, none from go2rtc while idle.) The nursery served three concurrent
+   main streams plus its sub without complaint, so the cap is not the practical limit here —
+   airtime is; see the record comment in the frigate ConfigMap. An
    over-budget open is rejected by the camera, which the app treats as a fail-fast → go2rtc. That
    is the designed behaviour, but it means "live view got slower when two people watched at once"
    has a real cause. If it becomes common, point the phone at the sub stream instead.
