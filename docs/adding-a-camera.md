@@ -455,6 +455,34 @@ Current, as measured 2026-07-31:
 192.168.4.37/32   192.168.4.53/32   192.168.4.64/32
 ```
 
+> **CORRECTED 2026-08-29 — the advertised list had drifted badly, and re-measuring is now
+> mandatory before you touch it.** `tailscale debug prefs` actually reported:
+>
+> ```
+> 192.168.4.37/32  192.168.4.45/32  192.168.4.53/32  192.168.4.64/32  192.168.4.65/32
+> ```
+>
+> Cross-referenced against ARP and a port-554 sweep of the whole subnet:
+>
+> | IP | Reality |
+> |---|---|
+> | `.37`, `.53`, `.64` | cameras, correctly routed |
+> | `.45` | **no ARP entry at all** — a dead IP |
+> | `.65` | live host, **not a camera** (no port 554 open) |
+> | `.23`, `.30`, `.46`, `.62` | **cameras with no route at all** — including `nursery` |
+>
+> So four of seven cameras had no `/32`, which is precisely the failure this step warns
+> about: RTSP-direct is unreachable from the phone, Hawksnest's transport ladder silently
+> steps down to go2rtc, and the only symptom is live view feeling slower. It looks like
+> DHCP drift that the route list never caught up with — the `.45`/`.65` entries are most
+> likely cameras' *old* addresses.
+>
+> **Read the list with `tailscale debug prefs` and rebuild it from a measured camera
+> inventory — never from this document.** A ping sweep is not a reliable inventory either:
+> several cameras here do not answer ICMP, and `.40` was missed by two separate scans
+> before a batched port-554 sweep found it. Sweep port 554 in small batches, not 254
+> parallel jobs.
+
 ```powershell
 & "C:\Program Files\Tailscale\tailscale.exe" set --advertise-routes=192.168.4.37/32,192.168.4.53/32,192.168.4.64/32,<new1>/32,<new2>/32,<new3>/32,<new4>/32
 ```

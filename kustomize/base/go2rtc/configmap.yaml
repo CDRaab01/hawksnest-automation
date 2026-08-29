@@ -212,6 +212,20 @@ data:
         - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY}:554/h264Preview_01_main"
         - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY}:554/h264Preview_01_main#audio=opus"
       nursery_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY}:554/h264Preview_01_sub"
+      # `nursery_high` is a SECOND camera in the nursery, added 2026-08-29 — it does not
+      # replace `nursery`, and the two are independent streams on independent IPs.
+      #
+      # MIND THE RF HERE. `nursery` sits at -61 dBm and is the one camera measured to
+      # COLLAPSE under channel contention (3272 -> 236 kbps; see the `record:` comment
+      # in the Frigate seed, which is why main-stream recording is reverted). This entry
+      # adds a second camera to that same weak corner of the house. Live view is
+      # on-demand and the sub stream is ~213 kbps, so idle cost is nil — but if the
+      # nursery cameras start skipping frames, this is the first thing to suspect, and
+      # the fix is RF (an AP nearer that room), not config.
+      nursery_high:
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY_HIGH}:554/h264Preview_01_main"
+        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY_HIGH}:554/h264Preview_01_main#audio=opus"
+      nursery_high_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY_HIGH}:554/h264Preview_01_sub"
       basement:
         - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BASEMENT}:554/h264Preview_01_main"
         - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BASEMENT}:554/h264Preview_01_main#audio=opus"
