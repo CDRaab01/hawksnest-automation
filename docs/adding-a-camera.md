@@ -124,10 +124,16 @@ have run a full day and you can measure again, not on this table.
 > one, and `nursery_high` is the stronger radio in that room. The camera it can still break is
 > `nursery`, its roommate, which is the weakest link in the house.
 >
-> Two things that generalise from it: **a per-camera main-record deviation needs no camera-side
-> change at all** (SetEnc is only needed to *downgrade* to h264), and **HEVC recordings play back
-> on the phone but not necessarily in a browser** — ExoPlayer decodes HEVC, go2rtc's WebRTC tier
-> does not. Before re-attempting the fleet-wide version, read the `record:` comment in
+> **Updated 2026-08-30 — that camera now runs 4K h264, and getting there corrected two things
+> this runbook asserted.** First, **"4K forces h265" is per-model, not a fleet law**: it was
+> measured on the E1 Zoom and is false on the E1 Outdoor Pro, which ffprobes as
+> `h264, 3840, 2160, 20/1`. Re-probe a new model rather than assuming the 1440p downgrade is
+> required. Second, **HEVC on the WebRTC tier does not degrade — it CRASHES the Android app**:
+> libwebrtc null-derefs (`SIGSEGV` in `libjingle_peerconnection_so.so`), taking the process down
+> rather than showing no picture. Treat an HEVC main stream as a hard blocker for any camera the
+> app can reach, not a quality trade. And note the RTSP-direct tier does **not** save you from it
+> by default: `rtspUser`/`rtspPass` were never configured here, so every camera streams over
+> go2rtc/WebRTC. Before re-attempting the fleet-wide version, read the `record:` comment in
 > `configmap.yaml`, and remember a ConfigMap edit alone cannot change a running Frigate.
 
 **Update, 2026-07-31 — measured at 7 cameras.** Adding four moved detector inference from
