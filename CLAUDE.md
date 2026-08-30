@@ -57,8 +57,10 @@ ask rather than guessing — this controls physical door locks, so correctness m
   for the doorbell + outdoor/battery cams. Main-stream recording was tried fleet-wide
   2026-08-24 and reverted 2026-08-26 — it never reached the running Frigate, and the nursery
   cannot hold a main stream once the other cameras do. **`nursery_high` is a deliberate
-  exception from 2026-08-30**: it alone records from main (4K H.265, ~47 GB/day), so its
-  recordings play on the phone but not necessarily in a browser. Details: plan.md + the
+  exception from 2026-08-30**: it alone records from main (4K **H.264**, ~47 GB/day). It
+  shipped H.265, which crashed the Android app's WebRTC stack outright; re-encoding the
+  camera to 4K h264 fixed that — and note this model DOES support 4K h264, contradicting
+  the E1 Zoom-derived "4K forces h265" rule. Details: plan.md + the
   frigate ConfigMap.)*
 
 ## V1 Scope (this deliverable)

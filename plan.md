@@ -342,6 +342,16 @@ on every event. Pick one of the gemma-4 ids.
 2560×1440.** That is a downgrade, made knowingly, and it is reversible. Recording this so the
 choice doesn't calcify into an unexamined default.
 
+> **SCOPE CORRECTION, 2026-08-30.** This whole section is about the **E1 Zoom**, and the
+> "4K is H.265-only" claim was measured there. It is **not a fleet law** — the E1 Outdoor Pro
+> (`nursery_high`) runs 4K **h264** today, ffprobe-verified: `h264, 3840, 2160, 20/1`. So on a
+> new model, re-probe rather than assuming the downgrade is required. Two things measured on
+> the way that sharpen the trade below: libwebrtc does not merely fail on HEVC, it **null-derefs
+> and kills the app** (SIGSEGV, 2026-08-29); and the RTSP-direct tier that would sidestep HEVC
+> **has never been configured on the phone** — `rtspUser`/`rtspPass` are blank, so every camera
+> streams over go2rtc/WebRTC today, making WebRTC codec support the binding constraint rather
+> than a fallback concern.
+
 **Why it was downgraded:** on this camera 4K is **H.265-only**, and browser WebRTC support for
 HEVC is absent-to-marginal (Chrome/Edge especially). 4K therefore meant either no web live view
 at all, or go2rtc transcoding 4K HEVC on the same CPU as Frigate's detector — not viable, and
@@ -422,9 +432,12 @@ revert's blocker is seven simultaneous main streams (~24 Mbps of contention), an
 (~4.4 Mbps) from the stronger of the two radios in that room. A `nursery` baseline was captured
 immediately before the change so a regression is provable rather than remembered. Two facts from
 it that generalise: a per-camera main-record split needs **no camera-side change** (SetEnc is only
-needed to *downgrade* to h264), and it makes that camera's **recordings HEVC** — fine on the phone
-via ExoPlayer, not necessarily in a browser, which is the same client split that already applies
-to its live view.
+needed to *downgrade* to h264), and it originally made that camera's recordings **HEVC**, which
+turned out to be worse than a compatibility annoyance: libwebrtc **null-derefs on HEVC**, so going
+live on it killed the Android app (SIGSEGV in `libjingle_peerconnection_so.so`, 2026-08-29). Fixed
+2026-08-30 by re-encoding the camera to **4K h264** — which this model supports, unlike the E1
+Zooms that the "4K forces h265" rule below was measured on. Recordings and live view are h264
+everywhere now, with no client split at all.
 
 **Recorded playback goes through Home Assistant, not a direct Frigate proxy.** Every URL
 `Hawksnest/src/lib/cameraEvents.ts` already builds (`/api/frigate/vod/...`,

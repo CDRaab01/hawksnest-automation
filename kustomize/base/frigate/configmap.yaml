@@ -645,20 +645,40 @@ data:
       # for it is below — read it before copying this block to another camera,
       # because the reasoning is camera-specific and does NOT generalise.
       #
-      # It stays 4K H.265 rather than being SetEnc'd to 2560x1440/h264 like both
-      # E1 Zooms were on 2026-07-29. That means live view and recorded playback
-      # are both HEVC, which splits by client:
-      #   phone  — RTSP-direct, ExoPlayer decodes HEVC natively        -> 4K works
-      #   web    — browsers can't play RTSP, so go2rtc WebRTC is the
-      #            only transport, and that tier breaks on HEVC        -> no live
-      # See ReolinkRtsp.kt in the Hawksnest repo, which states this directly.
-      # A third (ext) stream that could have served h264 to the web does NOT
-      # exist on this model — h264Preview_01_ext / h265Preview_01_ext /
-      # Preview_01_ext all 404 (probed 2026-08-30).
+      # 4K H.264 (3840x2160 @20). It is NOT SetEnc'd down to 2560x1440 like both
+      # E1 Zooms were on 2026-07-29, because it does not have to be:
       #
-      # NOTE THIS NEEDS NO CAMERA CHANGE AT ALL. SetEnc was only ever required to
-      # DOWNGRADE to h264; the camera already ships 4K/h265. So this deviation is
-      # pure Frigate config, and reverting it is pure Frigate config too.
+      # **THIS MODEL SUPPORTS 4K H.264, AND THE FLEET RULE SAYS IT CANNOT.**
+      # plan.md and the go2rtc seed both state that 4K forces h265 and that a
+      # 4K+h264 SetEnc returns success while silently keeping h265. That was
+      # MEASURED ON THE E1 ZOOM and is true there. It is FALSE on the E1 Outdoor
+      # Pro. Verified 2026-08-30 with ffprobe, not with the API's 200:
+      #     h264Preview_01_main -> h264, 3840, 2160, 20/1
+      # Treat "4K forces h265" as a per-model fact to re-probe, not a fleet law.
+      #
+      # THIS CAMERA SHIPPED H.265 AND THAT CRASHED THE ANDROID APP. Going live on
+      # it killed the process outright, 2026-08-29 22:20 EDT:
+      #     Fatal signal 11 (SIGSEGV), fault addr 0x0
+      #     #00 libjingle_peerconnection_so.so    <- WebRTC native lib
+      # libwebrtc null-derefs on HEVC instead of failing negotiation cleanly. Live
+      # view was parked on the sub stream as a stopgap; re-encoding the camera to
+      # h264 on 2026-08-30 removed the cause, and that stopgap is now reverted.
+      #
+      # WHAT THE h264 SWITCH BOUGHT, none of which the h265 version had:
+      #   - live view works on EVERY client (phone + web) at full 4K over WebRTC,
+      #     instead of 640x360 on a workaround
+      #   - recordings play in a BROWSER, not just on the phone via ExoPlayer
+      #   - no dependence on the RTSP-direct tier, which turned out never to have
+      #     been configured on the phone at all (rtspUser/rtspPass are blank, so
+      #     every camera in the fleet streams over go2rtc/WebRTC today)
+      # Cost: h264 is ~half as efficient as h265, so the same ~4096 kbps carries
+      # less detail. Measured bitrate barely moved (4370 -> 4377 kbps), so the
+      # disk figures below are unchanged.
+      #
+      # NOTE THIS NEEDS NO FRIGATE-SIDE CHANGE AT ALL. SetEnc was only ever required to
+      # The record split is pure Frigate config either way; what changed on
+      # 2026-08-30 was the camera's ENCODER, not this block. Reverting the 4K
+      # recording is still pure Frigate config.
       #
       # MEASURED BEFORE COMMITTING (2026-08-30, /h264Preview_01_main — the `h264`
       # in that path is a label, not a promise; it serves HEVC):
@@ -698,6 +718,9 @@ data:
       # less headroom than it did, and it is the number that would move FIRST if
       # this ever does go bad. Re-measure it before adding anything else to that
       # room — a third camera, or nursery's own main stream going to 24/7 record.
+      #
+      # (The HEVC-playback caveat that used to sit here is GONE as of 2026-08-30 —
+      # recordings are h264 and play anywhere.)
       #
       # IF YOU ARE HERE BECAUSE SOMETHING BROKE: check `nursery`, not this camera.
       # Non-zero skipped_fps or a collapsed bitrate on .30 means this experiment
