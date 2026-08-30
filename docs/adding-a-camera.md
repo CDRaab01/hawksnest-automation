@@ -113,11 +113,22 @@ Measured on the live cluster, 2026-07-31, with three cameras running:
 you want longer retention than 3 days, the room is there — but change it *after* the new cameras
 have run a full day and you can measure again, not on this table.
 
-> **Main-stream recording was tried and reverted (2026-08-24 → 2026-08-26).** It would have cost
-> ~180 GB/day, ~16x this table. It is not in effect and these sub-stream figures are current.
-> Before re-attempting it, read the `record:` comment in `configmap.yaml`: the nursery cannot
-> hold a main stream once the other cameras also do, and a ConfigMap edit alone cannot change a
-> running Frigate anyway.
+> **Main-stream recording was tried FLEET-WIDE and reverted (2026-08-24 → 2026-08-26).** It would
+> have cost ~180 GB/day, ~16x this table. The fleet-wide version is not in effect and these
+> sub-stream figures remain current for seven of the eight cameras.
+>
+> **One camera deviates as of 2026-08-30: `nursery_high` records from main** (4K H.265,
+> 4370 kbps measured → ~47 GB/day → ~142 GB at 3-day retention). Read the deviation block on that
+> camera in `configmap.yaml` before copying it — the case for it is camera-specific. In short:
+> the August failure was ~24 Mbps of contention from seven main streams, this is ~4.4 Mbps from
+> one, and `nursery_high` is the stronger radio in that room. The camera it can still break is
+> `nursery`, its roommate, which is the weakest link in the house.
+>
+> Two things that generalise from it: **a per-camera main-record deviation needs no camera-side
+> change at all** (SetEnc is only needed to *downgrade* to h264), and **HEVC recordings play back
+> on the phone but not necessarily in a browser** — ExoPlayer decodes HEVC, go2rtc's WebRTC tier
+> does not. Before re-attempting the fleet-wide version, read the `record:` comment in
+> `configmap.yaml`, and remember a ConfigMap edit alone cannot change a running Frigate.
 
 **Update, 2026-07-31 — measured at 7 cameras.** Adding four moved detector inference from
 **1.64 ms → 1.74 ms**, and `skipped_fps` stayed at 0 on every camera with `camera_fps` ≈ 5 and
