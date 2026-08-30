@@ -680,6 +680,25 @@ data:
       #   nursery      (.30)  113 kbps   0% loss   RTT avg 8.3 ms   signal 2
       #   nursery_high (.40)  109 kbps   0% loss   RTT avg 12.6 ms  signal 3
       #
+      # MEASURED AFTER, 10 minutes in (this is the outcome the baseline existed for):
+      #   nursery MAIN stream   3100 kbps   <-- HOLDING. 3272 alone in August, 236
+      #                                         when it collapsed. Its live view,
+      #                                         the thing this could have killed,
+      #                                         is at ~95% of its solo baseline.
+      #   nursery sub           116 kbps    (113 before — unchanged)
+      #   skipped_fps           0 on all 8 cameras
+      #   4K on disk            ~32 MB/min segments = ~46 GB/day, matching the
+      #                         47.2 GB/day predicted from the bitrate probe
+      #
+      # ONE HONEST CAVEAT, recorded because it would otherwise be forgotten: the
+      # ICMP path to `nursery` DID degrade — 0% loss / 8.3 ms RTT before, 14% loss /
+      # 44.7 ms avg / 421 ms max after, over a 200-packet sample, while big_room as
+      # a control sat at 2%. Every functional metric is fine, and APs deprioritise
+      # ICMP, so this overstates the impact. But it is real, it means the room has
+      # less headroom than it did, and it is the number that would move FIRST if
+      # this ever does go bad. Re-measure it before adding anything else to that
+      # room — a third camera, or nursery's own main stream going to 24/7 record.
+      #
       # IF YOU ARE HERE BECAUSE SOMETHING BROKE: check `nursery`, not this camera.
       # Non-zero skipped_fps or a collapsed bitrate on .30 means this experiment
       # failed — revert to a single sub input with roles [detect, record] and
