@@ -54,9 +54,12 @@ ask rather than guessing — this controls physical door locks, so correctness m
   [E1 Zoom], kitchen + nursery + basement + bedroom + garage [E1 Pro], nursery_high
   [E1 Outdoor Pro, added 2026-08-29] — feed **Frigate**
   (sub-stream detect **and** 24/7 record) and **go2rtc** (main-stream live); Ring remains
-  for the doorbell + outdoor/battery cams. Main-stream recording was tried 2026-08-24 and
-  reverted 2026-08-26 — it never reached the running Frigate, and the nursery cannot hold a
-  main stream once the other cameras do. Details: plan.md + the frigate ConfigMap.)*
+  for the doorbell + outdoor/battery cams. Main-stream recording was tried fleet-wide
+  2026-08-24 and reverted 2026-08-26 — it never reached the running Frigate, and the nursery
+  cannot hold a main stream once the other cameras do. **`nursery_high` is a deliberate
+  exception from 2026-08-30**: it alone records from main (4K H.265, ~47 GB/day), so its
+  recordings play on the phone but not necessarily in a browser. Details: plan.md + the
+  frigate ConfigMap.)*
 
 ## V1 Scope (this deliverable)
 

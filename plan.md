@@ -413,8 +413,18 @@ reached the running Frigate (the seed initContainer is first-boot-only), and the
 collapses from 3272 kbps to 236 kbps once the other cameras also stream main. The full
 measurements, the cause (signal x demand, not signal — big_room is fine at the same
 -60 dBm because it only asks for 937 kbps), and what would unblock it are in the record
-comment of `kustomize/base/frigate/configmap.yaml`. **Do not re-attempt this without
-first fixing the nursery's RF or lowering its main bitrate.**
+comment of `kustomize/base/frigate/configmap.yaml`. **Do not re-attempt this FLEET-WIDE
+without first fixing the nursery's RF or lowering its main bitrate.**
+
+**One camera now deviates: `nursery_high` records from main as of 2026-08-30** (4K H.265,
+4370 kbps measured → ~47 GB/day). That is not a partial rollback of the revert above — the
+revert's blocker is seven simultaneous main streams (~24 Mbps of contention), and this is one
+(~4.4 Mbps) from the stronger of the two radios in that room. A `nursery` baseline was captured
+immediately before the change so a regression is provable rather than remembered. Two facts from
+it that generalise: a per-camera main-record split needs **no camera-side change** (SetEnc is only
+needed to *downgrade* to h264), and it makes that camera's **recordings HEVC** — fine on the phone
+via ExoPlayer, not necessarily in a browser, which is the same client split that already applies
+to its live view.
 
 **Recorded playback goes through Home Assistant, not a direct Frigate proxy.** Every URL
 `Hawksnest/src/lib/cameraEvents.ts` already builds (`/api/frigate/vod/...`,

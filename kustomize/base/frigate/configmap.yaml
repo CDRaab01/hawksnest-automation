@@ -143,8 +143,16 @@ data:
 
     record:
       enabled: true
-      # 24/7 continuous, recorded from the SUB stream (roles [detect, record] on one
-      # input). This is what actually runs, and this comment says so on purpose.
+      # 24/7 continuous. SEVEN of the eight cameras record from the SUB stream
+      # (roles [detect, record] on one input). This is what actually runs, and this
+      # comment says so on purpose.
+      #
+      # ONE EXCEPTION AS OF 2026-08-30: `nursery_high` records from its MAIN stream
+      # (4K H.265, ~4370 kbps measured, ~47 GB/day). That is a deliberate, isolated
+      # deviation, not the start of rolling #64 back out to the fleet — the full
+      # case, the measured baseline and the revert instructions live on that camera's
+      # block below. The fleet-wide version stays reverted for the reasons under
+      # point 2 here, and those reasons are about SEVEN main streams, not one.
       #
       # REVERTED 2026-08-26. #64 moved `record` to its own main-stream input to fix
       # visibly choppy recorded playback. That change was correct about the problem
@@ -631,26 +639,66 @@ data:
       # bounding box — no error, just wrong boxes. This is why the runbook says probe
       # every camera individually.
       #
-      # MAIN IS H.265/4K, which WebRTC largely cannot play — the same condition both
-      # E1 Zooms shipped with (fixed 2026-07-29 via SetEnc to 2560x1440/h264). It does
-      # NOT affect this block: Frigate reads the SUB stream for both detect and record.
-      # It affects go2rtc's High-quality live view only. Pending an admin-level SetEnc;
-      # note a 4K+h264 SetEnc returns success and silently stays h265, so the fix is to
-      # drop to 2560x1440 and re-verify with ffprobe, never trust the 200.
+      # ===================== DELIBERATE FLEET DEVIATION =====================
+      # THIS IS THE ONLY CAMERA THAT RECORDS FROM ITS MAIN STREAM (2026-08-30).
+      # Every other camera records from sub. Chosen knowingly, and the whole case
+      # for it is below — read it before copying this block to another camera,
+      # because the reasoning is camera-specific and does NOT generalise.
       #
-      # RF WARNING: `nursery` is the one camera measured to collapse under channel
-      # contention (3272 -> 236 kbps; see the `record:` comment above). This adds a
-      # second camera to that same weak corner. At 256 kbps of sub stream the steady
-      # cost is small, but if either nursery camera starts skipping frames, suspect RF
-      # first — the fix is an AP nearer that room, not config.
+      # It stays 4K H.265 rather than being SetEnc'd to 2560x1440/h264 like both
+      # E1 Zooms were on 2026-07-29. That means live view and recorded playback
+      # are both HEVC, which splits by client:
+      #   phone  — RTSP-direct, ExoPlayer decodes HEVC natively        -> 4K works
+      #   web    — browsers can't play RTSP, so go2rtc WebRTC is the
+      #            only transport, and that tier breaks on HEVC        -> no live
+      # See ReolinkRtsp.kt in the Hawksnest repo, which states this directly.
+      # A third (ext) stream that could have served h264 to the web does NOT
+      # exist on this model — h264Preview_01_ext / h265Preview_01_ext /
+      # Preview_01_ext all 404 (probed 2026-08-30).
+      #
+      # NOTE THIS NEEDS NO CAMERA CHANGE AT ALL. SetEnc was only ever required to
+      # DOWNGRADE to h264; the camera already ships 4K/h265. So this deviation is
+      # pure Frigate config, and reverting it is pure Frigate config too.
+      #
+      # MEASURED BEFORE COMMITTING (2026-08-30, /h264Preview_01_main — the `h264`
+      # in that path is a label, not a promise; it serves HEVC):
+      #   -c copy -> mp4   PASSES, hevc + aac 16kHz mono, MP4-legal
+      #   achieved         4370 kbps  ->  47.2 GB/day  ->  142 GB at 3-day
+      #   volume           2.8 TB free, so disk is not the constraint
+      # Recording is -c:v copy, so this costs disk and NIC, NOT detector CPU.
+      #
+      # THE REAL RISK IS NOT THIS CAMERA — IT IS `nursery`, ITS ROOMMATE.
+      # The fleet tried main-stream recording on ALL SEVEN cameras 2026-08-24 and
+      # reverted it 2026-08-26 because `nursery` collapsed under the contention
+      # (3272 -> 236 kbps, 40% packet loss). That camera is the weakest link in
+      # the house and it shares this room. The reason this is worth trying anyway
+      # is scale: that test put ~24 Mbps on the channel, this puts ~4.4 Mbps, and
+      # `nursery_high` is the stronger radio of the two (signal 3 vs 2).
+      #
+      # BASELINE TAKEN IMMEDIATELY BEFORE THE CHANGE, so a regression is provable
+      # rather than remembered (both sub streams, 20s samples, 00:47Z):
+      #   nursery      (.30)  113 kbps   0% loss   RTT avg 8.3 ms   signal 2
+      #   nursery_high (.40)  109 kbps   0% loss   RTT avg 12.6 ms  signal 3
+      #
+      # IF YOU ARE HERE BECAUSE SOMETHING BROKE: check `nursery`, not this camera.
+      # Non-zero skipped_fps or a collapsed bitrate on .30 means this experiment
+      # failed — revert to a single sub input with roles [detect, record] and
+      # restart. The 30-day alert/detection retention is the other thing to watch,
+      # and it only shows up after day 3: a nursery has near-constant motion, so
+      # the event pile grows faster here than anywhere else in the house.
+      # ======================================================================
       nursery_high:
         ffmpeg:
           inputs:
-            # SUB stream, read directly rather than through go2rtc — same independent
-            # failure domains as every other camera here. No input_args on purpose.
+            # SUB -> detect. Detection wants geometry matching `detect:` below, not
+            # pixels; pointing it at 4K would cost decode CPU for no accuracy.
+            # No input_args on purpose, same as every other camera here.
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_NURSERY_HIGH}:554/h264Preview_01_sub"
               roles:
                 - detect
+            # MAIN -> record. 4K HEVC, muxed with -c copy (verified above).
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_NURSERY_HIGH}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # Frigate 0.17 defaults this to FALSE when absent — see big_room.
