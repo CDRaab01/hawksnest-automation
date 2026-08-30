@@ -660,6 +660,24 @@ data:
           height: 360
           # Same 10-sends / 5-detects split as every other camera here.
           fps: 5
+        motion:
+          # Mask the OSD TIMESTAMP, same reason as big_room — the clock repaints
+          # every second and Frigate reads that as motion forever, in an empty room.
+          #
+          # CONFIRMED VISUALLY BEFORE MASKING, 2026-08-30, not assumed from the other
+          # cameras: /api/nursery_high/latest.jpg?motion=1 drew a motion box squarely
+          # on the SECONDS DIGITS with the room empty, and detection_fps sat at 4.7.
+          # The timestamp occupies roughly x 205-432, y 8-25 of the 640x360 detect
+          # frame; the box below spans x 166-461, y 5-40, clearing it on all sides.
+          #
+          # Reuses big_room's exact normalised box. That is deliberate and is the
+          # same call `kitchen` made: this camera is an E1 Outdoor Pro, a different
+          # model, but its detect frame is 640x360 — identical to the Zooms — and its
+          # OSD sits in the same relative place. Re-check the debug frame if the OSD
+          # position or the detect resolution ever changes; a mask that no longer
+          # covers the clock silently restores the old behaviour with no error.
+          mask:
+            - 0.26,0.015,0.72,0.015,0.72,0.11,0.26,0.11
         # Retention: inherits the global 3 days, matching the other nursery camera.
         objects:
           track:
