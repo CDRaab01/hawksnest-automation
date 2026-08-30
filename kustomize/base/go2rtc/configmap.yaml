@@ -222,9 +222,37 @@ data:
       # on-demand and the sub stream is ~213 kbps, so idle cost is nil — but if the
       # nursery cameras start skipping frames, this is the first thing to suspect, and
       # the fix is RF (an AP nearer that room), not config.
+      # POINTS AT THE **SUB** STREAM, UNLIKE EVERY OTHER CAMERA HERE. Deliberate.
+      #
+      # THIS CRASHED THE ANDROID APP, 2026-08-29 22:20 EDT. Not "no picture" —
+      # a hard native SIGSEGV that killed the process:
+      #   Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR), fault addr 0x0
+      #   #00 libjingle_peerconnection_so.so   <- WebRTC's native lib
+      #   Cause: null pointer dereference, thread "worker_thread"
+      #
+      # `nursery_high` is the ONLY H.265 source in the fleet (E1 Outdoor Pro, 4K
+      # main). Every other camera plays over this exact WebRTC path daily. Handed
+      # HEVC, libwebrtc null-derefs rather than failing negotiation cleanly, so the
+      # documented "WebRTC largely cannot play HEVC" turns out to understate it:
+      # it does not degrade, it takes the app down.
+      #
+      # Sourcing live view from the sub stream (h264 640x360) is what makes that
+      # unreachable. What this does NOT give up:
+      #   - Frigate still records this camera in 4K. It reads the camera directly
+      #     and never goes through go2rtc.
+      #   - The phone's RTSP-direct tier still gets 4K HEVC, for the same reason —
+      #     it talks to the camera, not to go2rtc. ExoPlayer decodes HEVC fine.
+      # So the cost is confined to the go2rtc/WebRTC tier: web live view, and the
+      # phone whenever it falls back. Those get 640x360 instead of a crash.
+      #
+      # High and Low therefore resolve to the same stream on this camera until the
+      # main stream is h264. The two ways out, neither free: SetEnc the camera to
+      # 2560x1440/h264 (needs admin, costs the 4K this deviation exists for), or
+      # transcode HEVC->h264 in go2rtc (rejected at 1440p for the Zooms; at 4K it
+      # puts decode+encode on the same CPU as Frigate's detector).
       nursery_high:
-        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY_HIGH}:554/h264Preview_01_main"
-        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY_HIGH}:554/h264Preview_01_main#audio=opus"
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY_HIGH}:554/h264Preview_01_sub"
+        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY_HIGH}:554/h264Preview_01_sub#audio=opus"
       nursery_high_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_NURSERY_HIGH}:554/h264Preview_01_sub"
       basement:
         - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_BASEMENT}:554/h264Preview_01_main"
