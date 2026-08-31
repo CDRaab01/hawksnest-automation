@@ -316,6 +316,48 @@ data:
       # model inside LM Studio instead — that is server-side and Frigate cannot
       # rewrite it.
 
+    # A LOCAL MobileNetV2 that answers "cat or dog?" after the detector has already
+    # found the animal. It does NOT correct `label` — it can't; it writes `sub_label`.
+    # Use sub_label, not label, in any automation that cares which animal it is.
+    #
+    # WHY THIS AND NOT A BIGGER DETECTOR: measured 2026-08-31 on 284 blind-graded
+    # events. The detector's `dog` label is right 49.0% of the time and `cat` 63.2%
+    # — but `person` is right 98.9%, and the detector MISSED ZERO of 166 pet events.
+    # It finds the animal and then names it with a coin. Exporting YOLOv9-s @ 320 and
+    # rerunning the same frames scored 71.8% vs SSDLite's 70.1% overall and was WORSE
+    # on the actual complaint (62.7% vs 64.5% on cat-vs-dog), and worse still weighted
+    # for real traffic (88.7% vs 93.5%), because person is 87.7% of all events. A
+    # different detector is not the fix. A second opinion on the crop is.
+    #
+    # SCOPED TO BOTH LABELS ON PURPOSE. If it only ran on `cat`, a cat misread as a
+    # dog would never reach it. Listing both means the classifier sees the crop
+    # whichever way the detector flipped, which covers 96.3% of real pet events.
+    #
+    # The `none` class is not padding: 26 of the 191 seeded crops are PEOPLE the
+    # detector called a pet. Without them the model has no way to say "not an animal"
+    # and would confidently name one.
+    #
+    # Assignment needs BOTH `threshold` and consensus: >=3 attempts with 60% agreeing
+    # (frigate/data_processing/real_time/custom_classification.py). Short events may
+    # get no sub_label at all — that is the design, not a fault.
+    #
+    # SCHEMA VERIFIED against the LIVE 0.17.2 instance via /api/config/schema.json,
+    # not the docs. Every block here is `additionalProperties: false`, so one stray
+    # key boots the whole NVR into safe mode with all cameras stopped — this is the
+    # exact trap `genai.runtime_options` fell into on 2026-07-30. Re-verify on upgrade.
+    classification:
+      custom:
+        pets:
+          # Frigate uses this KEY as the on-disk folder name, so the training set
+          # lives at clips/pets/dataset/{cat,dog,none}/ and the staging pile of
+          # recent attempts at clips/pets/train/. Renaming the key orphans the data.
+          threshold: 0.8
+          object_config:
+            objects:
+              - dog
+              - cat
+            classification_type: sub_label
+
     cameras:
       # Name must match the go2rtc stream, the HA entity object id and
       # Hawksnest's overrides.ts exactly — `cameraNameOf()` is
@@ -772,8 +814,39 @@ data:
         objects:
           track:
             - person
-            - dog
-            - cat
+            # NO dog/cat ON THIS CAMERA, and that is MEASURED, not squeamishness.
+            #
+            # This is the ceiling-mounted camera. From directly overhead an adult
+            # leaning into the crib presents a wide, low, four-cornered box that is
+            # geometrically a quadruped, and the detector says so. Graded blind over
+            # 32 sampled events (2026-08-31, harness in OPERATIONS.md):
+            #   - 19 of the 23 `dog` events here were PEOPLE. Only 4 were the dog,
+            #     and not one was a cat.
+            #   - This single camera produced 27% of every misclassification across
+            #     the whole system, and scored 37.5% accuracy against 60-100% elsewhere.
+            #
+            # Everything cheaper was tried against the data first and does NOT work:
+            #   - `threshold`/`min_score`: people-called-dog score 0.74-0.99, real pets
+            #     0.74-0.90. Completely overlapping — a threshold kills the real dogs
+            #     FIRST. There is no cut point.
+            #   - `min_area`/`max_area`: people 3519-40812 px2, real pets 3286-15984 px2.
+            #     Nested, not separated.
+            #   - `min_ratio`/`max_ratio`: people 0.63-1.35 w/h, real pets 0.68-1.22.
+            #     Also nested. From overhead a bending person IS the shape of a dog.
+            #
+            # Dropping the labels is safe because the person is not lost with them:
+            # 17 of those 19 events had a concurrent `person` event on this same
+            # camera within +/-15s, so the human is already tracked independently.
+            # Both labels go, not just `dog` — `cat` fires once per ~3 days here and
+            # leaving it would just hand it the person-shaped crops that `dog` was
+            # catching.
+            #
+            # The cost is ~4 real dog events per 3 days on this camera, and it is
+            # paid twice over by `nursery`, which watches the same room from the wall,
+            # still tracks dog/cat, and caught 23 dog events in the same sample.
+            #
+            # Re-check this if the camera is ever re-aimed off the overhead angle,
+            # because the overhead angle is the entire reason.
           # Same one-sentence prompt as big_room — see the anchor there.
           genai: *person_genai
 
