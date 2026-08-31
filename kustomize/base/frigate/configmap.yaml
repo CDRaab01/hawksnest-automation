@@ -855,3 +855,42 @@ data:
             - dog
             - cat
           genai: *person_genai
+
+      front_door_reolink:
+        # Reolink Video Doorbell WiFi (D340W), added 2026-08-30 — the first DOORBELL in
+        # the fleet; every other entry is a wall camera.
+        #
+        # TEMPORARY SLUG, deliberately not `front_door`. The retired Ring doorbell's
+        # ring-mqtt entities still HOLD the `front_door` slugs (they are unavailable but
+        # registered, and a registered entity keeps its id), so taking that name now
+        # would force these entities onto `_2`/`_3` suffixes — the collision that
+        # mis-bound the basement/bedroom tiles. Rename only after those are deleted.
+        ffmpeg:
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_FRONT_DOOR_REOLINK}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          enabled: true
+          # VERIFIED 192.168.4.74, 2026-08-30, by ffprobe AND the camera's own GetEnc,
+          # which agreed: sub h264 640x480 @10, High profile, 256 kbps, gop 4.
+          #
+          # 640x480 is 4:3 and is NOT a typo — every other Reolink here is 16:9 (640x360
+          # Zooms/Outdoor Pro, 896x512 Pros). Copying any of them silently misplaces
+          # every bounding box rather than erroring. Do not "correct" this to 360.
+          #
+          # RTSP over UDP HANGS on this camera — a manual ffprobe never returns and never
+          # errors. Use `-rtsp_transport tcp`. Frigate's 0.17 preset already passes it.
+          width: 640
+          height: 480
+          fps: 5
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          genai: *person_genai
+        # NO motion mask, and that is MEASURED not deferred: detection_fps sits at 0.1 on
+        # this camera, against 0.0-0.1 on the masked wall cameras. The D340W paints no
+        # repainting OSD clock, so there is nothing for a mask to suppress.
