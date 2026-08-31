@@ -769,7 +769,11 @@ kubectl -n home-automation exec deploy/mariadb -- sh -c \
    \"SELECT COUNT(*) FROM states WHERE last_updated_ts > UNIX_TIMESTAMP() - 3600;\""
 ```
 
-### 8. Hawksnest — usually nothing
+### 8. Hawksnest — usually nothing (BUT NOT FOR A DOORBELL)
+
+> **If the device is a doorbell, this heading is wrong** — the press sensor needs app-side
+> support and HA-side naming care. See [Doorbells are a different animal](#doorbells-are-a-different-animal)
+> before you assume there is nothing to do.
 
 Cameras are discovered from HA. Two things can need attention:
 
@@ -828,3 +832,99 @@ stream. Re-run ffprobe; do not assume the model matches its siblings.
 
 **Everything looks right but the new camera never appears:** you edited the Frigate ConfigMap and
 not the live config. Run the drift check.
+
+
+---
+
+## Doorbells are a different animal
+
+Written 2026-08-30 from the **Reolink Video Doorbell WiFi (D340W)** rollout — the first doorbell
+on this path. Everything above still applies; these are the parts that bit, in order.
+
+### The sub stream is 4:3, and no sibling's numbers transfer
+
+`640x480 @10` h264, verified by ffprobe **and** `GetEnc`. Every other Reolink here is 16:9
+(`640x360` Zooms, `896x512` Pros). The runbook already says not to copy geometry between models;
+a doorbell makes it concrete, because the aspect ratio itself differs. Both streams carry
+**AAC 16 kHz mono**.
+
+### RTSP over UDP hangs — ffprobe never returns
+
+A bare `ffprobe` against this camera produces no output and no error; it just blocks until you
+kill it. It is not a credential problem and not a reachability problem — port 554 answers fine.
+**Use `-rtsp_transport tcp`** for any manual probe:
+
+```bash
+ffprobe -v error -rtsp_transport tcp -rw_timeout 20000000 -show_entries stream=... "rtsp://..."
+```
+
+Frigate's own 0.17 preset already passes `-rtsp_transport tcp`, and go2rtc negotiates its own
+transport, so **only manual probing is affected**. Budget for this: it cost a 3-minute timeout
+before the cause was obvious.
+
+### Two different accounts, and the split is not optional
+
+- **RTSP (go2rtc + Frigate)** uses the shared `frigate` **guest** account, as for every camera.
+- **HA's Reolink integration requires `admin`.** All nine reolink config entries on this
+  instance use `admin`. The guest account will not work for it.
+
+You need the integration because **Frigate cannot see a doorbell press**. The button is
+`binary_sensor.<base>_visitor`, published only by the official Reolink integration. Frigate gives
+you video, motion and objects; it has no concept of a ring.
+
+### The doubled-slug trap when you rename
+
+The Reolink integration names entities `<host device>_<channel device>_<entity>`. Renaming only
+the *channel* device to match the Frigate slug produces:
+
+```
+binary_sensor.front_door_front_door_reolink_visitor
+```
+
+because the host device is still called "Front door". Hawksnest resolves cameras by base slug, so
+that binds to nothing and the doorbell silently rings nothing. **Fix the entity id directly**
+(Settings -> Entities -> the entity -> ⚙ -> Entity ID), not the device name:
+
+```
+binary_sensor.front_door_reolink_visitor
+```
+
+Then disable the integration's leftover `camera.*` entity (`..._fluent`) as step 7.2 says — on a
+doorbell it survives the usual sweep because its name is doubled too.
+
+### A doorbell may need NO motion mask
+
+Step 3 defers masks and warns `detection_fps` will sit at ~4.5-5 until the OSD clock is masked.
+**Measured on the D340W: `detection_fps` 0.1**, against 0.0-0.1 on the masked wall cameras. This
+doorbell paints no repainting clock, so there is nothing to mask. Measure before drawing one.
+
+### `yaml.safe_dump` will silently gut the live config
+
+Editing `/config/config.yml` by loading it with PyYAML and dumping it back **strips every
+comment**: 38 KB -> 6 KB on this instance, with all the trap documentation gone. The file still
+validates and Frigate still runs, so nothing tells you. **Insert new camera blocks as text**, and
+copy any shared anchor content (the genai block) out of the parsed tree so the prompt cannot
+drift:
+
+```python
+objs = yaml.safe_dump(parsed['cameras']['garage']['objects'], sort_keys=False)
+```
+
+Check the byte count after staging. A big drop means you round-tripped it.
+
+### Retiring the Ring doorbell: check WHICH "Front Door" device
+
+`ring-mqtt` publishes **two** devices whose entities both start `front_door` on this instance:
+
+| device | model | entities | status |
+|---|---|---|---|
+| `8543dfb1-…` | **Contact Sensor** | `binary_sensor.front_door`, `_tamper`, `select.*_bypass_mode`, `_chirp_tone`, battery/info | **LIVE — part of the alarm** |
+| `387c76abb2e9` | **Doorbell Pro** | `_ding`, `_motion`, `camera.front_door_snapshot`, event/live-stream switches, … | retired |
+
+Deleting by entity-id prefix would take out an armed contact sensor. **Group by `device_id`
+first** (`core/device_registry` + `core/entity_registry`) and delete only the doorbell's.
+
+Note also that **disabling is not enough if you intend to reuse the slug** — a disabled entity
+still owns its entity id, so Frigate's replacement lands on `_motion_2`. Delete, do not disable.
+And a deleted MQTT-discovery entity comes back when ring-mqtt republishes; remove the doorbell
+from the **Ring account** to make it permanent.

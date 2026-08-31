@@ -379,13 +379,14 @@ data:
       condition:
         - condition: template
           value_template: >-
-            {{ trigger.event.data.entity_id.endswith('_ding')
+            {{ (trigger.event.data.entity_id.endswith('_ding')
+                or trigger.event.data.entity_id.endswith('_visitor'))
                and trigger.event.data.new_state is not none
                and trigger.event.data.new_state.state == 'on'
                and (trigger.event.data.old_state is none
                     or trigger.event.data.old_state.state != 'on') }}
       action:
-        # The camera base (`binary_sensor.<base>_ding` → `<base>`) is the app's logical
+        # The camera base (`binary_sensor.<base>_ding` / `_visitor` → `<base>`) is the app's logical
         # camera id (`camera.<base>`). The click deep-links a Hawksnest notification tap
         # straight to that camera's live view (PushRoute.cameraOf), and `attach` sends the
         # camera's current snapshot as the notification image (best-effort — empty if the
@@ -393,7 +394,8 @@ data:
         - variables:
             cam_base: >-
               {{ trigger.event.data.entity_id
-                 | replace('binary_sensor.', '') | replace('_ding', '') }}
+                 | replace('binary_sensor.', '')
+                 | replace('_ding', '') | replace('_visitor', '') }}
             cam_pic: "{{ state_attr('camera.' ~ cam_base, 'entity_picture') }}"
         - service: rest_command.ntfy_publish
           data:

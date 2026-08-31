@@ -254,6 +254,24 @@ data:
         - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_GARAGE}:554/h264Preview_01_main#audio=opus"
       garage_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_GARAGE}:554/h264Preview_01_sub"
 
+      # Reolink Video Doorbell WiFi (D340W), added 2026-08-30. NOT an E1 Pro/Zoom —
+      # ffprobed individually (192.168.4.74): sub 640x480 @10, main 2560x1920 @20,
+      # h264 both, AAC 16k mono on both. The sub is 4:3, unlike every other Reolink
+      # here; see the Frigate seed for why that matters.
+      #
+      # TEMPORARY SLUG. The Ring doorbell still holds `front_door` (ring-mqtt, live)
+      # and this runs alongside it until the handover, so the two never collide.
+      # Renaming at handover means redoing this entry, the Frigate block and the HA
+      # entities together.
+      #
+      # RTSP over UDP HANGS on this camera — a bare ffprobe never returns. go2rtc
+      # negotiates its own transport so these plain URLs are fine, but any manual
+      # ffprobe/ffmpeg against it needs `-rtsp_transport tcp`.
+      front_door_reolink:
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_FRONT_DOOR_REOLINK}:554/h264Preview_01_main"
+        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_FRONT_DOOR_REOLINK}:554/h264Preview_01_main#audio=opus"
+      front_door_reolink_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_FRONT_DOOR_REOLINK}:554/h264Preview_01_sub"
+
       # --- Ring (cloud) ---------------------------------------------------------
       # ONE entry per Ring camera you want to talk through. The stream NAME MUST
       # match the Home Assistant camera base (`camera.<base>`) so the Hawksnest app
