@@ -143,16 +143,26 @@ data:
 
     record:
       enabled: true
-      # 24/7 continuous. SEVEN of the eight cameras record from the SUB stream
+      # 24/7 continuous. SIX of the nine cameras record from the SUB stream
       # (roles [detect, record] on one input). This is what actually runs, and this
       # comment says so on purpose.
       #
-      # ONE EXCEPTION AS OF 2026-08-30: `nursery_high` records from its MAIN stream
-      # (4K H.265, ~4370 kbps measured, ~47 GB/day). That is a deliberate, isolated
-      # deviation, not the start of rolling #64 back out to the fleet — the full
-      # case, the measured baseline and the revert instructions live on that camera's
-      # block below. The fleet-wide version stays reverted for the reasons under
-      # point 2 here, and those reasons are about SEVEN main streams, not one.
+      # THREE EXCEPTIONS record from MAIN, each added deliberately and separately:
+      #   nursery_high  2026-08-30  4K h264, ~4370 kbps, ~47 GB/day
+      #   big_room      2026-09-04  2560x1440 h264, ~937 kbps measured
+      #   kitchen       2026-09-04  2880x1616 h264, 3072 kbps
+      #
+      # These are NOT a staged rollback of #64 to the fleet. #64's blocker is SEVEN
+      # simultaneous main streams (~24 Mbps of RF contention); this is three, adding
+      # ~4 Mbps over the nursery_high baseline. The nursery — the camera that
+      # collapses, and the reason the fleet-wide change stays reverted — is
+      # deliberately excluded and stays on sub. Do not "finish the job" by adding it
+      # without re-measuring; its own block and point 2 below say why.
+      #
+      # OWNER DECISION 2026-09-04: recordings are the permanent record (Cairn, the
+      # daily-keepsake app, is built on them) while live view is not, so the archive
+      # was worth the RF risk on the two cameras that measured safe. big_room gains
+      # 16x the pixels, kitchen ~10x.
       #
       # REVERTED 2026-08-26. #64 moved `record` to its own main-stream input to fix
       # visibly choppy recorded playback. That change was correct about the problem
@@ -201,12 +211,27 @@ data:
       #      condition that costs the nursery 40% of its packets. It would protect
       #      the nursery's recording by degrading its live view, permanently.
       #
-      # Sub-stream budget, MEASURED, and the cameras are not interchangeable:
-      #   big_room             (E1 Zoom)  256 kbps  ~2.8 GB/day
-      #   first_floor_stairway (E1 Zoom)  256 kbps  ~2.8 GB/day
-      #   kitchen              (E1 Pro)  1024 kbps ~11.1 GB/day   <-- 4x the others
-      # ~16.7 GB/day total; 3 days is ~50 GB against ~900 GB free. Verify with
-      # `df -h /media/frigate` after 24h rather than trusting this arithmetic.
+      # Stream budget, MEASURED, and the cameras are not interchangeable. The two
+      # rows marked MAIN changed 2026-09-04 and are the reason this whole block was
+      # re-costed:
+      #   big_room             (E1 Zoom)  MAIN  ~937 kbps  ~10 GB/day  (was 256 kbps)
+      #   kitchen              (E1 Pro)   MAIN   3072 kbps ~33 GB/day  (was 1024 kbps)
+      #   first_floor_stairway (E1 Zoom)  sub     256 kbps  ~2.8 GB/day
+      # Those three go from ~16.7 GB/day to ~46 GB/day. Add nursery_high's ~47 GB/day
+      # and the four remaining sub-stream E1 Pros, and continuous sits near
+      # ~100 GB/day fleet-wide.
+      #
+      # BASELINE AT THE MOMENT OF THE CHANGE, measured not estimated
+      # (`df -h /media/frigate`, 2026-09-04): 278G used, 2.7T available, 10%.
+      #
+      # The number to actually watch is NOT continuous — it is `detections.retain`
+      # at 30 days with `mode: all`, which pins segments around ~1000 events/day and
+      # dominates the footprint at main-stream bitrates. Steady state is expected
+      # around 1-1.5 TB and has never been observed on this volume; this change is
+      # the first time it carries a real load. Re-run `df` after 24h, after 72h
+      # (first full continuous cycle) and at 30 days (first full detections cycle) —
+      # the 30-day mark is the one that can surprise you, and trusting this
+      # arithmetic instead of measuring is what this comment exists to prevent.
       #
       # If it needs trimming, the levers in order of bang-per-edit:
       # `detections.retain.mode: motion` (stops holding dead air around events),
@@ -384,6 +409,32 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BIG_ROOM}:554/h264Preview_01_sub"
               roles:
                 - detect
+            # MAIN -> record, 2026-09-04. 2560x1440 h264 @20, 5120 kbps (the E1
+            # Zoom's hardware maximum at this resolution). Muxed with -c copy like
+            # every other input here, so it costs no transcode.
+            #
+            # This is a SECOND, NARROWER attempt at what #64 tried fleet-wide and
+            # what was reverted 2026-08-26. Read the `record:` block above before
+            # touching it: that revert's blocker was SEVEN simultaneous main streams
+            # (~24 Mbps of RF contention) collapsing the nursery to 236 kbps. This
+            # change is TWO (big_room + kitchen, ~4 Mbps added), and the nursery is
+            # deliberately NOT among them — it stays on sub, which is exactly what
+            # the revert's option 3 ("six on main, nursery on sub") was rejected for
+            # at six. Two is not six; that is the whole bet, and it is a bet on a
+            # number, so the nursery's detect health is the thing to watch after
+            # this lands (skipped_fps, packet loss) — see the owner-facing note in
+            # plan.md.
+            #
+            # big_room is the safe one to move, by measurement rather than hope: at
+            # -60 dBm it sits one dB off the nursery and was completely unaffected
+            # under the 7-stream test (937 kbps alone -> 941 kbps under six others),
+            # because it only ASKS for ~937 kbps. Signal x demand, not signal.
+            #
+            # WHY: recordings were 640x360 — a sixteenth of the pixels this camera
+            # can send. Live view has been 1440p since 2026-07-29; only the
+            # permanent record was stuck at sub quality.
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_BIG_ROOM}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # MUST be set explicitly. Frigate 0.17 defaults detect.enabled to FALSE
@@ -590,6 +641,28 @@ data:
             - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_KITCHEN}:554/h264Preview_01_sub"
               roles:
                 - detect
+            # MAIN -> record, 2026-09-04, same change and same rationale as
+            # big_room's — read the long note there, it is not repeated here.
+            #
+            # WHAT IS DIFFERENT ABOUT THIS ONE: 2880x1616 @20, NOT 1440p (E1 Pro,
+            # ffprobe 2026-07-30 — do not assume it matches the Zooms), and its
+            # bitrate ceiling is 3072 kbps; it rejects 6144. That works out to
+            # 0.033 bits/pixel/frame, half the Zooms' 0.069 and about a fifth of
+            # what h264 wants, so this stream is high-RESOLUTION but under-bitrated
+            # and will look soft on fast motion. It is still ~10x the pixels of the
+            # 896x512 sub stream it replaces, which is why it is worth doing anyway.
+            #
+            # The remaining lever is FEWER FRAMES, not more bits: dropping the
+            # camera's main stream to 15 fps buys ~33% more bits per frame. That is
+            # a camera-side SetEnc change needing the ADMIN account (the `frigate`
+            # account is read-only) and it also costs live-view smoothness, so it is
+            # deliberately NOT bundled here — judge it on the recordings this change
+            # produces rather than in advance.
+            #
+            # No H.265 fix applies: 4MP Reolinks ship h264 on both streams, so the
+            # SetEnc dance both E1 Zooms needed does not apply to this camera.
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_KITCHEN}:554/h264Preview_01_main"
+              roles:
                 - record
         detect:
           # Frigate 0.17 defaults this to FALSE when absent — see big_room.
