@@ -348,6 +348,36 @@ Reolink is going in a room that already has a **live** Ring camera, decide expli
 are replacing it (reuse the slug, retire the Ring entry, note it) or running both (pick a distinct
 slug). Silently shadowing a live Ring camera is the failure to avoid.
 
+### 4. Is it OUTDOORS? Four things change
+
+Added 2026-09-08 with `front`, the first outdoor camera in a fleet that was otherwise nine
+interior wall cameras and a doorbell. None of these is a blocker; all four are easy to miss
+because every existing camera block silently assumes indoors.
+
+- **Track `car`.** No interior camera does, and it is the most useful label an outdoor camera
+  has. Expect noise until the view is zoned: anything that can see the public street raises an
+  event per passing vehicle. Draw a driveway zone in Frigate's UI and scope `car` to it rather
+  than dropping the label — zones live in the live config, not the seed.
+- **Budget for more masks, not fewer.** Interior cameras needed one mask each (the OSD clock);
+  the stairway needed three. Outdoors adds trees, flags and night-time headlight sweep. Until
+  they are drawn `detection_fps` runs ~4.5 continuously, which is the documented cost of
+  deferring masks, not a fault.
+- **Re-probe the codec, and mean it.** Reolink's outdoor 4K models ship H.265, and HEVC on the
+  WebRTC tier **crashes the Android app** (SIGSEGV in libjingle) rather than degrading. Fix it at
+  the camera with `SetEnc`, never by transcoding in go2rtc. "4K forces h265" is per-model and
+  already known false on the E1 Outdoor Pro — probe, do not assume either way.
+- **Think about what it overlooks before setting retention.** The global `record.continuous.days`
+  is 3 and a street-facing camera is the case the runbook's "give it its own shorter window"
+  advice was written for. GenAI snapshots stay local (LM Studio, not api.openai.com) — worth
+  re-reading the `genai:` block, because outdoors that guarantee covers the neighbours too.
+
+**A camera not yet on the LAN is a hard stop, and it looks like nothing.** On 2026-09-08 the new
+camera had not joined the network: a port-554 **and** port-80 sweep of the whole `192.168.4.0/24`
+from the go2rtc pod returned the nine deployed cameras and no tenth. Port 80 is the useful half of
+that pair — recent Reolink firmware ships with **RTSP off**, so a camera that is present but not
+yet enabled answers on 80 and is invisible to a 554-only sweep. Sweeping only 554 cannot tell
+"absent" from "RTSP disabled", and those need completely different fixes.
+
 ---
 
 ## The steps
@@ -500,8 +530,29 @@ Current, as measured 2026-07-31:
 > before a batched port-554 sweep found it. Sweep port 554 in small batches, not 254
 > parallel jobs.
 
+> **RE-MEASURED 2026-09-08, adding the first outdoor camera. Half fixed, half not.**
+> `tailscale debug prefs` now reports **eleven** `/32`s:
+>
+> ```
+> .23  .30  .37  .40  .45  .46  .53  .62  .64  .65  .74
+> ```
+>
+> The good news: all **nine** deployed cameras are routed, so the August gap (four
+> cameras with no `/32`, including `nursery`) is closed. The bad news: **`.45` and
+> `.65` are still advertised and are still not cameras.** Both were swept on
+> 2026-09-08 from the go2rtc pod with **554 and 80 closed** on each, while all nine
+> real cameras answer on both. `.45` now has an ARP entry (it did not in August), so
+> it is a live host that picked up a recycled lease — not a dead IP.
+>
+> Advertising a `/32` to a non-camera host is the exact thing per-camera routing
+> exists to prevent: it hands every tailnet device a path to whatever now holds that
+> lease. **Drop both when you next issue the command** — and note the command is
+> still not additive, so the new list must name every camera explicitly.
+
 ```powershell
-& "C:\Program Files\Tailscale\tailscale.exe" set --advertise-routes=192.168.4.37/32,192.168.4.53/32,192.168.4.64/32,<new1>/32,<new2>/32,<new3>/32,<new4>/32
+# The nine deployed cameras + the new one. `.45`/`.65` are deliberately ABSENT —
+# they are not cameras (measured 2026-09-08); do not paste them back in.
+& "C:\Program Files\Tailscale\tailscale.exe" set --advertise-routes=192.168.4.23/32,192.168.4.30/32,192.168.4.37/32,192.168.4.40/32,192.168.4.46/32,192.168.4.53/32,192.168.4.62/32,192.168.4.64/32,192.168.4.74/32,<new>/32
 ```
 
 Then **approve the new routes in the Tailscale admin console** — CLI first, console second.

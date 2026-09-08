@@ -967,3 +967,78 @@ data:
         # NO motion mask, and that is MEASURED not deferred: detection_fps sits at 0.1 on
         # this camera, against 0.0-0.1 on the masked wall cameras. The D340W paints no
         # repainting OSD clock, so there is nothing for a mask to suppress.
+
+      front:
+        # THE FIRST OUTDOOR CAMERA IN THE FLEET, added 2026-09-08. Every entry above is
+        # an interior wall camera or the doorbell. Three things in this block differ
+        # because it faces the street — read them before copying it for the next one.
+        #
+        # REUSES THE `front` SLUG, replacing the Ring camera that held it. Note the name
+        # mismatch is expected and is NOT a mistake: the Ring app calls that camera
+        # "Front Driveway", but ring-mqtt slugged its entity `front` at first discovery
+        # and never revisits a slug (see the entity-base note in the go2rtc seed). The
+        # entity id is the stable side, so `front` is the name to take. Same swap as
+        # big_room/kitchen/first_floor_stairway (2026-07-29) and basement/bedroom
+        # (2026-07-31); the go2rtc `front: ring:...` entry is retired in this commit.
+        #
+        # DELETE THE RING ENTITIES BEFORE THIS GOES LIVE, not after. ring-mqtt's
+        # `camera.front_snapshot` and `binary_sensor.front_motion` are registered and
+        # hold the canonical ids, so standing this up first forces Frigate's onto
+        # `binary_sensor.front_motion_2` — and Hawksnest resolves by base slug, so it
+        # binds the DEAD entity. That is precisely what left the basement and bedroom
+        # scrubber/thumbnail tiles wrong while the cameras themselves were fine
+        # (runbook step 7). Delete the mqtt entities by DEVICE ID, never by entity-id
+        # prefix — ring-mqtt publishes a second, LIVE device whose entities also start
+        # `front_` — then rename Frigate's `_motion_2` back to `_motion`; HA does not
+        # reclaim a freed slug on its own.
+        ffmpeg:
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_USER}:{FRIGATE_REOLINK_PASSWORD}@{FRIGATE_REOLINK_IP_FRONT}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          enabled: true
+          # ############ UNVERIFIED — ffprobe AND REPLACE BEFORE THIS DEPLOYS ##########
+          # These numbers are a PLACEHOLDER, not a measurement. As of 2026-09-08 the
+          # camera was not on the LAN at all (a port-80 and port-554 sweep of
+          # 192.168.4.0/24 from the go2rtc pod found the nine deployed cameras and no
+          # tenth), so nothing here has been probed.
+          #
+          # Wrong geometry does NOT error — it silently misplaces every bounding box,
+          # which is why this file records a measured value per camera and why the
+          # fleet's three geometries (640x360 Zoom/Outdoor Pro, 896x512 Pro, 640x480
+          # D340W) must never be copied between models. Run the sub-stream ffprobe in
+          # docs/adding-a-camera.md §2 and put the real values here.
+          #
+          # ALSO PROBE THE MAIN STREAM BEFORE GOING LIVE. Reolink's outdoor 4K models
+          # (RLC-81xA and friends) ship H.265, and HEVC on the WebRTC tier does not
+          # degrade — it CRASHES the Android app (SIGSEGV in libjingle_peerconnection).
+          # If main is h265, fix it at the CAMERA with SetEnc as nursery_high was on
+          # 2026-08-30; do not transcode in go2rtc. Note "4K forces h265" is per-model
+          # and false on the E1 Outdoor Pro, so re-probe rather than assuming.
+          width: 640
+          height: 360
+          fps: 5
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+            # `car` IS THE OUTDOOR DIFFERENCE — no interior camera tracks it, and it is
+            # the reason this block is not a copy of `garage`. Expect it to be noisy
+            # until the view is zoned: a camera that can see the public street will
+            # raise an event for every passing car. Draw a zone over the driveway in
+            # Frigate's UI and require `car` in it, rather than dropping the label —
+            # a vehicle in the driveway is the single most useful thing this camera
+            # can tell you. Zones live in the live config, not here (runbook step 3).
+            - car
+          # Snapshots still go to LM Studio on the host, never api.openai.com — see the
+          # `genai:` block above. That holds for an outdoor camera too, and matters more
+          # here: this one can see the neighbours and the street.
+          genai: *person_genai
+        # NO motion mask yet, and this one WILL need at least two: the OSD clock (every
+        # sibling needed one) and whatever moves outdoors — trees, a flag, headlight
+        # sweep at night. Until they are drawn, detection_fps sits at ~4.5 continuously
+        # on this camera; per the runbook that is the documented cost of deferring
+        # masks, not a fault.
