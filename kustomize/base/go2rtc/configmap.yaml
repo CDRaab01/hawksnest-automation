@@ -282,9 +282,9 @@ data:
       # derive the go2rtc `src` from the entity id, so `front` is the name that works
       # — this is the exact trap that left talk dead on four cameras until 2026-08-05.
       #
-      # UNVERIFIED: as of 2026-09-08 this camera was not on the LAN (a port-80 and
-      # port-554 sweep of the whole subnet found the nine deployed cameras and no
-      # tenth), so the main stream has NOT been probed. Before this is deployed,
+      # UNVERIFIED: this camera is 192.168.4.67, and as of 2026-09-08 it was on the
+      # LAN but serving no TCP port at all (Reolink now ships RTSP/HTTP/ONVIF off,
+      # cloud-only), so the main stream has NOT been probed. Before this is deployed,
       # confirm main is H.264 — an outdoor Reolink that ships 4K H.265 will CRASH the
       # Android app on the WebRTC tier rather than merely failing to draw. Fix it at
       # the camera with SetEnc; do not transcode here.

@@ -1000,10 +1000,12 @@ data:
         detect:
           enabled: true
           # ############ UNVERIFIED — ffprobe AND REPLACE BEFORE THIS DEPLOYS ##########
-          # These numbers are a PLACEHOLDER, not a measurement. As of 2026-09-08 the
-          # camera was not on the LAN at all (a port-80 and port-554 sweep of
-          # 192.168.4.0/24 from the go2rtc pod found the nine deployed cameras and no
-          # tenth), so nothing here has been probed.
+          # These numbers are a PLACEHOLDER, not a measurement. The camera is
+          # 192.168.4.67 and as of 2026-09-08 it was ON the LAN but serving NOTHING:
+          # it answers ICMP with a Reolink OUI, and a 15-port probe from the Windows
+          # host found no open TCP port at all. Reolink now ships HTTP/HTTPS/RTSP/
+          # RTMP/ONVIF all disabled, cloud-only. Nothing here has been probed because
+          # nothing COULD be until RTSP is switched on in the app.
           #
           # Wrong geometry does NOT error — it silently misplaces every bounding box,
           # which is why this file records a measured value per camera and why the

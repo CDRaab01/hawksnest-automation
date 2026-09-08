@@ -371,12 +371,36 @@ because every existing camera block silently assumes indoors.
   advice was written for. GenAI snapshots stay local (LM Studio, not api.openai.com) — worth
   re-reading the `genai:` block, because outdoors that guarantee covers the neighbours too.
 
-**A camera not yet on the LAN is a hard stop, and it looks like nothing.** On 2026-09-08 the new
-camera had not joined the network: a port-554 **and** port-80 sweep of the whole `192.168.4.0/24`
-from the go2rtc pod returned the nine deployed cameras and no tenth. Port 80 is the useful half of
-that pair — recent Reolink firmware ships with **RTSP off**, so a camera that is present but not
-yet enabled answers on 80 and is invisible to a 554-only sweep. Sweeping only 554 cannot tell
-"absent" from "RTSP disabled", and those need completely different fixes.
+**A port sweep CANNOT find a factory-fresh Reolink, and that is the trap.** On 2026-09-08 the new
+camera (`192.168.4.67`) was on the LAN the whole time — it answered ICMP and its MAC carried the
+Reolink OUI `14:14:16` — while a sweep of the whole `192.168.4.0/24` on 554 **and** 80 returned
+the nine deployed cameras and no tenth. A wider probe from the Windows host (21, 22, 23, 80, 443,
+554, 1935, 2000, 3702, 5000, 8000, 8080, 8443, 8554, 9000) found **no open TCP port at all**.
+
+That is not a broken camera. Current Reolink firmware ships with HTTP, HTTPS, RTSP, RTMP and
+ONVIF **all disabled**, running purely over Reolink's P2P cloud — so the app works perfectly and
+the device is invisible to every LAN-side tool this runbook uses. **Find a new camera by ARP OUI,
+not by port**, and confirm with ICMP:
+
+```powershell
+arp -a | Select-String "192.168.4."     # Reolink OUIs seen here: 14:14:16, dc:ec:4f, 0c:0f:d8,
+                                        # 38:9b:73, and locally-administered 0e:c7:1d
+```
+
+The fix is camera-side and cannot be done over the network, precisely because the network APIs
+are what is switched off. In the Reolink app: **Settings -> Network -> Advanced -> Port Settings**,
+enable **RTSP** (Frigate and go2rtc need it) and **HTTPS or HTTP** (the HA Reolink integration
+needs it for PTZ/IR/privacy, and step 0's `GetDevInfo` account check goes over it). Both are
+required — enabling only RTSP gets you video and no integration.
+
+Distinguish the three states before doing anything else, because they need different fixes:
+
+| Symptom | State | Fix |
+|---|---|---|
+| No ARP entry, no ping | not on the network | Wi-Fi onboarding |
+| Pings, no TCP port open | on the network, all services disabled | Port Settings in the app |
+| Port 80 open, 554 closed | HTTP on, RTSP off | enable RTSP only |
+| Both open, 401 on ffprobe | services on, no `frigate` account | step 0 |
 
 ---
 
@@ -552,7 +576,7 @@ Current, as measured 2026-07-31:
 ```powershell
 # The nine deployed cameras + the new one. `.45`/`.65` are deliberately ABSENT —
 # they are not cameras (measured 2026-09-08); do not paste them back in.
-& "C:\Program Files\Tailscale\tailscale.exe" set --advertise-routes=192.168.4.23/32,192.168.4.30/32,192.168.4.37/32,192.168.4.40/32,192.168.4.46/32,192.168.4.53/32,192.168.4.62/32,192.168.4.64/32,192.168.4.74/32,<new>/32
+& "C:\Program Files\Tailscale\tailscale.exe" set --advertise-routes=192.168.4.23/32,192.168.4.30/32,192.168.4.37/32,192.168.4.40/32,192.168.4.46/32,192.168.4.53/32,192.168.4.62/32,192.168.4.64/32,192.168.4.74/32,192.168.4.67/32
 ```
 
 Then **approve the new routes in the Tailscale admin console** — CLI first, console second.
