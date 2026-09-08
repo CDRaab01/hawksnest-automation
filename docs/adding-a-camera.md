@@ -563,10 +563,22 @@ Current, as measured 2026-07-31:
 >
 > The good news: all **nine** deployed cameras are routed, so the August gap (four
 > cameras with no `/32`, including `nursery`) is closed. The bad news: **`.45` and
-> `.65` are still advertised and are still not cameras.** Both were swept on
-> 2026-09-08 from the go2rtc pod with **554 and 80 closed** on each, while all nine
-> real cameras answer on both. `.45` now has an ARP entry (it did not in August), so
-> it is a live host that picked up a recycled lease — not a dead IP.
+> `.65` are still advertised and are still not cameras.**
+>
+> **Judge that by MAC, not by ports** — the 2026-09-08 rollout proved closed ports
+> mean nothing here. `.67` is a real Reolink with every TCP port shut (see the
+> outdoor section above), so "554 and 80 closed" would have condemned it too. The
+> evidence that actually separates them is the OUI:
+>
+> | IP | MAC | Reolink OUI? |
+> |---|---|---|
+> | `.67` | `14:14:16:ca:c5:30` | **yes** — a camera, despite no open port |
+> | `.45` | `f0:24:f9:56:5f:f0` | no — and ICMP-silent |
+> | `.65` | `e4:54:e8:2c:25:7f` | no — a live host that answers ping |
+>
+> Reolink OUIs seen on this LAN: `14:14:16`, `dc:ec:4f`, `0c:0f:d8`, `38:9b:73`, and
+> the locally-administered `0e:c7:1d` the E1 Pros use. `.45` now has an ARP entry (it
+> did not in August), so it is a live host on a recycled lease, not a dead IP.
 >
 > Advertising a `/32` to a non-camera host is the exact thing per-camera routing
 > exists to prevent: it hands every tailnet device a path to whatever now holds that
