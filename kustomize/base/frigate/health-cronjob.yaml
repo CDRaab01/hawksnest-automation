@@ -1,0 +1,185 @@
+# Watchdog for the failure mode that took the whole NVR down for ~4 hours on
+# 2026-09-10 with NOTHING alerting: the /tmp/cache tmpfs filled, ffmpeg could no
+# longer write a segment header ("No space left on device"), and all nine cameras
+# crash-looped from 12:24 to 16:37 EDT producing 0-byte segments. It was found by
+# accident, days of footage later, while looking for something else.
+#
+# WHY NOTHING CAUGHT IT. Every signal that exists pointed the wrong way:
+#   * the pod stayed Running and Ready — the readiness probe hits /api/version,
+#     which answers fine while recording is dead (and there is deliberately no
+#     liveness probe; see deployment.yaml),
+#   * `kubectl logs` showed ffmpeg noise indistinguishable from ordinary retries,
+#   * `df -h /media/frigate` showed 2.6 TB free, because the FULL filesystem was a
+#     1 GB tmpfs INSIDE the pod, not the NAS.
+# So this job asserts the thing that actually matters — frames are being recorded —
+# rather than the things that merely correlate with it.
+#
+# WHY A CRONJOB. There is no Prometheus in this cluster and standing one up to
+# watch one number is not a trade worth making. ntfy is already the suite's push
+# transport and `http://ntfy/hawksnest-alerts` is the topic phones subscribe to
+# (see home-assistant/configmap.yaml).
+#
+# Runs in staging harmlessly, same as backup-cronjob.yaml: `http://ntfy` resolves
+# to whatever ntfy lives in the same namespace, so a staging alert lands on a
+# staging topic nobody is subscribed to.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: frigate-health
+  labels:
+    app: frigate
+spec:
+  # Every 5 minutes. The incident ran ~253 minutes unnoticed; this caps that at
+  # roughly 6 (5-minute period + the 45-second confirmation sample below).
+  schedule: "*/5 * * * *"
+  timeZone: America/New_York
+  concurrencyPolicy: Forbid
+  # No catch-up. A missed window is not worth running late — the next one is 5
+  # minutes away and reports current truth, which is all anyone acts on.
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 240
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: health
+              # python purely for json + http from one binary. busybox has no jq
+              # and no python, and pulling curl+jq images to parse one number is
+              # more moving parts than this.
+              image: python:3.12-alpine3.20
+              command:
+                - python3
+                - -c
+                - |
+                  import json, os, time, urllib.request
+
+                  STATS = "http://frigate:5000/api/stats"
+                  NTFY = "http://ntfy/hawksnest-alerts"
+                  STATE = "/ha-config/frigate-health/state.json"
+
+                  # Re-alert at most every 30 min while still broken. The incident
+                  # argues for nagging, but a 5-minute page for 4 hours is 48
+                  # notifications and gets muted, which recreates the problem.
+                  REALERT_SECONDS = 1800
+                  # 70%: at the measured ~37 MB/min drain rate through this cache,
+                  # 30% of 2 GB is still ~15 min of warning before recording stops.
+                  CACHE_WARN_PCT = 70.0
+
+                  def sample():
+                      out = {"api_down": False, "err": "", "dead": [], "cache_pct": 0.0}
+                      try:
+                          with urllib.request.urlopen(STATS, timeout=10) as r:
+                              d = json.load(r)
+                      except Exception as e:
+                          out["api_down"] = True
+                          out["err"] = str(e)
+                          return out
+                      # camera_fps is frames ARRIVING from the camera. This is the
+                      # number that read 0.0 for every camera during the incident
+                      # while the pod looked healthy. detection_fps is NOT a
+                      # substitute: it is legitimately 0 in a quiet room.
+                      out["dead"] = sorted(
+                          k for k, v in (d.get("cameras") or {}).items()
+                          if not (v.get("camera_fps") or 0)
+                      )
+                      cache = ((d.get("service") or {}).get("storage") or {}).get("/tmp/cache") or {}
+                      total = cache.get("total") or 0
+                      if total:
+                          out["cache_pct"] = (cache.get("used") or 0) / total * 100.0
+                      return out
+
+                  def load_state():
+                      try:
+                          with open(STATE) as f:
+                              return json.load(f)
+                      except Exception:
+                          return {"alerting": False, "last_sent": 0}
+
+                  def save_state(s):
+                      try:
+                          os.makedirs(os.path.dirname(STATE), exist_ok=True)
+                          tmp = STATE + ".tmp"
+                          with open(tmp, "w") as f:
+                              json.dump(s, f)
+                          os.replace(tmp, STATE)
+                      except Exception as e:
+                          # Losing state costs us dedup, not the alert itself.
+                          print("WARN: could not persist state:", e)
+
+                  def notify(title, body, priority, tags):
+                      req = urllib.request.Request(
+                          NTFY,
+                          data=body.encode("utf-8"),
+                          headers={"Title": title, "Priority": priority, "Tags": tags},
+                      )
+                      with urllib.request.urlopen(req, timeout=10) as r:
+                          r.read()
+
+                  # TWO samples 45s apart, and only problems present in BOTH count.
+                  # A single sample fires on every rollout and every ffmpeg reconnect;
+                  # a watchdog that cries wolf gets muted and is then worse than none.
+                  a = sample()
+                  time.sleep(45)
+                  b = sample()
+
+                  msgs = []
+                  if a["api_down"] and b["api_down"]:
+                      msgs.append("Frigate API unreachable: " + (b["err"] or a["err"]))
+                  else:
+                      dead = sorted(set(a["dead"]) & set(b["dead"]))
+                      if dead:
+                          msgs.append(
+                              "NOT RECORDING (camera_fps 0 twice): " + ", ".join(dead)
+                          )
+                      if a["cache_pct"] >= CACHE_WARN_PCT and b["cache_pct"] >= CACHE_WARN_PCT:
+                          msgs.append(
+                              "/tmp/cache %.0f%% full - staging backlog; at 100%% ALL "
+                              "cameras stop recording" % b["cache_pct"]
+                          )
+
+                  st = load_state()
+                  now = time.time()
+
+                  if msgs:
+                      body = "\n".join(msgs)
+                      print("UNHEALTHY:", body)
+                      due = (not st.get("alerting")) or (
+                          now - st.get("last_sent", 0) >= REALERT_SECONDS
+                      )
+                      if due:
+                          notify("Frigate NVR problem", body, "urgent", "rotating_light")
+                          st = {"alerting": True, "last_sent": now}
+                          save_state(st)
+                      else:
+                          print("(alert suppressed - already notified within 30 min)")
+                  else:
+                      print("healthy: cache %.0f%%, all cameras reporting frames" % b["cache_pct"])
+                      if st.get("alerting"):
+                          notify(
+                              "Frigate NVR recovered",
+                              "Cameras are reporting frames again; cache %.0f%%." % b["cache_pct"],
+                              "default",
+                              "white_check_mark",
+                          )
+                          save_state({"alerting": False, "last_sent": now})
+              volumeMounts:
+                # Only for the dedup state file. The job is still correct without
+                # it (see save_state) — a lost file just means the next problem
+                # alerts immediately instead of being throttled.
+                - name: ha-config
+                  mountPath: /ha-config
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 128Mi
+          volumes:
+            - name: ha-config
+              persistentVolumeClaim:
+                claimName: ha-config

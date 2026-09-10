@@ -167,7 +167,24 @@ spec:
               # Node re-checked before raising, same as last time: 16 GB used of 24 GB
               # (66%), so 2 GB more of ceiling — which is headroom, not an allocation —
               # still does not put ring-mqtt at risk.
-              memory: 7Gi
+              #
+              # RAISED 7Gi -> 8Gi, 2026-09-10, together with the /tmp/cache tmpfs going
+              # 1Gi -> 2Gi below. THE TWO CHANGES MUST NOT BE SEPARATED: the cache is
+              # `medium: Memory`, so every byte staged in it is charged to THIS cgroup.
+              # Raising the cache ceiling without raising this one converts a recording
+              # stall into an OOMKill, which is strictly worse — it takes detection down
+              # with it.
+              #
+              # Arithmetic, measured 2026-09-10 right after a restart (cache nearly
+              # empty): cgroup memory.current 5066 MiB of the 7168 MiB limit. Backing
+              # the ~32 MiB of cache out gives a steady floor of ~5034 MiB, so a FULL
+              # 2 GiB cache lands at ~7082 MiB — 86% of 8Gi, vs 99% of 7Gi. Frigate's
+              # own working set has been flat at 3900-4800 MiB across every sample in
+              # the notes above, so the headroom is for the cache, not for drift.
+              #
+              # Node re-checked again: 23 GB total, 12 GB available. One more GB of
+              # ceiling still does not put ring-mqtt at risk.
+              memory: 8Gi
       volumes:
         - name: config
           persistentVolumeClaim:
@@ -184,7 +201,23 @@ spec:
         - name: cache
           emptyDir:
             medium: Memory
-            sizeLimit: 1Gi
+            # RAISED 1Gi -> 2Gi, 2026-09-10, after this tmpfs filling took the ENTIRE
+            # NVR down for ~4 hours without a single alert (all nine cameras, 12:24 ->
+            # 16:37 EDT). When it fills, ffmpeg cannot write a segment header and dies:
+            #   Could not write header (incorrect codec parameters ?): No space left on device
+            # ...then crash-loops, leaving 0-byte segments. The pod stays Running and
+            # Healthy throughout, which is why nothing caught it.
+            #
+            # SIZING: this is a staging buffer, so its real unit is MINUTES OF NFS
+            # STALL TOLERATED, not bytes. Recordings run 52-53 GB/day across nine
+            # cameras since the main-stream `record` change (2026-09-08) — about
+            # 37 MB/min through here. 1Gi absorbed only ~27 minutes; 2Gi absorbs ~55.
+            #
+            # Deliberately NOT larger: this is charged to the container's memory limit
+            # (see the note there), and past ~2Gi the honest fix is not more buffer but
+            # a faster drain. No size prevents an indefinite NFS stall — that is what
+            # health-cronjob.yaml is for, and it is the load-bearing half of this fix.
+            sizeLimit: 2Gi
         - name: dshm
           emptyDir:
             medium: Memory
