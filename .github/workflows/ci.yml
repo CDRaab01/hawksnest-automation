@@ -62,6 +62,13 @@ jobs:
           python3 tests/validate_manifests.py prod    /tmp/prod.yaml
           python3 tests/validate_manifests.py staging /tmp/staging.yaml
 
+      - name: Frigate health watchdog behaviour (alerts, throttling, recovery)
+        # Runs the script embedded in the frigate-health CronJob against a simulated
+        # Frigate. The watchdog only ever executes during an outage, so without this
+        # a broken alert path would be discovered by the next silent outage —
+        # which is the exact failure it was added to prevent.
+        run: python3 tests/test_frigate_health.py /tmp/prod.yaml
+
       - name: Validate against Kubernetes schemas (both overlays)
         run: |
           kubeconform -strict -summary -ignore-missing-schemas /tmp/prod.yaml
