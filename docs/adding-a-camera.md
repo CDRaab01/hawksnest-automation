@@ -1075,6 +1075,18 @@ ghost tile) and set the integration's **"Preload camera stream" OFF** — it wou
 awake. Battery-camera entities are otherwise polled only every 6 h by design; the PIR sensors
 arrive by push and are fresh.
 
+### Pushes: the instant one comes from the hub, the clip one from Frigate
+
+Frigate's review push (`hawksnest_push_camera_object`, now with an `outdoor` list that bypasses
+the armed gate) cannot be instant for these cameras — Frigate is ~10–15 s behind the PIR, and a
+quick arrival can produce no review at all. So each outdoor camera also has
+**`hawksnest_push_outdoor_person_<cam>`**: triggered by the hub's own on-camera AI,
+`binary_sensor.<cam>_person`, which arrives by push within a second and needs no wake. Person
+only, same `walking` tag/route, same fail-open `hawksnest_alert_person` gate, no armed gate, no
+image (the camera's snapshot entity is disabled and Frigate's `latest.jpg` is its error image
+while parked), `mode: single` + a 1-minute trailing delay as the per-visit cooldown. Two
+notifications per event is the intended trade: "now", then "here's the footage".
+
 ### Side finding, not fixed here
 
 `REOLINK_IP_FRONT_DOOR_REOLINK` / `FRIGATE_REOLINK_IP_FRONT_DOOR_REOLINK` exist only in the patched

@@ -584,6 +584,67 @@ data:
             click: "{{ front }}/?camera=camera.{{ cam }}&event={{ event_id }}"
             attach: "{{ (front ~ cam_pic) if cam_pic else '' }}"
 
+    # ── Instant person push for the OUTDOOR (Home Hub battery) cameras ──────────
+    # The Frigate review push above cannot be instant for these two: Frigate only
+    # starts pulling a battery camera ~10-15 s after the hub's PIR fires (see the
+    # on-demand automations), so its `person` review lands 20-40 s after the fact —
+    # and a driveway arrival (2026-09-12 21:17Z) produced no review at all. The hub's
+    # own on-camera AI, `binary_sensor.<cam>_person`, arrives in HA by PUSH within a
+    # second of the detection and needs no wake. So: push from THAT, immediately;
+    # Frigate's review follows with the clip and the description when it can.
+    #
+    # Two notifications per event is the intended trade — the first says "now", the
+    # second says "here's the footage". Person only, matching the review push's
+    # `walking` tag/route; the same `hawksnest_alert_person` helper gates it and
+    # fails OPEN for the same reason. No armed gate — these look OUTSIDE. No image:
+    # the camera's snapshot entity is disabled (ghost-tile trap) and Frigate's
+    # latest.jpg is its error image while the camera is parked. `mode: single` +
+    # the trailing minute is the cooldown — the AI sensor can flap several times
+    # during one visit and one push per visit is the goal.
+    - id: hawksnest_push_outdoor_person_backyard_patio
+      alias: "Hawksnest push: person at Backyard Patio (hub PIR, instant)"
+      mode: single
+      max_exceeded: silent
+      trigger:
+        - platform: state
+          entity_id: binary_sensor.backyard_patio_person
+          to: "on"
+      condition:
+        - condition: template
+          value_template: "{{ states('input_boolean.hawksnest_alert_person') != 'off' }}"
+      action:
+        - service: rest_command.ntfy_publish
+          data:
+            topic: "hawksnest-alerts"
+            title: "Person at Backyard Patio"
+            message: "Someone is at your Backyard Patio right now."
+            tags: "walking"
+            priority: "high"
+            click: "https://dragonfly.tail2ce561.ts.net:8443/?camera=camera.backyard_patio"
+        - delay: "00:01:00"
+
+    - id: hawksnest_push_outdoor_person_front_yard
+      alias: "Hawksnest push: person at Front Yard (hub PIR, instant)"
+      mode: single
+      max_exceeded: silent
+      trigger:
+        - platform: state
+          entity_id: binary_sensor.front_yard_person
+          to: "on"
+      condition:
+        - condition: template
+          value_template: "{{ states('input_boolean.hawksnest_alert_person') != 'off' }}"
+      action:
+        - service: rest_command.ntfy_publish
+          data:
+            topic: "hawksnest-alerts"
+            title: "Person at Front Yard"
+            message: "Someone is at your Front Yard right now."
+            tags: "walking"
+            priority: "high"
+            click: "https://dragonfly.tail2ce561.ts.net:8443/?camera=camera.front_yard"
+        - delay: "00:01:00"
+
     # Frigate detection watchdog. Guards against the failure that actually shipped:
     # detect.enabled silently false (0.17 default) — pod healthy, ffmpeg healthy,
     # recordings accumulating, and NOTHING ever detected, with no log line to find.
