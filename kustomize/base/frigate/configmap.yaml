@@ -1023,6 +1023,15 @@ data:
           # `preset-rtsp-generic` verbatim, with a 20 s probe window and a 30 s
           # socket timeout in place of the preset's 10 s. Wall cameras keep the
           # preset (no input_args) — they answer in a second.
+          #
+          # And a second, hub-side race the probe window cannot fix (walk test 2):
+          # while the camera finishes waking, the hub answers ffmpeg's SETUP with
+          # `454 Session Not Found` and the first attempt dies anyway. Frigate's
+          # retry always succeeds — so make it quick. 3 s here instead of the
+          # global 10 s turns "~30 s of the window lost" into "~13 s". Per-camera on
+          # purpose: a wall camera that needs retries has a real problem, and the
+          # slower cadence there is what keeps the watchdog readable.
+          retry_interval: 3
           input_args:
             - -avoid_negative_ts
             - make_zero
@@ -1065,7 +1074,8 @@ data:
         # replaces) — same ghost-entity trap as above.
         enabled: true
         ffmpeg:
-          # Same wake-tolerant input args as backyard_patio — see the note there.
+          # Same wake-tolerant input args + quick retry as backyard_patio — see there.
+          retry_interval: 3
           input_args:
             - -avoid_negative_ts
             - make_zero

@@ -1031,6 +1031,13 @@ the **only `ffmpeg.input_args` in the file**: `preset-rtsp-generic` verbatim plu
 preset. If a wake ever exceeds 20 s the same symptom returns — raise the probe window, don't
 touch the wall cameras.
 
+A **second, hub-side race** survives any client option: while the camera finishes waking, the
+hub answers ffmpeg's `SETUP` with `454 Session Not Found` and the first attempt dies anyway
+(walk test 2). Frigate's retry always succeeds, so the lever is the retry cadence:
+`ffmpeg.retry_interval: 3` on these two cameras (the global stays 10 — a wall camera that needs
+retries has a real problem and the slow cadence keeps its log readable). Expect the first
+recorded frames ~10–15 s after the PIR, never at 0; the hub's own recording covers the pre-roll.
+
 ### Retention, slugs, and the things deliberately NOT done
 
 - `record.continuous.days: 1` on an on-demand camera means "keep every woken window for a day"
