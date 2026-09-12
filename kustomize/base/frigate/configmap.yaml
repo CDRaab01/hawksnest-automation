@@ -1013,6 +1013,31 @@ data:
         # basement/bedroom lesson). Retire the Ring device, then consider renaming.
         enabled: true
         ffmpeg:
+          # THE ONE input_args IN THIS FILE, and it is measured (walk test 2026-09-12):
+          # the hub accepts the RTSP connection and starts sending packets at once
+          # while the camera is still waking, so ffmpeg's default 5 s probe window
+          # (`analyzeduration` 0 = auto) closed before a keyframe/SPS arrived —
+          # "Could not find codec parameters ... unspecified size" — and the first
+          # attempt died every time. The 10 s retry then succeeded (camera awake by
+          # then), costing ~30 s of a ≤4-minute window. This is Frigate's own
+          # `preset-rtsp-generic` verbatim, with a 20 s probe window and a 30 s
+          # socket timeout in place of the preset's 10 s. Wall cameras keep the
+          # preset (no input_args) — they answer in a second.
+          input_args:
+            - -avoid_negative_ts
+            - make_zero
+            - -fflags
+            - +genpts+discardcorrupt
+            - -rtsp_transport
+            - tcp
+            - -timeout
+            - "30000000"
+            - -use_wallclock_as_timestamps
+            - "1"
+            - -analyzeduration
+            - "20000000"
+            - -probesize
+            - "20000000"
           inputs:
             - path: "rtsp://{FRIGATE_REOLINK_HUB_USER}:{FRIGATE_REOLINK_HUB_PASSWORD}@{FRIGATE_REOLINK_IP_HOME_HUB}:554/h264Preview_01_sub"
               roles:
@@ -1040,6 +1065,22 @@ data:
         # replaces) — same ghost-entity trap as above.
         enabled: true
         ffmpeg:
+          # Same wake-tolerant input args as backyard_patio — see the note there.
+          input_args:
+            - -avoid_negative_ts
+            - make_zero
+            - -fflags
+            - +genpts+discardcorrupt
+            - -rtsp_transport
+            - tcp
+            - -timeout
+            - "30000000"
+            - -use_wallclock_as_timestamps
+            - "1"
+            - -analyzeduration
+            - "20000000"
+            - -probesize
+            - "20000000"
           inputs:
             - path: "rtsp://{FRIGATE_REOLINK_HUB_USER}:{FRIGATE_REOLINK_HUB_PASSWORD}@{FRIGATE_REOLINK_IP_HOME_HUB}:554/h264Preview_02_sub"
               roles:

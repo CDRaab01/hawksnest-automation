@@ -1019,6 +1019,18 @@ two per viewer) — the budget the checklist asks for.
 The FLV escape hatch, if the hub's RTSP ever proves flaky: `ffmpeg:http://<hub-ip>/flv?port=1935&app=bcs&stream=channel<N-1>_main.bcs&user=…&password=…` — 0-based channel, and it needs
 `rtmpEnable` on. Documented, not deployed.
 
+### The first ffmpeg attempt after a wake needs a longer probe window
+
+Measured on the first walk test: the hub accepts the RTSP connection and starts sending packets
+at once while the camera is still waking, so Frigate's default probe window (`analyzeduration`
+0 = auto, 5 s) closed before a keyframe/SPS arrived — `Could not find codec parameters for
+stream 0 (Video: h264, none): unspecified size` — and the first attempt died every time; the
+10 s retry then succeeded, costing ~30 s of a ≤4-minute window. These two cameras therefore carry
+the **only `ffmpeg.input_args` in the file**: `preset-rtsp-generic` verbatim plus
+`-analyzeduration 20000000 -probesize 20000000` and `-timeout 30000000`. Wall cameras keep the
+preset. If a wake ever exceeds 20 s the same symptom returns — raise the probe window, don't
+touch the wall cameras.
+
 ### Retention, slugs, and the things deliberately NOT done
 
 - `record.continuous.days: 1` on an on-demand camera means "keep every woken window for a day"
