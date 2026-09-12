@@ -1025,11 +1025,18 @@ Measured on the first walk test: the hub accepts the RTSP connection and starts 
 at once while the camera is still waking, so Frigate's default probe window (`analyzeduration`
 0 = auto, 5 s) closed before a keyframe/SPS arrived — `Could not find codec parameters for
 stream 0 (Video: h264, none): unspecified size` — and the first attempt died every time; the
-10 s retry then succeeded, costing ~30 s of a ≤4-minute window. These two cameras therefore carry
-the **only `ffmpeg.input_args` in the file**: `preset-rtsp-generic` verbatim plus
-`-analyzeduration 20000000 -probesize 20000000` and `-timeout 30000000`. Wall cameras keep the
-preset. If a wake ever exceeds 20 s the same symptom returns — raise the probe window, don't
-touch the wall cameras.
+10 s retry then succeeded, costing ~30 s of a ≤4.5-minute window. These two cameras therefore
+carry the **only `ffmpeg.input_args` in the file**: `preset-rtsp-generic` verbatim plus
+`-analyzeduration 10000000 -probesize 10000000` and `-timeout 30000000`. Wall cameras keep the
+preset. **Not longer than 10 s**: Frigate's frame watchdog kills an ffmpeg with no frame in 20 s,
+and a 20 s probe window sat exactly on that deadline — the first attempt then died to "No frames
+received in 20 seconds" instead (arrival test, 21:17Z). If a wake ever exceeds ~15 s the symptom
+returns and there is no client-side fix left; the retry below is the answer.
+
+The automation window is shaped by how a **driveway arrival** looks: the PIR fires on the *car*
+and clears in seconds; the person steps out 20–40 s later while Frigate is still ~15 s from its
+first frame. A 1-minute tail after the PIR cleared closed the window before anyone was in it —
+hence `wait_for_trigger` ≤ 2:30 and a **2-minute tail** (4.5 min worst case, under the hub's 5).
 
 A **second, hub-side race** survives any client option: while the camera finishes waking, the
 hub answers ffmpeg's `SETUP` with `454 Session Not Found` and the first attempt dies anyway

@@ -813,11 +813,15 @@ data:
     # enabled only while the hub's own PIR says something is there.
     #
     # Two automations per design:
-    #  - on_demand_<cam>: PIR on → Frigate ON → wait for PIR off (≤3 min) → 1 min tail
-    #    → Frigate OFF. `mode: single` makes the 4-minute bound ABSOLUTE — a re-trigger
-    #    mid-run is dropped (already awake and recording) and the next PIR edge after
-    #    OFF wakes it again. 4 < the hub's 5-minute cap, so Frigate is always the one
-    #    that ends the session, never the hub.
+    #  - on_demand_<cam>: PIR on → Frigate ON → wait for PIR off (≤2.5 min) → 2 min
+    #    tail → Frigate OFF. `mode: single` makes the 4.5-minute bound ABSOLUTE — a
+    #    re-trigger mid-run is dropped (already awake and recording) and the next PIR
+    #    edge after OFF wakes it again. 4.5 < the hub's 5-minute cap, so Frigate is
+    #    always the one that ends the session, never the hub. The tail is 2 minutes,
+    #    not 1, because of how a driveway arrival looks (measured 2026-09-12 21:17Z):
+    #    the PIR fires on the CAR and clears in seconds; the person steps out 20-40 s
+    #    later and walks to the door while Frigate is still ~15 s from its first
+    #    frame. A 1-minute tail closed the window before anyone was in it.
     #  - park: Frigate's runtime `enabled` state is IN-MEMORY — every Frigate restart
     #    brings these cameras back ON. (`enabled: true` in the seed is deliberate: a
     #    camera seeded `enabled: false` can NEVER be turned on over MQTT — 0.17.2
@@ -849,9 +853,9 @@ data:
             - platform: state
               entity_id: binary_sensor.backyard_patio_motion
               to: "off"
-          timeout: "00:03:00"
+          timeout: "00:02:30"
           continue_on_timeout: true
-        - delay: "00:01:00"
+        - delay: "00:02:00"
         - service: mqtt.publish
           continue_on_error: true
           data:
@@ -876,9 +880,9 @@ data:
             - platform: state
               entity_id: binary_sensor.front_yard_motion
               to: "off"
-          timeout: "00:03:00"
+          timeout: "00:02:30"
           continue_on_timeout: true
-        - delay: "00:01:00"
+        - delay: "00:02:00"
         - service: mqtt.publish
           continue_on_error: true
           data:

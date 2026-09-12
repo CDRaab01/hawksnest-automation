@@ -1019,10 +1019,15 @@ data:
           # (`analyzeduration` 0 = auto) closed before a keyframe/SPS arrived —
           # "Could not find codec parameters ... unspecified size" — and the first
           # attempt died every time. The 10 s retry then succeeded (camera awake by
-          # then), costing ~30 s of a ≤4-minute window. This is Frigate's own
-          # `preset-rtsp-generic` verbatim, with a 20 s probe window and a 30 s
+          # then), costing ~30 s of a ≤4.5-minute window. This is Frigate's own
+          # `preset-rtsp-generic` verbatim, with a 10 s probe window and a 30 s
           # socket timeout in place of the preset's 10 s. Wall cameras keep the
           # preset (no input_args) — they answer in a second.
+          #
+          # NOT LONGER THAN 10 s: Frigate's frame watchdog (video.py) kills an
+          # ffmpeg that has produced no frame in 20 s, and a 20 s probe window sat
+          # exactly on that deadline — the arrival test 2026-09-12 21:17Z lost
+          # its first attempt to "No frames received in 20 seconds" instead.
           #
           # And a second, hub-side race the probe window cannot fix (walk test 2):
           # while the camera finishes waking, the hub answers ffmpeg's SETUP with
@@ -1044,9 +1049,9 @@ data:
             - -use_wallclock_as_timestamps
             - "1"
             - -analyzeduration
-            - "20000000"
+            - "10000000"
             - -probesize
-            - "20000000"
+            - "10000000"
           inputs:
             - path: "rtsp://{FRIGATE_REOLINK_HUB_USER}:{FRIGATE_REOLINK_HUB_PASSWORD}@{FRIGATE_REOLINK_IP_HOME_HUB}:554/h264Preview_01_sub"
               roles:
@@ -1088,9 +1093,9 @@ data:
             - -use_wallclock_as_timestamps
             - "1"
             - -analyzeduration
-            - "20000000"
+            - "10000000"
             - -probesize
-            - "20000000"
+            - "10000000"
           inputs:
             - path: "rtsp://{FRIGATE_REOLINK_HUB_USER}:{FRIGATE_REOLINK_HUB_PASSWORD}@{FRIGATE_REOLINK_IP_HOME_HUB}:554/h264Preview_02_sub"
               roles:
