@@ -967,3 +967,96 @@ data:
         # NO motion mask, and that is MEASURED not deferred: detection_fps sits at 0.1 on
         # this camera, against 0.0-0.1 on the masked wall cameras. The D340W paints no
         # repainting OSD clock, so there is nothing for a mask to suppress.
+
+      # =======================================================================
+      # Reolink Home Hub battery cameras (Argus 4 Pro) — ON DEMAND. Added 2026-09-12.
+      #
+      # These two are not wall cameras and must not be treated like them. They have no
+      # RTSP of their own: the Home Hub (192.168.4.44) serves each bound camera as a
+      # channel — h264Preview_0N_{main,sub}, N 1-BASED — on ONE IP with ONE credential
+      # pair, and that pair is the hub's ADMIN login (the hub has no user table:
+      # AddUser -> "not support" on v3.3.0.456). Hence FRIGATE_REOLINK_HUB_*, never the
+      # fleet FRIGATE_REOLINK_USER/PASSWORD.
+      #
+      # THE HUB WAKES A BATTERY CAMERA ON ANY RTSP REQUEST (7-15 s measured) AND
+      # FORCE-SLEEPS IT AFTER 5 MINUTES. A camera Frigate pulls continuously is a
+      # wake→sleep→wake loop, forever, on solar. So Frigate never holds these streams:
+      #   - `enabled: true` below is the DESIGN, not an oversight. A camera seeded
+      #     `enabled: false` can never be turned on over MQTT (0.17.2 dispatcher.py
+      #     refuses ON unless enabled_in_config). It comes up ON after every Frigate
+      #     start and the HA automation `hawksnest_argus_park` publishes OFF within
+      #     ~5 s; `hawksnest_argus_on_demand_<cam>` publishes ON only while the hub's
+      #     PIR holds the camera awake, for at most 4 minutes.
+      #   - A parked camera stays in /api/stats with camera_fps FROZEN (0 after a
+      #     restart). base/frigate/health-cronjob.yaml carries the matching ON_DEMAND
+      #     allow-list; the HA detection watchdog needs none (its fps sensors are
+      #     disabled by the integration).
+      #   - `record.continuous.days: 1` here means "keep every woken window for a
+      #     day" whether or not the detector fired inside it — the only shape of the
+      #     owner's "1 day" the hardware allows. Alert/detection clips follow the
+      #     global 30 days. Disk cost: minutes of footage per day.
+      #
+      # Both streams ffprobed 2026-09-12 from the hub, per channel, not copied: sub is
+      # h264 1536x432 @25 with AAC 16k mono (the Argus 4 Pro's stitched dual-lens 32:9
+      # frame — not a 16:9 sibling's numbers); main is 5120x1440 HEVC and is used by
+      # nothing (WebRTC cannot carry it, and it is 12x the pixels for a detector that
+      # runs a few minutes a day). The hub carried three concurrent sessions on one
+      # channel, so this single input beside go2rtc's two is within budget.
+      #
+      # No motion mask yet: the camera is awake too little to measure one. Check
+      # detection_fps during a woken window before drawing any.
+      # -----------------------------------------------------------------------
+      backyard_patio:
+        # Home Hub channel 0 ("Backyard Patio") -> RTSP h264Preview_01. Replaces the
+        # Ring `back_yard_patio` camera, DIFFERENT slug on purpose: the Ring entities are
+        # still registered and a shared slug would bind Hawksnest to the dead ones (the
+        # basement/bedroom lesson). Retire the Ring device, then consider renaming.
+        enabled: true
+        ffmpeg:
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_HUB_USER}:{FRIGATE_REOLINK_HUB_PASSWORD}@{FRIGATE_REOLINK_IP_HOME_HUB}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          enabled: true
+          # ffprobe 192.168.4.44 ch 01, 2026-09-12: h264 1536x432 @25.
+          width: 1536
+          height: 432
+          fps: 5
+        record:
+          continuous:
+            days: 1
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          genai: *person_genai
+
+      front_yard:
+        # Home Hub channel 1 ("Front") -> RTSP h264Preview_02. NOT `front`: that slug is
+        # the live Ring "Front" camera's go2rtc stream and HA base (the camera this one
+        # replaces) — same ghost-entity trap as above.
+        enabled: true
+        ffmpeg:
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_HUB_USER}:{FRIGATE_REOLINK_HUB_PASSWORD}@{FRIGATE_REOLINK_IP_HOME_HUB}:554/h264Preview_02_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          enabled: true
+          # ffprobe 192.168.4.44 ch 02, 2026-09-12: h264 1536x432 @25.
+          width: 1536
+          height: 432
+          fps: 5
+        record:
+          continuous:
+            days: 1
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          genai: *person_genai

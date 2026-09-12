@@ -527,6 +527,14 @@ data:
           {{ (ev.data | default({}, true)).detections | default([], true)
              | first | default('', true) }}
         front: "https://dragonfly.tail2ce561.ts.net:8443"
+        # The FIRST camera list in this file, added 2026-09-12 and kept deliberately
+        # small: the OUTDOOR cameras (the Home Hub battery cameras), which alert
+        # whether or not the alarm is armed — a person in the back yard at 3 pm is
+        # news; a person in the kitchen at 3 pm is lunch. Every other camera stays
+        # on the armed-only rule below. Add a camera here only if it looks OUTSIDE.
+        outdoor:
+          - backyard_patio
+          - front_yard
       condition:
         # Cheapest checks first — this runs on every Frigate review update.
         - condition: template
@@ -535,17 +543,19 @@ data:
         # `track:` list in the Frigate seed must never silently start pushing.
         - condition: template
           value_template: "{{ label in ['person', 'dog', 'cat'] }}"
-        # Armed-only. These are INDOOR cameras — people living here generate
-        # person events constantly (measured: 10 in a few minutes), so alerting
-        # while disarmed would be unusable. Entity-ID-free so a panel rename
-        # can't break it; with one panel this reads as "the alarm is armed".
-        # Only armed_home/armed_away are listed because the panel reports
-        # supported_features=3 — night/vacation can never occur here.
+        # Armed-only for INDOOR cameras — people living here generate person
+        # events constantly (measured: 10 in a few minutes), so alerting while
+        # disarmed would be unusable. Outdoor cameras (`outdoor` above) bypass
+        # this. Entity-ID-free so a panel rename can't break it; with one panel
+        # this reads as "the alarm is armed". Only armed_home/armed_away are
+        # listed because the panel reports supported_features=3 — night/vacation
+        # can never occur here.
         - condition: template
           value_template: >-
-            {{ states.alarm_control_panel
-               | selectattr('state', 'in', ['armed_home', 'armed_away'])
-               | list | count > 0 }}
+            {{ cam in outdoor
+               or (states.alarm_control_panel
+                   | selectattr('state', 'in', ['armed_home', 'armed_away'])
+                   | list | count > 0) }}
         # Object-class toggles, with DELIBERATELY ASYMMETRIC failure modes:
         # person fails OPEN (a missing or unknown helper still alerts — a renamed
         # helper must never silently disable a security feature), pets fail
@@ -792,6 +802,119 @@ data:
                   - switch.bedroom_detect
                   - switch.bedroom_recordings
                   - switch.bedroom_snapshots
+
+    # ── Battery cameras behind the Reolink Home Hub: Frigate ON DEMAND ──────────
+    # The Argus cameras (backyard_patio, front_yard) have no RTSP of their own; the
+    # hub serves them as channels — and it WAKES a battery camera on any RTSP request
+    # (7-15 s measured 2026-09-12), holds the session at most 5 minutes, then
+    # force-sleeps it. A continuous Frigate puller is therefore a wake→sleep→wake loop
+    # that flattens the battery. So Frigate never holds these streams: each camera is
+    # parked OFF (`frigate/<cam>/enabled/set`, the bedroom mechanism above) and is
+    # enabled only while the hub's own PIR says something is there.
+    #
+    # Two automations per design:
+    #  - on_demand_<cam>: PIR on → Frigate ON → wait for PIR off (≤3 min) → 1 min tail
+    #    → Frigate OFF. `mode: single` makes the 4-minute bound ABSOLUTE — a re-trigger
+    #    mid-run is dropped (already awake and recording) and the next PIR edge after
+    #    OFF wakes it again. 4 < the hub's 5-minute cap, so Frigate is always the one
+    #    that ends the session, never the hub.
+    #  - park: Frigate's runtime `enabled` state is IN-MEMORY — every Frigate restart
+    #    brings these cameras back ON. (`enabled: true` in the seed is deliberate: a
+    #    camera seeded `enabled: false` can NEVER be turned on over MQTT — 0.17.2
+    #    dispatcher.py refuses ON unless enabled_in_config.) So when Frigate comes
+    #    online (and on HA start) park every on-demand camera whose PIR is not
+    #    currently on. Cost: one ≤30 s wake per Frigate restart.
+    #
+    # The PIR entities are the Reolink integration's, renamed onto the canonical slug
+    # (`binary_sensor.<cam>_motion`); Frigate's own land on `_motion_2`. They arrive by
+    # PUSH, so they are fresh even though the integration polls battery cameras only
+    # every 6 h. The health CronJob (base/frigate/health-cronjob.yaml) carries the
+    # matching ON_DEMAND allow-list: a parked camera's camera_fps freezes (at 0 after a
+    # restart) and would otherwise page "NOT RECORDING" forever.
+    - id: hawksnest_argus_on_demand_backyard_patio
+      alias: "Hawksnest: Frigate on demand — backyard_patio (Home Hub battery)"
+      mode: single
+      max_exceeded: silent
+      trigger:
+        - platform: state
+          entity_id: binary_sensor.backyard_patio_motion
+          to: "on"
+      action:
+        - service: mqtt.publish
+          continue_on_error: true
+          data:
+            topic: frigate/backyard_patio/enabled/set
+            payload: "ON"
+        - wait_for_trigger:
+            - platform: state
+              entity_id: binary_sensor.backyard_patio_motion
+              to: "off"
+          timeout: "00:03:00"
+          continue_on_timeout: true
+        - delay: "00:01:00"
+        - service: mqtt.publish
+          continue_on_error: true
+          data:
+            topic: frigate/backyard_patio/enabled/set
+            payload: "OFF"
+
+    - id: hawksnest_argus_on_demand_front_yard
+      alias: "Hawksnest: Frigate on demand — front_yard (Home Hub battery)"
+      mode: single
+      max_exceeded: silent
+      trigger:
+        - platform: state
+          entity_id: binary_sensor.front_yard_motion
+          to: "on"
+      action:
+        - service: mqtt.publish
+          continue_on_error: true
+          data:
+            topic: frigate/front_yard/enabled/set
+            payload: "ON"
+        - wait_for_trigger:
+            - platform: state
+              entity_id: binary_sensor.front_yard_motion
+              to: "off"
+          timeout: "00:03:00"
+          continue_on_timeout: true
+        - delay: "00:01:00"
+        - service: mqtt.publish
+          continue_on_error: true
+          data:
+            topic: frigate/front_yard/enabled/set
+            payload: "OFF"
+
+    - id: hawksnest_argus_park
+      alias: "Hawksnest: park the Home Hub battery cameras in Frigate"
+      mode: single
+      trigger:
+        # Frigate's LWT topic; retained, so HA start re-reads `online` and this also
+        # covers an HA restart while Frigate stayed up.
+        - platform: mqtt
+          topic: frigate/available
+          payload: "online"
+        - platform: homeassistant
+          event: start
+      action:
+        # Let Frigate finish registering its MQTT command handlers.
+        - delay: "00:00:05"
+        - repeat:
+            for_each:
+              - backyard_patio
+              - front_yard
+            sequence:
+              # A camera whose PIR is on right now is mid-event: leave it to its
+              # on_demand automation, which will park it when the event ends.
+              - if:
+                  - condition: template
+                    value_template: "{{ not is_state('binary_sensor.' ~ repeat.item ~ '_motion', 'on') }}"
+                then:
+                  - service: mqtt.publish
+                    continue_on_error: true
+                    data:
+                      topic: "frigate/{{ repeat.item }}/enabled/set"
+                      payload: "OFF"
 
     # ── Reconciled from the live instance, 2026-08-02 ─────────────────────────
     # Built in the HA UI and never written back here, so they lived only on the

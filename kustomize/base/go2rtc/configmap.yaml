@@ -272,6 +272,34 @@ data:
         - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_FRONT_DOOR_REOLINK}:554/h264Preview_01_main#audio=opus"
       front_door_reolink_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_FRONT_DOOR_REOLINK}:554/h264Preview_01_sub"
 
+      # --- Reolink Home Hub: battery cameras (Argus 4 Pro), added 2026-09-12 ------
+      # These cameras have no RTSP of their own; the hub serves each bound camera as
+      # a CHANNEL on the hub's IP — h264Preview_0N_{main,sub}, N is 1-BASED here (the
+      # hub's CGI API and the FLV path count from 0). One IP, one credential pair, for
+      # all of them. The pair is the hub's ADMIN login: the hub has no user table
+      # (AddUser -> "not support", v3.3.0.456), so it is the one RTSP source that
+      # carries admin rights. Kept as REOLINK_HUB_*, never the fleet REOLINK_USER/PASS.
+      #
+      # LIVE COMES FROM THE SUB STREAM, on purpose. ffprobed 2026-09-12: main is
+      # 5120x1440 HEVC on both — and HEVC on WebRTC SIGSEGVs the Android app — while
+      # sub is h264 1536x432 @25 + AAC 16k mono. If the app ever offers h264 on the
+      # Clear stream, switch `<name>` to _main. No `<name>_sub` entry: with live already
+      # on sub a Low toggle would be a no-op, and Hawksnest hides it when go2rtc doesn't
+      # list it (fails closed). The audio producer stays: the hub carried three
+      # concurrent sessions on one channel without complaint (Frigate's one plus these
+      # two is exactly the budget).
+      #
+      # go2rtc opens a source only when a viewer asks, and the hub WAKES the camera
+      # for it (7-15 s measured) and drops the session after 5 minutes. That is the
+      # intended cost of watching live; nothing here holds a session open. Frigate
+      # pulls these only on demand (see the HA automations) — it never holds them.
+      backyard_patio:
+        - "rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_01_sub"
+        - "ffmpeg:rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_01_sub#audio=opus"
+      front_yard:
+        - "rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_02_sub"
+        - "ffmpeg:rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_02_sub#audio=opus"
+
       # --- Ring (cloud) ---------------------------------------------------------
       # ONE entry per Ring camera you want to talk through. The stream NAME MUST
       # match the Home Assistant camera base (`camera.<base>`) so the Hawksnest app

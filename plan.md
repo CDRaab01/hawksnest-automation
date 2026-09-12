@@ -885,7 +885,9 @@ On the cluster, in order — each gate before the next:
 
 ## Out of scope
 
-Phase 2 outdoor/solar/Home Hub (event-driven, won't feed this pipeline). The DS925+
+~~Phase 2 outdoor/solar/Home Hub (event-driven, won't feed this pipeline).~~ **Done 2026-09-12,
+and "won't feed this pipeline" was half right**: the Home Hub gives the Argus cameras RTSP, but
+Frigate pulls them on demand only — see docs/adding-a-camera.md, "third animal". The DS925+
 migration — note `spec.nfs` is immutable, so it's a delete-and-recreate, which is exactly
 what silently blocked every deploy for four days in July. Retiring ring-mqtt or
 ring-timeline; ten Ring cameras are still live.

@@ -618,7 +618,7 @@ raw = open("/config/config.yml.new").read()
 c = yaml.safe_load(raw)
 cams = list(c["cameras"])
 print("cameras:", cams)
-assert len(cams) == 7, cams
+assert len(cams) == 11, cams   # the CURRENT camera count, not a constant — update it every time
 for n in cams:
     assert c["cameras"][n]["detect"]["enabled"] is True, f"{n}: detect not enabled"
 # the genai anchor must resolve to ONE shared prompt, not drifted copies
@@ -928,3 +928,129 @@ Note also that **disabling is not enough if you intend to reuse the slug** — a
 still owns its entity id, so Frigate's replacement lands on `_motion_2`. Delete, do not disable.
 And a deleted MQTT-discovery entity comes back when ring-mqtt republishes; remove the doorbell
 from the **Ring account** to make it permanent.
+
+## Battery cameras behind a Reolink Home Hub are a third animal
+
+Written 2026-09-12 from the **Argus 4 Pro** rollout (two cameras, `backyard_patio` and
+`front_yard`, on a **Reolink Home Hub** at 192.168.4.44, firmware v3.3.0.456). Almost every step
+above assumes one wired camera per IP that streams whenever asked. A battery camera behind the hub
+breaks that in five places, and each one was measured, not assumed.
+
+### The hub is the RTSP server, and it has exactly one account
+
+- The cameras have no RTSP of their own. The hub serves each bound camera as a **channel on the
+  hub's IP**: `rtsp://<user>:<pass>@<hub-ip>:554/h264Preview_0N_{main,sub}`. **N is 1-based in
+  the RTSP path** (`_01_` = channel 0). The hub's CGI API (`GetChannelstatus`) and the FLV path
+  (`channel<N>_main.bcs`) count from 0. Get the map from the API, never by guessing:
+
+  ```bash
+  curl -sS -m 15 -X POST "http://<hub-ip>/cgi-bin/api.cgi?cmd=GetChannelstatus&user=admin&password=<pw>" \
+    -H 'Content-Type: application/json' -d '[{"cmd":"GetChannelstatus","action":0,"param":{}}]'
+  ```
+  An unbound hub answers with eight empty channels (`name:""`, `uid:""`, `online:0`) — that is
+  "the cameras are not on the hub yet", which is done in the Reolink app, not by any API.
+- **The hub has no user table.** `AddUser` returns `cmd: Unknown / rspCode -9 "not support"`, the
+  app hides user management, and the hub's web UI (`http://<hub-ip>`) is a viewer only — Preview,
+  Playback, Channels, logout. So step 0's `frigate` guest account cannot exist on the hub, and the
+  hub is the **one RTSP source that carries the admin login**. It gets its own variables —
+  `REOLINK_HUB_USER/PASS` (go2rtc) and `FRIGATE_REOLINK_HUB_USER/PASSWORD` (Frigate) plus one
+  `*_IP_HOME_HUB` — never the fleet `REOLINK_USER/PASS`. `reolink_cred_check()` in `deploy.sh`
+  knows nothing about them, deliberately.
+- **The lockout counter is real and shared.** Every failed login (the `frigate` probe, a wrong
+  admin password) decrements `auth_warning_info.remain_times` from 10; at 0 the hub freezes
+  logins. Verify a password with ONE `GetDevInfo` and stop on failure — never loop.
+- Enable **RTSP + HTTP + ONVIF** in the app (hub → Network → Advanced → Server Settings) before
+  any of this; the hub ships with only :9000 (the app protocol) open. `GetNetPort` confirms.
+  RTMP (:1935) stays off unless the FLV escape hatch below is ever needed.
+
+### The hub wakes the camera on every RTSP request, and force-sleeps it after 5 minutes
+
+Reolink's own documentation, confirmed by ffprobe: a battery camera is asleep until an RTSP
+request arrives, takes **7–15 s** to deliver a first frame (`-rw_timeout 30000000` on the
+*ffprobe*; the container's ffmpeg does not accept that flag — omit it there), streams for at most
+**5 minutes**, then the hub disconnects the session and the camera sleeps. Frigate's normal
+`[detect, record]` input would reconnect every `retry_interval` — a wake→sleep→wake loop, 24/7,
+on solar. **So Frigate never holds these streams.** The design, in the order it must be applied:
+
+1. The camera block is seeded **`enabled: true`** — and that is the design, not an oversight. A
+   camera seeded `enabled: false` can **never** be turned on over MQTT: 0.17.2 `dispatcher.py`
+   refuses `ON` unless `enabled_in_config`. Runtime `enabled` is in-memory, so every Frigate
+   restart brings the camera back ON.
+2. The HA automation **`hawksnest_argus_park`** (seed + live `automations.yaml`) publishes
+   `frigate/<cam>/enabled/set OFF` for every on-demand camera whose PIR is not on, on
+   `frigate/available = online` and on HA start. Cost: one ≤30 s wake per Frigate restart.
+3. **`hawksnest_argus_on_demand_<cam>`** publishes ON when the hub's PIR
+   (`binary_sensor.<cam>_motion`, the Reolink integration's, renamed) goes on, waits for it to
+   go off (≤3 min), tails 1 min, publishes OFF. `mode: single` makes the 4-minute bound absolute
+   — always under the hub's 5-minute cap, so Frigate ends the session, never the hub.
+4. **The health CronJob needs an allow-list.** A parked camera stays in `/api/stats` with
+   `camera_fps` **frozen** at its last value — 0 if it was parked before its first frame, which is
+   every restart — and would page "NOT RECORDING" every 30 minutes forever. `ON_DEMAND` in
+   `base/frigate/health-cronjob.yaml` names them; `tests/test_frigate_health.py` pins both that a
+   parked camera is silent and that a wired camera dead beside it still pages. The HA
+   `hawksnest_frigate_detection_watchdog` needs nothing: its `_camera_fps` sensors are
+   `disabled_by: integration`.
+5. **Order of the dual write:** Secrets → CronJob → automations appended to the live file **and
+   reloaded** → go2rtc → Frigate. The automations must be *loaded* before Frigate restarts, or
+   the new cameras stay ON pulling the hub until someone notices.
+
+The verification checklist's "live `pid`, `camera_fps` ≈ 5" line is **false by design** for these
+cameras while parked; the gate is instead: `Turning off camera <cam>` in Frigate's log within ~5 s
+of `frigate/available online`, then a hand-wave producing `Turning on camera`, frames, a review,
+and `Turning off` ≤ 4 min later — with the next two CronJob runs still `healthy`.
+
+### Live and detect both come from the SUB stream
+
+ffprobed per channel from the go2rtc container (the recipe in §2, with the hub URL):
+
+| stream | codec | geometry | fps | audio |
+|---|---|---|---|---|
+| sub  | **h264** | **1536×432** (the stitched dual-lens 32:9 frame — not a 16:9 sibling's numbers) | 25 | AAC 16 kHz mono |
+| main | **hevc** | 5120×1440 | 25 | AAC 16 kHz mono |
+
+HEVC on WebRTC crashes the Android app (CLAUDE.md), so go2rtc's `<name>` points at **sub**, with
+the `ffmpeg:…#audio=opus` producer as usual, and there is **no `<name>_sub` entry** (a Low
+toggle would be a no-op; Hawksnest hides it when go2rtc doesn't list it). If the app ever offers
+h264 on the Clear stream, move `<name>` to main. Frigate's single input is sub, `[detect,
+record]`, `detect: 1536x432 @5`, `-c copy` verified by the mux gate (5 s → a playable 557 KB
+mp4 with h264 + aac). **Three concurrent sessions on one channel worked** (Frigate's one + go2rtc's
+two per viewer) — the budget the checklist asks for.
+
+The FLV escape hatch, if the hub's RTSP ever proves flaky: `ffmpeg:http://<hub-ip>/flv?port=1935&app=bcs&stream=channel<N-1>_main.bcs&user=…&password=…` — 0-based channel, and it needs
+`rtmpEnable` on. Documented, not deployed.
+
+### Retention, slugs, and the things deliberately NOT done
+
+- `record.continuous.days: 1` on an on-demand camera means "keep every woken window for a day"
+  whether or not the detector fired inside it — the only shape of "1 day" the hardware allows.
+  Alert/detection clips follow the global 30 days. Disk: minutes of footage per day.
+- **Slugs must not collide with the Ring cameras they replace.** `front` is the live Ring
+  "Front" camera's go2rtc stream and HA base; `back_yard_patio` is Ring's too. Hence `front_yard`
+  and `backyard_patio`. Reusing a slug while the Ring entities exist binds Hawksnest to the dead
+  ones (the basement/bedroom lesson at step 7.1). Retire the Ring device first if you want the name.
+- **No Tailscale `/32` for the hub, and never the hub's IP in the phone's RTSP map.** Both serve
+  only the Android direct-RTSP tier, which hardcodes channel `01` and would silently play channel
+  1 for every hub camera.
+- No motion mask yet — the camera is awake too little to measure one. Check `detection_fps`
+  during a woken window before drawing any.
+- The `assert len(cams) == …` line in the §5 validator is a **camera count**, not a constant —
+  it is 11 as of this rollout (nine wired + two hub). Update it every time.
+
+### HA: one integration entry for the hub, not one per camera
+
+Add the **Reolink** integration once, host = the hub's IP, `admin` credentials. It creates a hub
+device with a child device per channel, and names every entity `<hub>_<channel>_<entity>` — the
+doubled-slug trap above, now guaranteed rather than accidental. Per channel, rename the **entity
+ids** (never the device): `binary_sensor.<cam>_motion`, `binary_sensor.<cam>_person`,
+`sensor.<cam>_battery`. Do this **before** reloading the Frigate config entry so the Reolink PIR
+owns `_motion` and Frigate's lands on `_motion_2` (Frigate's person sensor is
+`_person_occupancy`; no collision). Disable `camera.<hub>_<cam>_fluent` (Hawksnest would render a
+ghost tile) and set the integration's **"Preload camera stream" OFF** — it would hold the cameras
+awake. Battery-camera entities are otherwise polled only every 6 h by design; the PIR sensors
+arrive by push and are fresh.
+
+### Side finding, not fixed here
+
+`REOLINK_IP_FRONT_DOOR_REOLINK` / `FRIGATE_REOLINK_IP_FRONT_DOOR_REOLINK` exist only in the patched
+Secrets — they are **absent from `/home/sonic/hawksnest-secrets/*.env`**. A `deploy.sh` that ever
+regenerates the Secrets from those files would drop the doorbell's IP. Add them.

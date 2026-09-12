@@ -50,11 +50,16 @@ ask rather than guessing — this controls physical door locks, so correctness m
   - Garage-to-house interior door (deadbolt to be added; currently lever-only)
 - **Light switches (Z-Wave):** Zooz ZEN72 dimmers (basement, single-pole). Quantity TBD by Christian.
 - **Cameras / Doorbell:** Existing Ring devices (cloud integration). *(Since 2026-07-29
-  no longer the whole story: eight local Reolink cameras — big_room + first_floor_stairway
+  no longer the whole story: nine local Reolink cameras — big_room + first_floor_stairway
   [E1 Zoom], kitchen + nursery + basement + bedroom + garage [E1 Pro], nursery_high
-  [E1 Outdoor Pro, added 2026-08-29] — feed **Frigate**
-  (sub-stream detect **and** 24/7 record) and **go2rtc** (main-stream live); Ring remains
-  for the doorbell + outdoor/battery cams. Main-stream recording was tried fleet-wide
+  [E1 Outdoor Pro, added 2026-08-29], front_door_reolink [D340W doorbell, 2026-08-30] — feed
+  **Frigate** (sub-stream detect **and** 24/7 record) and **go2rtc** (main-stream live).
+  **Plus, since 2026-09-12, two battery cameras behind a Reolink Home Hub** — backyard_patio +
+  front_yard [Argus 4 Pro] — which Frigate pulls **ON DEMAND only** (parked OFF until the hub's
+  PIR fires; the hub wakes a battery camera on any RTSP request and force-sleeps it after 5 min),
+  live from the SUB stream (main is HEVC), admin credentials in their own `*_HUB_*` secret vars
+  because the hub has no user table. Runbook: docs/adding-a-camera.md, "third animal". Ring
+  remains only for the outdoor cams not yet moved. Main-stream recording was tried fleet-wide
   2026-08-24 and reverted 2026-08-26 — it never reached the running Frigate, and the nursery
   cannot hold a main stream once the other cameras do. **`nursery_high` is a deliberate
   exception from 2026-08-30**: it alone records from main (4K **H.264**, ~47 GB/day). It

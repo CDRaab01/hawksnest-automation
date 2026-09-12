@@ -39,6 +39,8 @@ except ImportError:  # pragma: no cover - guidance only
 CAMS = [
     "big_room", "kitchen", "nursery", "nursery_high", "bedroom",
     "basement", "garage", "front_door_reolink", "first_floor_stairway",
+    # On-demand (Home Hub battery) cameras — in ON_DEMAND in the script under test.
+    "backyard_patio", "front_yard",
 ]
 CACHE_TOTAL_MB = 2048.0
 REAL_URLOPEN = urllib.request.urlopen
@@ -166,6 +168,22 @@ def main() -> int:
     if got:
         check("big_room" in got[0]["body"], "must name the one dead camera")
         check("kitchen" not in got[0]["body"], "must not implicate healthy cameras")
+
+    # On-demand (battery, Home Hub) cameras are parked OFF most of the day and their
+    # camera_fps freezes — at 0 after every Frigate restart. That is the design, not
+    # an outage, and it must never page.
+    got = case.run("on-demand cameras at 0 fps: parked, not dead",
+                   make_stats(dead=["backyard_patio", "front_yard"]))
+    check(not got, "a parked on-demand camera must not alert")
+
+    # ...but the allow-list must be exact: a wired camera dead beside a parked one
+    # still pages, and names only the wired one.
+    got = case.run("on-demand parked AND a wired camera dead",
+                   make_stats(dead=["backyard_patio", "big_room"]))
+    check(len(got) == 1, "a dead wired camera must still alert beside parked ones")
+    if got:
+        check("big_room" in got[0]["body"], "must name the dead wired camera")
+        check("backyard_patio" not in got[0]["body"], "must not implicate the parked camera")
 
     # Cache pressure alone, while every camera is still recording: the warning
     # that would have bought hours of notice on 2026-09-10.
