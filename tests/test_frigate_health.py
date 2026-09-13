@@ -40,7 +40,7 @@ CAMS = [
     "big_room", "kitchen", "nursery", "nursery_high", "bedroom",
     "basement", "garage", "front_door_reolink", "first_floor_stairway",
     # On-demand (Home Hub battery) cameras — in ON_DEMAND in the script under test.
-    "backyard_patio", "front_yard",
+    "backyard_patio", "front",
 ]
 CACHE_TOTAL_MB = 2048.0
 REAL_URLOPEN = urllib.request.urlopen
@@ -173,7 +173,7 @@ def main() -> int:
     # camera_fps freezes — at 0 after every Frigate restart. That is the design, not
     # an outage, and it must never page.
     got = case.run("on-demand cameras at 0 fps: parked, not dead",
-                   make_stats(dead=["backyard_patio", "front_yard"]))
+                   make_stats(dead=["backyard_patio", "front"]))
     check(not got, "a parked on-demand camera must not alert")
 
     # ...but the allow-list must be exact: a wired camera dead beside a parked one

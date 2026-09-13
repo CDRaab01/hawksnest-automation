@@ -55,8 +55,9 @@ ask rather than guessing — this controls physical door locks, so correctness m
   [E1 Outdoor Pro, added 2026-08-29], front_door_reolink [D340W doorbell, 2026-08-30] — feed
   **Frigate** (sub-stream detect **and** 24/7 record) and **go2rtc** (main-stream live).
   **Plus, since 2026-09-12, two battery cameras behind a Reolink Home Hub** — backyard_patio +
-  front_yard [Argus 4 Pro] — which Frigate pulls **ON DEMAND only** (parked OFF until the hub's
-  PIR fires; the hub wakes a battery camera on any RTSP request and force-sleeps it after 5 min),
+  front [Argus 4 Pro; `front` replaced the Ring "Front Driveway" camera, deleted the same day] —
+  which Frigate pulls **ON DEMAND only** (parked OFF until the hub's on-camera AI reports a
+  person/vehicle/animal; the hub wakes a battery camera on any RTSP request and force-sleeps it after 5 min),
   live from the SUB stream (main is HEVC), admin credentials in their own `*_HUB_*` secret vars
   because the hub has no user table. Runbook: docs/adding-a-camera.md, "third animal". Ring
   remains only for the outdoor cams not yet moved. Main-stream recording was tried fleet-wide

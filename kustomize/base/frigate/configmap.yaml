@@ -1073,10 +1073,12 @@ data:
             - cat
           genai: *person_genai
 
-      front_yard:
-        # Home Hub channel 1 ("Front") -> RTSP h264Preview_02. NOT `front`: that slug is
-        # the live Ring "Front" camera's go2rtc stream and HA base (the camera this one
-        # replaces) — same ghost-entity trap as above.
+      front:
+        # Home Hub channel 1 ("Front") -> RTSP h264Preview_02. Was `front_yard` for the
+        # first day: `front` was the live Ring "Front Driveway" camera's go2rtc stream
+        # and HA base, and reusing it would have bound Hawksnest to the dead Ring
+        # sensors (the basement/bedroom lesson). Renamed 2026-09-12 once that Ring
+        # camera was deleted from HA, go2rtc and the Ring account — in that order.
         enabled: true
         ffmpeg:
           # Same wake-tolerant input args + quick retry as backyard_patio — see there.
@@ -1115,4 +1117,11 @@ data:
             - person
             - dog
             - cat
+            # `car` on this camera only: it faces the driveway, and Frigate is only
+            # enabled here when the hub's AI saw a person or a vehicle. Whether a car
+            # on the ROAD gets this far is decided by the camera's detection zone in
+            # the Reolink app; a `driveway` zone drawn in Frigate's UI (live-only, see
+            # the drift check) with `review.alerts.required_zones` is the second
+            # filter once one exists.
+            - car
           genai: *person_genai

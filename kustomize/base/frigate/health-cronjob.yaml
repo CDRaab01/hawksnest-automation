@@ -77,7 +77,7 @@ spec:
                   # which is every Frigate restart — so without this it would page
                   # NOT RECORDING forever. Named explicitly, never inferred: a
                   # WIRED camera reading 0 here is exactly the incident.
-                  ON_DEMAND = {"backyard_patio", "front_yard"}
+                  ON_DEMAND = {"backyard_patio", "front"}
 
                   def sample():
                       out = {"api_down": False, "err": "", "dead": [], "cache_pct": 0.0}

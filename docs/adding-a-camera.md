@@ -932,7 +932,7 @@ from the **Ring account** to make it permanent.
 ## Battery cameras behind a Reolink Home Hub are a third animal
 
 Written 2026-09-12 from the **Argus 4 Pro** rollout (two cameras, `backyard_patio` and
-`front_yard`, on a **Reolink Home Hub** at 192.168.4.44, firmware v3.3.0.456). Almost every step
+`front`, on a **Reolink Home Hub** at 192.168.4.44, firmware v3.3.0.456). Almost every step
 above assumes one wired camera per IP that streams whenever asked. A battery camera behind the hub
 breaks that in five places, and each one was measured, not assumed.
 
@@ -1050,10 +1050,20 @@ recorded frames ~10–15 s after the PIR, never at 0; the hub's own recording co
 - `record.continuous.days: 1` on an on-demand camera means "keep every woken window for a day"
   whether or not the detector fired inside it — the only shape of "1 day" the hardware allows.
   Alert/detection clips follow the global 30 days. Disk: minutes of footage per day.
-- **Slugs must not collide with the Ring cameras they replace.** `front` is the live Ring
-  "Front" camera's go2rtc stream and HA base; `back_yard_patio` is Ring's too. Hence `front_yard`
-  and `backyard_patio`. Reusing a slug while the Ring entities exist binds Hawksnest to the dead
-  ones (the basement/bedroom lesson at step 7.1). Retire the Ring device first if you want the name.
+- **Slugs must not collide with the Ring cameras they replace.** `front` was the live Ring
+  "Front Driveway" camera's go2rtc stream and HA base, so the Argus spent its first day as
+  `front_yard`; `back_yard_patio` is Ring's too, hence `backyard_patio`. Reusing a slug while the
+  Ring entities exist binds Hawksnest to the dead ones (the basement/bedroom lesson at step 7.1).
+  The rename to `front` happened only after the Ring camera was **deleted** — the MQTT device in
+  HA (via the device page's MQTT-info menu, not by entity prefix), its go2rtc `ring:` stream, and
+  the device in the Ring account (so ring-mqtt cannot republish it) — then the Reolink entity ids
+  moved onto `front_*`, then Frigate/go2rtc/the automations were renamed and reloaded.
+- **Trigger Frigate on the hub's AI classes, not the PIR.** Measured over 3 h on `front`: 31 PIR
+  wakes, 73 `vehicle` detections, 19 `person`, 5 `animal` — it watches the street, and every
+  passing car bought a 2-minute Frigate session (~65 of 180 minutes awake, on solar). The
+  on-demand automations now trigger on `binary_sensor.<cam>_person` / `_vehicle` (front) and
+  `_person` / `_animal` (backyard), and wait for those to clear. What keeps road traffic out of
+  the *camera's* wakes is its detection zone in the Reolink app — the PIR is hardware.
 - **No Tailscale `/32` for the hub, and never the hub's IP in the phone's RTSP map.** Both serve
   only the Android direct-RTSP tier, which hardcodes channel `01` and would silently play channel
   1 for every hub camera.

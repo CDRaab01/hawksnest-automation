@@ -296,7 +296,7 @@ data:
       backyard_patio:
         - "rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_01_sub"
         - "ffmpeg:rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_01_sub#audio=opus"
-      front_yard:
+      front:
         - "rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_02_sub"
         - "ffmpeg:rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_02_sub#audio=opus"
 
@@ -317,7 +317,9 @@ data:
       #
       #   key         HA entity                      Ring app calls it
       #   front_door  camera.front_door_snapshot     Front Door
-      #   front       camera.front_snapshot          Front Driveway
+      #   (front)     camera.front_snapshot          Front Driveway — RETIRED 2026-09-12:
+      #                                              replaced by the Argus `front` above;
+      #                                              deleted from HA, here, and the Ring account
       #   back        camera.back_snapshot           Back Yard Patio
       #   back2       camera.back2_snapshot          Back Side Yard
       #   office      camera.office_snapshot         Puzzle Room
@@ -336,7 +338,6 @@ data:
       # discovery would, and that would break automations, so the entity id is the stable
       # side and this file follows it.
       front_door: "ring:?device_id=${RING_DEVICE_ID_FRONT_DOOR}&refresh_token=${RING_REFRESH_TOKEN}"
-      front: "ring:?device_id=${RING_DEVICE_ID_FRONT_DRIVEWAY}&refresh_token=${RING_REFRESH_TOKEN}"
       # NOTE: no `basement` entry here — the Reolink above claims that slug
       # (2026-07-31). `RING_DEVICE_ID_BASEMENT` joins RING_DEVICE_ID_BIG_ROOM,
       # RING_DEVICE_ID_KITCHEN and RING_DEVICE_ID_FIRST_FLOOR_STAIRWAY as
