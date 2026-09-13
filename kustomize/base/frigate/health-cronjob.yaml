@@ -69,6 +69,15 @@ spec:
                   # 70%: at the measured ~37 MB/min drain rate through this cache,
                   # 30% of 2 GB is still ~15 min of warning before recording stops.
                   CACHE_WARN_PCT = 70.0
+                  # Cameras Frigate pulls ON DEMAND: the battery cameras behind the
+                  # Reolink Home Hub, parked OFF until the hub's PIR fires (see the
+                  # hawksnest_argus_on_demand_* / hawksnest_argus_park automations).
+                  # A parked camera stays in /api/stats with camera_fps FROZEN at
+                  # its last value — 0 if it was parked before its first frame,
+                  # which is every Frigate restart — so without this it would page
+                  # NOT RECORDING forever. Named explicitly, never inferred: a
+                  # WIRED camera reading 0 here is exactly the incident.
+                  ON_DEMAND = {"backyard_patio", "front"}
 
                   def sample():
                       out = {"api_down": False, "err": "", "dead": [], "cache_pct": 0.0}
@@ -85,7 +94,7 @@ spec:
                       # substitute: it is legitimately 0 in a quiet room.
                       out["dead"] = sorted(
                           k for k, v in (d.get("cameras") or {}).items()
-                          if not (v.get("camera_fps") or 0)
+                          if k not in ON_DEMAND and not (v.get("camera_fps") or 0)
                       )
                       cache = ((d.get("service") or {}).get("storage") or {}).get("/tmp/cache") or {}
                       total = cache.get("total") or 0

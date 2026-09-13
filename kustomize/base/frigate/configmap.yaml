@@ -967,3 +967,161 @@ data:
         # NO motion mask, and that is MEASURED not deferred: detection_fps sits at 0.1 on
         # this camera, against 0.0-0.1 on the masked wall cameras. The D340W paints no
         # repainting OSD clock, so there is nothing for a mask to suppress.
+
+      # =======================================================================
+      # Reolink Home Hub battery cameras (Argus 4 Pro) — ON DEMAND. Added 2026-09-12.
+      #
+      # These two are not wall cameras and must not be treated like them. They have no
+      # RTSP of their own: the Home Hub (192.168.4.44) serves each bound camera as a
+      # channel — h264Preview_0N_{main,sub}, N 1-BASED — on ONE IP with ONE credential
+      # pair, and that pair is the hub's ADMIN login (the hub has no user table:
+      # AddUser -> "not support" on v3.3.0.456). Hence FRIGATE_REOLINK_HUB_*, never the
+      # fleet FRIGATE_REOLINK_USER/PASSWORD.
+      #
+      # THE HUB WAKES A BATTERY CAMERA ON ANY RTSP REQUEST (7-15 s measured) AND
+      # FORCE-SLEEPS IT AFTER 5 MINUTES. A camera Frigate pulls continuously is a
+      # wake→sleep→wake loop, forever, on solar. So Frigate never holds these streams:
+      #   - `enabled: true` below is the DESIGN, not an oversight. A camera seeded
+      #     `enabled: false` can never be turned on over MQTT (0.17.2 dispatcher.py
+      #     refuses ON unless enabled_in_config). It comes up ON after every Frigate
+      #     start and the HA automation `hawksnest_argus_park` publishes OFF within
+      #     ~5 s; `hawksnest_argus_on_demand_<cam>` publishes ON only while the hub's
+      #     PIR holds the camera awake, for at most 4 minutes.
+      #   - A parked camera stays in /api/stats with camera_fps FROZEN (0 after a
+      #     restart). base/frigate/health-cronjob.yaml carries the matching ON_DEMAND
+      #     allow-list; the HA detection watchdog needs none (its fps sensors are
+      #     disabled by the integration).
+      #   - `record.continuous.days: 1` here means "keep every woken window for a
+      #     day" whether or not the detector fired inside it — the only shape of the
+      #     owner's "1 day" the hardware allows. Alert/detection clips follow the
+      #     global 30 days. Disk cost: minutes of footage per day.
+      #
+      # Both streams ffprobed 2026-09-12 from the hub, per channel, not copied: sub is
+      # h264 1536x432 @25 with AAC 16k mono (the Argus 4 Pro's stitched dual-lens 32:9
+      # frame — not a 16:9 sibling's numbers); main is 5120x1440 HEVC and is used by
+      # nothing (WebRTC cannot carry it, and it is 12x the pixels for a detector that
+      # runs a few minutes a day). The hub carried three concurrent sessions on one
+      # channel, so this single input beside go2rtc's two is within budget.
+      #
+      # No motion mask yet: the camera is awake too little to measure one. Check
+      # detection_fps during a woken window before drawing any.
+      # -----------------------------------------------------------------------
+      backyard_patio:
+        # Home Hub channel 0 ("Backyard Patio") -> RTSP h264Preview_01. Replaces the
+        # Ring `back_yard_patio` camera, DIFFERENT slug on purpose: the Ring entities are
+        # still registered and a shared slug would bind Hawksnest to the dead ones (the
+        # basement/bedroom lesson). Retire the Ring device, then consider renaming.
+        enabled: true
+        ffmpeg:
+          # THE ONE input_args IN THIS FILE, and it is measured (walk test 2026-09-12):
+          # the hub accepts the RTSP connection and starts sending packets at once
+          # while the camera is still waking, so ffmpeg's default 5 s probe window
+          # (`analyzeduration` 0 = auto) closed before a keyframe/SPS arrived —
+          # "Could not find codec parameters ... unspecified size" — and the first
+          # attempt died every time. The 10 s retry then succeeded (camera awake by
+          # then), costing ~30 s of a ≤4.5-minute window. This is Frigate's own
+          # `preset-rtsp-generic` verbatim, with a 10 s probe window and a 30 s
+          # socket timeout in place of the preset's 10 s. Wall cameras keep the
+          # preset (no input_args) — they answer in a second.
+          #
+          # NOT LONGER THAN 10 s: Frigate's frame watchdog (video.py) kills an
+          # ffmpeg that has produced no frame in 20 s, and a 20 s probe window sat
+          # exactly on that deadline — the arrival test 2026-09-12 21:17Z lost
+          # its first attempt to "No frames received in 20 seconds" instead.
+          #
+          # And a second, hub-side race the probe window cannot fix (walk test 2):
+          # while the camera finishes waking, the hub answers ffmpeg's SETUP with
+          # `454 Session Not Found` and the first attempt dies anyway. Frigate's
+          # retry always succeeds — so make it quick. 3 s here instead of the
+          # global 10 s turns "~30 s of the window lost" into "~13 s". Per-camera on
+          # purpose: a wall camera that needs retries has a real problem, and the
+          # slower cadence there is what keeps the watchdog readable.
+          retry_interval: 3
+          input_args:
+            - -avoid_negative_ts
+            - make_zero
+            - -fflags
+            - +genpts+discardcorrupt
+            - -rtsp_transport
+            - tcp
+            - -timeout
+            - "30000000"
+            - -use_wallclock_as_timestamps
+            - "1"
+            - -analyzeduration
+            - "10000000"
+            - -probesize
+            - "10000000"
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_HUB_USER}:{FRIGATE_REOLINK_HUB_PASSWORD}@{FRIGATE_REOLINK_IP_HOME_HUB}:554/h264Preview_01_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          enabled: true
+          # ffprobe 192.168.4.44 ch 01, 2026-09-12: h264 1536x432 @25.
+          width: 1536
+          height: 432
+          fps: 5
+        record:
+          continuous:
+            days: 1
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+          genai: *person_genai
+
+      front:
+        # Home Hub channel 1 ("Front") -> RTSP h264Preview_02. Was `front_yard` for the
+        # first day: `front` was the live Ring "Front Driveway" camera's go2rtc stream
+        # and HA base, and reusing it would have bound Hawksnest to the dead Ring
+        # sensors (the basement/bedroom lesson). Renamed 2026-09-12 once that Ring
+        # camera was deleted from HA, go2rtc and the Ring account — in that order.
+        enabled: true
+        ffmpeg:
+          # Same wake-tolerant input args + quick retry as backyard_patio — see there.
+          retry_interval: 3
+          input_args:
+            - -avoid_negative_ts
+            - make_zero
+            - -fflags
+            - +genpts+discardcorrupt
+            - -rtsp_transport
+            - tcp
+            - -timeout
+            - "30000000"
+            - -use_wallclock_as_timestamps
+            - "1"
+            - -analyzeduration
+            - "10000000"
+            - -probesize
+            - "10000000"
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_HUB_USER}:{FRIGATE_REOLINK_HUB_PASSWORD}@{FRIGATE_REOLINK_IP_HOME_HUB}:554/h264Preview_02_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          enabled: true
+          # ffprobe 192.168.4.44 ch 02, 2026-09-12: h264 1536x432 @25.
+          width: 1536
+          height: 432
+          fps: 5
+        record:
+          continuous:
+            days: 1
+        objects:
+          track:
+            - person
+            - dog
+            - cat
+            # `car` on this camera only: it faces the driveway, and Frigate is only
+            # enabled here when the hub's AI saw a person or a vehicle. Whether a car
+            # on the ROAD gets this far is decided by the camera's detection zone in
+            # the Reolink app; a `driveway` zone drawn in Frigate's UI (live-only, see
+            # the drift check) with `review.alerts.required_zones` is the second
+            # filter once one exists.
+            - car
+          genai: *person_genai

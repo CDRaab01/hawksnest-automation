@@ -516,7 +516,7 @@ data:
         # actually care about, and a segment is one notification.
         label: >-
           {{ 'person' if 'person' in objects
-             else (objects | select('in', ['dog', 'cat']) | first | default('', true)) }}
+             else (objects | select('in', ['dog', 'cat', 'car']) | first | default('', true)) }}
         cam: "{{ ev.camera | default('', true) }}"
         cam_name: >-
           {{ state_attr('camera.' ~ cam, 'friendly_name')
@@ -527,32 +527,45 @@ data:
           {{ (ev.data | default({}, true)).detections | default([], true)
              | first | default('', true) }}
         front: "https://dragonfly.tail2ce561.ts.net:8443"
+        # The FIRST camera list in this file, added 2026-09-12 and kept deliberately
+        # small: the OUTDOOR cameras (the Home Hub battery cameras), which alert
+        # whether or not the alarm is armed — a person in the back yard at 3 pm is
+        # news; a person in the kitchen at 3 pm is lunch. Every other camera stays
+        # on the armed-only rule below. Add a camera here only if it looks OUTSIDE.
+        outdoor:
+          - backyard_patio
+          - front
       condition:
         # Cheapest checks first — this runs on every Frigate review update.
         - condition: template
           value_template: "{{ trigger.payload_json.type == 'new' }}"
         # EXPLICIT allow-list, not "anything Frigate tracked": widening the
         # `track:` list in the Frigate seed must never silently start pushing.
+        # `car` only from an outdoor camera (Frigate tracks it on `front` alone,
+        # which faces the driveway) — an indoor camera must never push a car.
         - condition: template
-          value_template: "{{ label in ['person', 'dog', 'cat'] }}"
-        # Armed-only. These are INDOOR cameras — people living here generate
-        # person events constantly (measured: 10 in a few minutes), so alerting
-        # while disarmed would be unusable. Entity-ID-free so a panel rename
-        # can't break it; with one panel this reads as "the alarm is armed".
-        # Only armed_home/armed_away are listed because the panel reports
-        # supported_features=3 — night/vacation can never occur here.
+          value_template: "{{ label in ['person', 'dog', 'cat'] or (label == 'car' and cam in outdoor) }}"
+        # Armed-only for INDOOR cameras — people living here generate person
+        # events constantly (measured: 10 in a few minutes), so alerting while
+        # disarmed would be unusable. Outdoor cameras (`outdoor` above) bypass
+        # this. Entity-ID-free so a panel rename can't break it; with one panel
+        # this reads as "the alarm is armed". Only armed_home/armed_away are
+        # listed because the panel reports supported_features=3 — night/vacation
+        # can never occur here.
         - condition: template
           value_template: >-
-            {{ states.alarm_control_panel
-               | selectattr('state', 'in', ['armed_home', 'armed_away'])
-               | list | count > 0 }}
+            {{ cam in outdoor
+               or (states.alarm_control_panel
+                   | selectattr('state', 'in', ['armed_home', 'armed_away'])
+                   | list | count > 0) }}
         # Object-class toggles, with DELIBERATELY ASYMMETRIC failure modes:
         # person fails OPEN (a missing or unknown helper still alerts — a renamed
         # helper must never silently disable a security feature), pets fail
-        # CLOSED (off is the safe direction for noise).
+        # CLOSED (off is the safe direction for noise). A car in the driveway is a
+        # security signal like a person, so it rides the person toggle.
         - condition: template
           value_template: >-
-            {% if label == 'person' %}
+            {% if label in ['person', 'car'] %}
               {{ states('input_boolean.hawksnest_alert_person') != 'off' }}
             {% else %}
               {{ states('input_boolean.hawksnest_alert_pets') == 'on' }}
@@ -573,6 +586,67 @@ data:
             # want ships now and the follow-up stays a pure client change.
             click: "{{ front }}/?camera=camera.{{ cam }}&event={{ event_id }}"
             attach: "{{ (front ~ cam_pic) if cam_pic else '' }}"
+
+    # ── Instant person push for the OUTDOOR (Home Hub battery) cameras ──────────
+    # The Frigate review push above cannot be instant for these two: Frigate only
+    # starts pulling a battery camera ~10-15 s after the hub's PIR fires (see the
+    # on-demand automations), so its `person` review lands 20-40 s after the fact —
+    # and a driveway arrival (2026-09-12 21:17Z) produced no review at all. The hub's
+    # own on-camera AI, `binary_sensor.<cam>_person`, arrives in HA by PUSH within a
+    # second of the detection and needs no wake. So: push from THAT, immediately;
+    # Frigate's review follows with the clip and the description when it can.
+    #
+    # Two notifications per event is the intended trade — the first says "now", the
+    # second says "here's the footage". Person only, matching the review push's
+    # `walking` tag/route; the same `hawksnest_alert_person` helper gates it and
+    # fails OPEN for the same reason. No armed gate — these look OUTSIDE. No image:
+    # the camera's snapshot entity is disabled (ghost-tile trap) and Frigate's
+    # latest.jpg is its error image while the camera is parked. `mode: single` +
+    # the trailing minute is the cooldown — the AI sensor can flap several times
+    # during one visit and one push per visit is the goal.
+    - id: hawksnest_push_outdoor_person_backyard_patio
+      alias: "Hawksnest push: person at Backyard Patio (hub PIR, instant)"
+      mode: single
+      max_exceeded: silent
+      trigger:
+        - platform: state
+          entity_id: binary_sensor.backyard_patio_person
+          to: "on"
+      condition:
+        - condition: template
+          value_template: "{{ states('input_boolean.hawksnest_alert_person') != 'off' }}"
+      action:
+        - service: rest_command.ntfy_publish
+          data:
+            topic: "hawksnest-alerts"
+            title: "Person at Backyard Patio"
+            message: "Someone is at your Backyard Patio right now."
+            tags: "walking"
+            priority: "high"
+            click: "https://dragonfly.tail2ce561.ts.net:8443/?camera=camera.backyard_patio"
+        - delay: "00:01:00"
+
+    - id: hawksnest_push_outdoor_person_front
+      alias: "Hawksnest push: person at Front (hub PIR, instant)"
+      mode: single
+      max_exceeded: silent
+      trigger:
+        - platform: state
+          entity_id: binary_sensor.front_person
+          to: "on"
+      condition:
+        - condition: template
+          value_template: "{{ states('input_boolean.hawksnest_alert_person') != 'off' }}"
+      action:
+        - service: rest_command.ntfy_publish
+          data:
+            topic: "hawksnest-alerts"
+            title: "Person at Front"
+            message: "Someone is at your Front right now."
+            tags: "walking"
+            priority: "high"
+            click: "https://dragonfly.tail2ce561.ts.net:8443/?camera=camera.front"
+        - delay: "00:01:00"
 
     # Frigate detection watchdog. Guards against the failure that actually shipped:
     # detect.enabled silently false (0.17 default) — pod healthy, ffmpeg healthy,
@@ -792,6 +866,144 @@ data:
                   - switch.bedroom_detect
                   - switch.bedroom_recordings
                   - switch.bedroom_snapshots
+
+    # ── Battery cameras behind the Reolink Home Hub: Frigate ON DEMAND ──────────
+    # The Argus cameras (backyard_patio, front) have no RTSP of their own; the
+    # hub serves them as channels — and it WAKES a battery camera on any RTSP request
+    # (7-15 s measured 2026-09-12), holds the session at most 5 minutes, then
+    # force-sleeps it. A continuous Frigate puller is therefore a wake→sleep→wake loop
+    # that flattens the battery. So Frigate never holds these streams: each camera is
+    # parked OFF (`frigate/<cam>/enabled/set`, the bedroom mechanism above) and is
+    # enabled only while the hub's own on-camera AI says something worth recording
+    # is there.
+    #
+    # Two automations per design:
+    #  - on_demand_<cam>: AI class on → Frigate ON → wait for the classes to clear
+    #    (≤2.5 min) → 2 min tail → Frigate OFF. `mode: single` makes the 4.5-minute
+    #    bound ABSOLUTE — a re-trigger mid-run is dropped (already awake and
+    #    recording) and the next edge after OFF wakes it again. 4.5 < the hub's
+    #    5-minute cap, so Frigate is always the one that ends the session, never the
+    #    hub. The tail is 2 minutes, not 1, because of how a driveway arrival looks
+    #    (measured 2026-09-12 21:17Z): the sensor fires on the CAR and clears in
+    #    seconds; the person steps out 20-40 s later and walks to the door while
+    #    Frigate is still ~15 s from its first frame. A 1-minute tail closed the
+    #    window before anyone was in it.
+    #  - park: Frigate's runtime `enabled` state is IN-MEMORY — every Frigate restart
+    #    brings these cameras back ON. (`enabled: true` in the seed is deliberate: a
+    #    camera seeded `enabled: false` can NEVER be turned on over MQTT — 0.17.2
+    #    dispatcher.py refuses ON unless enabled_in_config.) So when Frigate comes
+    #    online (and on HA start) park every on-demand camera that is not mid-event.
+    #    Cost: one ≤30 s wake per Frigate restart.
+    #
+    # WHY THE AI CLASSES AND NOT THE PIR (`_motion`). Measured 2026-09-12 over 3 h on
+    # `front`: 31 PIR wakes, 73 `vehicle` detections, 19 `person`, 5 `animal` — the
+    # camera watches the street and every passing car tripped the PIR, buying a
+    # 2-minute Frigate session each time (~65 of 180 minutes awake, on solar). The
+    # per-class sensors (`binary_sensor.<cam>_person/_vehicle/_animal`, the Reolink
+    # integration's, pushed to HA within a second) are what we actually want to
+    # record. Vehicle stays on `front` because a car IN THE DRIVEWAY is an event;
+    # keeping cars ON THE ROAD out is the camera's own detection zone in the Reolink
+    # app — the PIR is hardware, nothing here can shape it. Frigate's own entities
+    # land on `_2` (its `_motion_2`, `_person_occupancy`) and are not what these read.
+    # The health CronJob (base/frigate/health-cronjob.yaml) carries the matching
+    # ON_DEMAND allow-list: a parked camera's camera_fps freezes (at 0 after a
+    # restart) and would otherwise page "NOT RECORDING" forever.
+    - id: hawksnest_argus_on_demand_backyard_patio
+      alias: "Hawksnest: Frigate on demand — backyard_patio (Home Hub battery)"
+      mode: single
+      max_exceeded: silent
+      # Person or animal — Frigate tracks dog/cat here. No vehicle: no road behind
+      # the house.
+      trigger:
+        - platform: state
+          entity_id: binary_sensor.backyard_patio_person
+          to: "on"
+        - platform: state
+          entity_id: binary_sensor.backyard_patio_animal
+          to: "on"
+      action:
+        - service: mqtt.publish
+          continue_on_error: true
+          data:
+            topic: frigate/backyard_patio/enabled/set
+            payload: "ON"
+        - wait_template: >-
+            {{ is_state('binary_sensor.backyard_patio_person', 'off')
+               and is_state('binary_sensor.backyard_patio_animal', 'off') }}
+          timeout: "00:02:30"
+          continue_on_timeout: true
+        - delay: "00:02:00"
+        - service: mqtt.publish
+          continue_on_error: true
+          data:
+            topic: frigate/backyard_patio/enabled/set
+            payload: "OFF"
+
+    - id: hawksnest_argus_on_demand_front
+      alias: "Hawksnest: Frigate on demand — front (Home Hub battery)"
+      mode: single
+      max_exceeded: silent
+      # Person or vehicle — see the block comment above for the street measurement.
+      trigger:
+        - platform: state
+          entity_id: binary_sensor.front_person
+          to: "on"
+        - platform: state
+          entity_id: binary_sensor.front_vehicle
+          to: "on"
+      action:
+        - service: mqtt.publish
+          continue_on_error: true
+          data:
+            topic: frigate/front/enabled/set
+            payload: "ON"
+        # Both classes clear before the tail starts — a car that parks and a person
+        # who steps out are one visit.
+        - wait_template: >-
+            {{ is_state('binary_sensor.front_person', 'off')
+               and is_state('binary_sensor.front_vehicle', 'off') }}
+          timeout: "00:02:30"
+          continue_on_timeout: true
+        - delay: "00:02:00"
+        - service: mqtt.publish
+          continue_on_error: true
+          data:
+            topic: frigate/front/enabled/set
+            payload: "OFF"
+
+    - id: hawksnest_argus_park
+      alias: "Hawksnest: park the Home Hub battery cameras in Frigate"
+      mode: single
+      trigger:
+        # Frigate's LWT topic; retained, so HA start re-reads `online` and this also
+        # covers an HA restart while Frigate stayed up.
+        - platform: mqtt
+          topic: frigate/available
+          payload: "online"
+        - platform: homeassistant
+          event: start
+      action:
+        # Let Frigate finish registering its MQTT command handlers.
+        - delay: "00:00:05"
+        - repeat:
+            for_each:
+              - backyard_patio
+              - front
+            sequence:
+              # A camera with a person/vehicle/animal on it right now is mid-event:
+              # leave it to its on_demand automation, which parks it when the event ends.
+              - if:
+                  - condition: template
+                    value_template: >-
+                      {{ not (is_state('binary_sensor.' ~ repeat.item ~ '_person', 'on')
+                              or is_state('binary_sensor.' ~ repeat.item ~ '_vehicle', 'on')
+                              or is_state('binary_sensor.' ~ repeat.item ~ '_animal', 'on')) }}
+                then:
+                  - service: mqtt.publish
+                    continue_on_error: true
+                    data:
+                      topic: "frigate/{{ repeat.item }}/enabled/set"
+                      payload: "OFF"
 
     # ── Reconciled from the live instance, 2026-08-02 ─────────────────────────
     # Built in the HA UI and never written back here, so they lived only on the
