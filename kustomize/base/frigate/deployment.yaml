@@ -184,7 +184,11 @@ spec:
               #
               # Node re-checked again: 23 GB total, 12 GB available. One more GB of
               # ceiling still does not put ring-mqtt at risk.
-              memory: 8Gi
+              #
+              # 2026-09-13: +128Mi, in step with /dev/shm 256Mi -> 384Mi below (see the
+              # dshm volume). Same rule as the cache: the tmpfs is charged here, so the
+              # two move together or a full shm becomes an OOMKill.
+              memory: 8320Mi
       volumes:
         - name: config
           persistentVolumeClaim:
@@ -221,7 +225,14 @@ spec:
         - name: dshm
           emptyDir:
             medium: Memory
-            sizeLimit: 256Mi
+            # Frigate computes the shm it wants from the fleet's detect geometries and
+            # reports it in /api/stats as `min_shm`. With eleven cameras (two of them
+            # 1536x432) that read 302 MB against a 256Mi tmpfs on 2026-09-13 — not the
+            # cause of that day's hub-camera trouble (the sibling camera on identical
+            # config had zero drops), but a shortfall Frigate itself flags. `medium:
+            # Memory` is charged to this container's cgroup, so the memory limit above
+            # moved by the same 128Mi in the same commit (the /tmp/cache lesson).
+            sizeLimit: 384Mi
         # --- OpenVINO GPU path (see the volumeMounts note above) ---------------
         # - name: dri
         #   hostPath:

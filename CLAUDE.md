@@ -59,7 +59,9 @@ ask rather than guessing — this controls physical door locks, so correctness m
   which Frigate pulls **ON DEMAND only** (parked OFF until the hub's on-camera AI reports a
   person/vehicle/animal; the hub wakes a battery camera on any RTSP request and force-sleeps it after 5 min),
   live from the SUB stream (main is HEVC), admin credentials in their own `*_HUB_*` secret vars
-  because the hub has no user table. Runbook: docs/adding-a-camera.md, "third animal". Ring
+  because the hub has no user table. Runbook: docs/adding-a-camera.md, "third animal". Their
+  footage is timestamped by the hub on arrival, so jumpy playback means the camera→hub radio
+  path, never Frigate's input args (measured 2026-09-13; `scripts/frigate-segment-jitter.py`). Ring
   remains only for the outdoor cams not yet moved. Main-stream recording was tried fleet-wide
   2026-08-24 and reverted 2026-08-26 — it never reached the running Frigate, and the nursery
   cannot hold a main stream once the other cameras do. **`nursery_high` is a deliberate
