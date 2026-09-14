@@ -1074,10 +1074,27 @@ Two findings, and a negative result worth more than either:
   `front`, −54 dBm on `backyard_patio`**. The difference was **bitrate**: `GetEnc` showed `front` at
   Fluent **1024** kbit/s + Clear **4096** (the hub records Clear from the camera while Frigate pulls
   Fluent, so ~5 Mbit/s over that link during every wake) against the healthy camera's 512 + 2048.
-  Both are 15 fps, not the 25 the SPS advertises. Fix applied 2026-09-13 through the now-enabled
-  `select.front_fluent_bit_rate` / `select.front_clear_bit_rate`: **512 / 2048**, matching the
-  sibling. Firmware is not a lever: `front` runs `v3.0.0.4978_25060601`, `backyard_patio`
+  Both are 15 fps, not the 25 the SPS advertises. Owner set `front` to **512 / 2048** on
+  2026-09-14 through the now-enabled `select.front_fluent_bit_rate` / `select.front_clear_bit_rate`
+  (HA shows the old value for up to 6 h — its battery-camera poll — so confirm with `GetEnc`).
+  **A/B, same 60 s probe:** `front` went from 5.2 → **8.3 fps** and from 34 % → **55 %** of audio
+  packets delivered; still bursty (60 % of frames < 10 ms apart, one 8.4 s gap). Better, not fixed.
+  Firmware is not a lever: `front` runs `v3.0.0.4978_25060601`, `backyard_patio`
   `v3.0.0.6066_26022801`, and Reolink offers nothing newer for `front`'s batch.
+- **The radio path itself, measured while each camera was awake** (150 pings at 5/s from the
+  Dragonfly box to the camera's own LAN address — they associate to the house Wi-Fi with their own
+  MACs; `front` = 192.168.4.67, `backyard_patio` = 192.168.4.27, both found via `arp -a`):
+
+  | camera | loss | avg RTT | max RTT | mdev |
+  |---|---|---|---|---|
+  | `front` (two runs) | 8 % / 6.7 % | 95 / 49 ms | 734 / 369 ms | 100 / 59 ms |
+  | `backyard_patio` | 5.3 % | 67 ms | 400 ms | 69 ms |
+
+  A healthy Wi-Fi client on this LAN is < 1 % and ~10 ms. Both cameras sit on a poor path (both
+  hang off wireless-mesh eero satellites), `backyard_patio` just stays inside it at 2.5 Mbit/s.
+  Even its clean 15 fps arrives 24 % in bursts with 0.8 s gaps — that is the floor the app's
+  playout buffer and run-accurate seeks are for. The next levers are on the radio side: a wired
+  backhaul for the satellite each camera uses, or 256 / 1024 kbit/s on `front` to buy margin.
 - Also enabled for good, both cameras: `sensor.<cam>_battery_state`, the four `select.<cam>_{fluent,clear}_{frame,bit}_rate`,
   and `sensor.reolink_hub_cpu_usage`. They are read from the hub's cache, so they never wake a camera.
 
