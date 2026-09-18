@@ -541,10 +541,16 @@ data:
           value_template: "{{ trigger.payload_json.type == 'new' }}"
         # EXPLICIT allow-list, not "anything Frigate tracked": widening the
         # `track:` list in the Frigate seed must never silently start pushing.
-        # `car` only from an outdoor camera (Frigate tracks it on `front` alone,
-        # which faces the driveway) — an indoor camera must never push a car.
+        # `car` is intentionally NOT pushed. Frigate tracks car on `front` alone
+        # (the driveway), and it is a battery camera that re-wakes on the hub's
+        # motion and re-alerts the same parked/arriving car on every wake — ~20
+        # car pushes in a 22-minute window, measured 2026-09-18. A segment that
+        # ALSO contains a person still pushes (`label` resolves to 'person'
+        # above), so a visitor getting out of their car is not lost; only a car
+        # with no visible person is suppressed. Cars stay recorded + searchable
+        # in Frigate regardless — this drops the notification, not the footage.
         - condition: template
-          value_template: "{{ label in ['person', 'dog', 'cat'] or (label == 'car' and cam in outdoor) }}"
+          value_template: "{{ label in ['person', 'dog', 'cat'] }}"
         # Armed-only for INDOOR cameras — people living here generate person
         # events constantly (measured: 10 in a few minutes), so alerting while
         # disarmed would be unusable. Outdoor cameras (`outdoor` above) bypass
