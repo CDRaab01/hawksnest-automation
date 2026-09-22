@@ -1024,6 +1024,12 @@ data:
           # socket timeout in place of the preset's 10 s. Wall cameras keep the
           # preset (no input_args) — they answer in a second.
           #
+          # `-use_wallclock_as_timestamps 1` STAYS, and dropping it will not smooth
+          # jumpy playback: measured 2026-09-13, a capture keeping the hub's RTP
+          # clock was bursty in exactly the same places as the arrival-stamped one.
+          # The hub timestamps frames as IT receives them from the camera. See the
+          # runbook, "Jumpy playback"; the lever was the camera's bitrate.
+          #
           # NOT LONGER THAN 10 s: Frigate's frame watchdog (video.py) kills an
           # ffmpeg that has produced no frame in 20 s, and a 20 s probe window sat
           # exactly on that deadline — the arrival test 2026-09-12 21:17Z lost

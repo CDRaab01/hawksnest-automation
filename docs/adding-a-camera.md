@@ -1045,6 +1045,64 @@ hub answers ffmpeg's `SETUP` with `454 Session Not Found` and the first attempt 
 retries has a real problem and the slow cadence keeps its log readable). Expect the first
 recorded frames ~10–15 s after the PIR, never at 0; the hub's own recording covers the pre-roll.
 
+### Jumpy playback: the hub stamps frames as they arrive, and `front` was losing two-thirds of them
+
+Measured 2026-09-13, after the owner reported both hub cameras playing "jumps, speeds up, slows
+down" in Hawksnest. The tool is `scripts/frigate-segment-jitter.py` (ffprobes the recorded
+segments inside the pod — wakes nothing). Against a wired control:
+
+| camera | median fps | frame-spacing stdev | frames <10 ms apart | longest gap |
+|---|---|---|---|---|
+| `basement` (wired) | 10.0 | 38 ms | 3 % | 0.3 s |
+| `backyard_patio`, morning | 15.1 | 35–57 ms | 8–16 % | 0.6–1.5 s |
+| `backyard_patio`, afternoon | 15.1 | 170–190 ms | ~40 % | 2–3 s |
+| `front` (46 of 48 segments) | **2.5** | 250 ms – 4.9 s | 40–60 % | **17 s** |
+
+Two findings, and a negative result worth more than either:
+
+- **Dropping `-use_wallclock_as_timestamps` does NOT help — do not re-try it.** A 60 s capture of
+  `front`'s sub stream taken twice concurrently from the frigate pod, once stamping arrival time
+  (what these input args do) and once keeping the hub's RTP timestamps, produced the *same* gaps
+  (6529 vs 6498 ms, 4592 vs 4595, …) and the same 50 % of frames under 10 ms apart. The hub
+  timestamps a frame when *it* receives it from the camera, so the burstiness is in the RTP clock
+  before ffmpeg sees it. The FLV escape hatch above would carry the same clock (and the hub has
+  `rtmpEnable: 0` anyway). Nothing on the Frigate side can smooth this footage without re-encoding.
+- **`front` was losing frames, not just bunching them.** The same capture carried 313 AAC packets
+  in 58 s where a 16 kHz stream produces ~905 (`backyard_patio`'s segments have the full 16/s) —
+  about a third of everything the camera sent arrived at the hub. Not signal: `sensor.<cam>_wi_fi_signal`
+  (disabled by the integration; enable it — it costs nothing and needs no wake) read **−60 dBm on
+  `front`, −54 dBm on `backyard_patio`**. The difference was **bitrate**: `GetEnc` showed `front` at
+  Fluent **1024** kbit/s + Clear **4096** (the hub records Clear from the camera while Frigate pulls
+  Fluent, so ~5 Mbit/s over that link during every wake) against the healthy camera's 512 + 2048.
+  Both are 15 fps, not the 25 the SPS advertises. Owner set `front` to **512 / 2048** on
+  2026-09-14 through the now-enabled `select.front_fluent_bit_rate` / `select.front_clear_bit_rate`
+  (HA shows the old value for up to 6 h — its battery-camera poll — so confirm with `GetEnc`).
+  **A/B, same 60 s probe:** `front` went from 5.2 → **8.3 fps** and from 34 % → **55 %** of audio
+  packets delivered; still bursty (60 % of frames < 10 ms apart, one 8.4 s gap). Better, not fixed.
+  Firmware is not a lever: `front` runs `v3.0.0.4978_25060601`, `backyard_patio`
+  `v3.0.0.6066_26022801`, and Reolink offers nothing newer for `front`'s batch.
+- **The radio path itself, measured while each camera was awake** (150 pings at 5/s from the
+  Dragonfly box to the camera's own LAN address — they associate to the house Wi-Fi with their own
+  MACs; `front` = 192.168.4.67, `backyard_patio` = 192.168.4.27, both found via `arp -a`):
+
+  | camera | loss | avg RTT | max RTT | mdev |
+  |---|---|---|---|---|
+  | `front` (two runs) | 8 % / 6.7 % | 95 / 49 ms | 734 / 369 ms | 100 / 59 ms |
+  | `backyard_patio` | 5.3 % | 67 ms | 400 ms | 69 ms |
+
+  A healthy Wi-Fi client on this LAN is < 1 % and ~10 ms. Both cameras sit on a poor path (both
+  hang off wireless-mesh eero satellites), `backyard_patio` just stays inside it at 2.5 Mbit/s.
+  Even its clean 15 fps arrives 24 % in bursts with 0.8 s gaps — that is the floor the app's
+  playout buffer and run-accurate seeks are for. The next levers are on the radio side: a wired
+  backhaul for the satellite each camera uses, or 256 / 1024 kbit/s on `front` to buy margin.
+- Also enabled for good, both cameras: `sensor.<cam>_battery_state`, the four `select.<cam>_{fluent,clear}_{frame,bit}_rate`,
+  and `sensor.reolink_hub_cpu_usage`. They are read from the hub's cache, so they never wake a camera.
+
+Read the jitter numbers as: stdev high with fps at the configured rate = arrival-time jitter
+(the radio path is congested, nothing lost); fps well below the configured rate = frames missing
+(radio path or camera). The radio path is camera → eero satellite (wireless backhaul) → gateway →
+Ethernet → hub; the hub itself is on `LAN` (`GetLocalLink`).
+
 ### Retention, slugs, and the things deliberately NOT done
 
 - `record.continuous.days: 1` on an on-demand camera means "keep every woken window for a day"
