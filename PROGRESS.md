@@ -49,11 +49,19 @@ Windows host → usbipd (303a:4001) → WSL2 /dev/ttyACM0 → by-id symlink
 
 ## Pending ⏳
 
-- **Garage interior lock** — not started (deadbolt may still need installing per spec).
-- **User code slots** — not set yet. Plan: slot 1 = Christian, slot 2 = Elizabeth.
+> **Most of this section is 2026-06 state and has been overtaken.** `DEPLOYMENT.md` §1 is the
+> authoritative as-built record; the Z-Wave bullets below were re-measured 2026-09-22 against
+> HA's live device registry, the rest have not been.
+
+- ~~**Garage interior lock** — not started.~~ **DONE** — `lock.garage_door` is live.
+- **User code slots** — still not set. Plan: slot 1 = Christian, slot 2 = Elizabeth.
   Do once all locks are in (one pass via the User Code CC / Users tab).
-- **ZEN72 dimmer(s)** — not added. Worth doing one *between* the PC and the doors to
-  build mesh; lock RSSI is ~-87 dBm (workable but middling, no repeaters yet).
+- ~~**ZEN72 dimmer(s)** — not added.~~ **DONE** — one ZEN72 is live as
+  `light.master_bedroom_master_lounge_dimmer`, plus two GE 28175/ZW3106 plug-in lamp dimmers in
+  the nursery and a ZEN76 on Long Range. The mesh note that sat here still stands as a *reason*
+  though: lock RSSI was ~-87 dBm with no repeaters, and mains-powered nodes are what fix that.
+  **Re-measure it** the next time a mains node joins — that number is the whole argument for
+  choosing classic mesh over Long Range, and nobody has checked it since.
 - **ring-mqtt** — manifests added this session (`kustomize/ring-mqtt/`), not yet deployed.
   To finish: create the `ring` mosquitto user + `ring-mqtt.env`, `apply -k`, then generate
   the Ring token (`kubectl exec -it deploy/ring-mqtt -- /app/ring-mqtt/init-ring-mqtt.js`,

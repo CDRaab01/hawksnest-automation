@@ -198,6 +198,12 @@ Complete onboarding (create the owner account, set name/timezone).
 
 ### Add a Z-Wave device (pairing)
 
+> Adding something that is **not** a Schlage lock — or a kind of device this house has not had
+> before? Follow **[docs/adding-a-zwave-device.md](docs/adding-a-zwave-device.md)** instead. It
+> covers the pre-flight checks, PIN vs full DSK, Long Range vs classic mesh, pinning device
+> parameters in git, and the entity_id naming trap that has already left two permanently ugly
+> slugs in this install. The four steps below remain the short version.
+
 1. In Z-Wave JS UI click **Manage nodes → Include**, choose **S2** (scan/enter DSK as prompted).
 2. **Schlage BE469ZP:** tap the outside **Schlage** button, then enter the programming code
    to put the lock in inclusion mode. Pair **near the controller** first if it fails at

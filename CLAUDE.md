@@ -49,6 +49,14 @@ ask rather than guessing — this controls physical door locks, so correctness m
   - Back door (deadbolt)
   - Garage-to-house interior door (deadbolt to be added; currently lever-only)
 - **Light switches (Z-Wave):** Zooz ZEN72 dimmers (basement, single-pole). Quantity TBD by Christian.
+  *(Since 2026-09-22, re-measured against HA's live device registry, the real Z-Wave fleet is
+  wider than this spec ever named: one **ZEN72** wall dimmer, two **Inovelli VZW30-SN** on/off
+  switches, two **Zooz ZEN32** scene controllers, one **Zooz ZEN76** on Long Range, two
+  **GE 28175/ZW3106** plug-in lamp dimmers, and two **Ecolink TILTZWAVE1** garage tilt sensors —
+  none of them in the basement. A **Minoston MP22ZD** outdoor dimmer plug for the backyard string
+  lights is the next addition. The authoritative inventory is **DEPLOYMENT.md §1**, and the
+  procedure is **docs/adding-a-zwave-device.md** — read the entity_id naming section before
+  including anything, because HA mints the slug once and a later rename cannot fix it.)*
 - **Cameras / Doorbell:** Existing Ring devices (cloud integration). *(Since 2026-07-29
   no longer the whole story: nine local Reolink cameras — big_room + first_floor_stairway
   [E1 Zoom], kitchen + nursery + basement + bedroom + garage [E1 Pro], nursery_high
