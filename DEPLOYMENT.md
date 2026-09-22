@@ -7,7 +7,8 @@
 > but flag the difference rather than silently diverging. This controls physical door
 > locks: when unsure, stop and ask rather than guess.
 
-Last updated: **2026-06-27** (added base+overlays, a staging smoke-test overlay, and HA
+Last updated: **2026-09-22** (§1 Z-Wave fleet re-measured against the live registry;
+added the Z-Wave device runbook). Previously 2026-06-27 (added base+overlays, a staging smoke-test overlay, and HA
 config-validation gates — see §11). Original V1 bring-up was 2026-06-22.
 
 ---
@@ -23,12 +24,35 @@ config-validation gates — see §11). Original V1 bring-up was 2026-06-22.
 - Ring (cloud) integration added.
 - Windows logon scheduled task re-establishes the network after reboot.
 
-**Deferred / pending (next session):**
-- `zwave-js-ui` is deployed but **parked at `replicas: 0`** — the ZWA-2 USB controller
-  had not physically arrived. No locks or dimmers paired yet.
-- ZEN72 dimmers: **none in V1** (owner deferred them; pair later via the same flow).
-- Garage interior-door deadbolt: **not yet installed** (lever-only). V1 pairs only the
-  **front + back** deadbolts; slot structure left ready for the third.
+**Z-Wave fleet — re-measured 2026-09-22 against HA's live device registry.**
+The three bullets that used to sit here (zwave-js-ui parked at `replicas: 0`, "no locks or
+dimmers paired yet", "ZEN72 dimmers: none in V1", garage deadbolt not installed) were the
+2026-06-27 state and had been wrong for months. All of it is now built:
+
+| Device | Model | Entity | Area |
+|---|---|---|---|
+| Front door deadbolt | Schlage BE469ZP | `lock.front_door_lock` | Front Door |
+| Back door deadbolt | Schlage BE469ZP | `lock.lock` † | Back Door |
+| Garage interior deadbolt | Schlage BE469ZP | `lock.garage_door` | Garage |
+| Scene controller ×2 | Zooz ZEN32 | `switch.*_scene_controller` | Cooper's Bedroom, Master Bedroom |
+| On/off switch ×2 | Inovelli VZW30-SN | `light.nursery_on_off_switch`, `light.master_bedroom_on_off_switch` | Nursery, Master Bedroom |
+| **Wall dimmer** | **Zooz ZEN72** | **`light.master_bedroom_master_lounge_dimmer`** | Master Bedroom |
+| On/off switch (Long Range) | Zooz ZEN76 | `switch.s2_on_off_switch` † | Master Bedroom |
+| **Plug-in lamp dimmer ×2** | **GE 28175 / ZW3106** | **`light.nursery_lamp`, `light.nursery_lamp_2`** | Nursery |
+| Garage tilt sensor ×2 | Ecolink TILTZWAVE1 | `light.main_garage_door_basic`, `light.side_garage_door_basic` | Garage |
+| Controller | Nabu Casa ZWA-2 | `light.home_assistant_connect_zwa_2_led` | Office |
+
+† Both of these carry a **squatted entity_id** — the node was unnamed when HA first created
+the entity, so the slug was minted from the bare product name and a later device rename could not
+change it. See [docs/adding-a-zwave-device.md](docs/adding-a-zwave-device.md) §"the entity_id is
+minted ONCE"; it is the single most expensive mistake available when adding a device.
+
+**Pending:**
+- **Minoston MP22ZD (ZW96SD) outdoor dimmer plug** — backyard string lights. Not yet included.
+  Classic mesh (not Long Range) by decision; S2 with DSK PIN, target entity
+  `light.backyard_string_lights`, area `Backyard`. Runbook:
+  [docs/adding-a-zwave-device.md](docs/adding-a-zwave-device.md).
+- **User code slots** — still not set (slot 1 = Christian, slot 2 = Elizabeth).
 
 ---
 
