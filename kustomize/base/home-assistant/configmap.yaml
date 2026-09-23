@@ -2661,6 +2661,105 @@ data:
             tags: "warning"
             priority: "{{ 'high' if replace_now | count > 0 else 'default' }}"
             click: "https://dragonfly.tail2ce561.ts.net:8443/"
+    # ── Backyard string lights: dusk on, curfew off ──────────────────────────
+    - id: hawksnest_backyard_string_lights
+      alias: "Hawksnest: backyard string lights - dusk on, curfew off"
+      description: 'A Minoston outdoor dimmer plug on the backyard string lights, included S2
+        Authenticated 2026-09-23 as node 257. THE RULE IS ONE LINE: on at sunset+30, off at
+        21:00 OR one hour after on, whichever is LATER. The max() is not decoration - at this
+        latitude the solstice sunset is about 20:35, so sunset+30 is 21:05, AFTER a naive 21:00
+        off. Without it the yard would light at 21:05 and stay lit until 21:00 the next day.
+        VERIFIED by rendering these exact templates against four sunsets before this shipped:
+        17:00 gives 17:30-21:00, 19:30 gives 20:00-21:00, 20:00 gives 20:30-21:30, and 20:35
+        gives 21:05-22:05 - the guaranteed hour.
+        EVERY TRIGGER ASKS THE SAME QUESTION. There is no on-automation and no off-automation
+        and no wait/delay - four wake-ups (dusk, curfew, hour-up, restart) each recompute
+        should_be_on and converge on it. That is why a reboot mid-evening cannot strand the
+        string on: this host has a documented RAM fault and a history of unexpected shutdowns,
+        so any design holding state across hours inside a running automation loses it. The two
+        off triggers are complementary by construction - whichever of 21:00 and sunset+90 is
+        later is the one that sees should_be_on false - and on the day sunset lands at 19:30
+        they coincide, where mode: single drops the duplicate. Note the winter case is not a
+        bug: at sunset+90 in December should_be_on is still TRUE (the window runs to 21:00),
+        so that trigger fires a redundant turn_on rather than an early turn_off.
+        CONSEQUENCE, ACCEPTED: a manual turn-on from Hawksnest is reverted at the next wake-up,
+        21:00 at the latest. That is the cost of a converging design and is the right default
+        for an outdoor light on a schedule.
+        SUNSET COMES FROM next_setting, NOT FROM sun.sun''s STATE, and that is deliberately not
+        a contradiction of automation 1785540000004. That one was bitten because MEASURED
+        2026-08-08 (trace 31b827b0) the sunset EVENT fires BEFORE sun.sun flips to
+        below_horizon, so reading the state string inside a sunset-triggered run reads the
+        inverse of reality. Here we read the next_setting TIMESTAMP, the earliest trigger is 30
+        minutes clear of the event, and the .date() comparison self-corrects either way.
+        EVERY TAG CARRIES EXPLICIT WHITESPACE CONTROL because these are folded (>-) scalars: a
+        bare {% set %} line renders a leading space and as_datetime then fails to parse its own
+        output. That was caught by rendering the templates before shipping, not in production.
+        BRIGHTNESS IS 40%. The owner confirmed 22% runs clean with no flicker or buzz on
+        2026-09-23, so 40 sits comfortably inside proven-good territory (higher is safer on a
+        forward-phase TRIAC, not riskier). The device''s own Minimum Dim Level (parameter 11)
+        is 10%, which is what stops the Android light widget - whose first two dim stops are 1%
+        and 5% - from asking for a level this hardware cannot hold. All eight config parameters
+        were read off the live node and every one is at its factory default, so there is
+        deliberately no parameter-pinning automation here: it would write only defaults.
+        THE STARTUP GUARD IS THE CONFIG ENTRY, not the entity. zwave_js creates its entities
+        inside async_setup_entry, so the light answers has_value() before the entry reaches
+        loaded, which is the state a zwave_js-backed call actually needs; the symptom without
+        it is "No zwave_js nodes found for given targets" at boot, observed 2026-08-10 13:38
+        (see 1785540000007). now() leads the template so it is time-dependent and re-renders
+        every 60s - config_entry_attr registers no listener of its own and the wait would
+        otherwise sit forever. The `or ''none''` is a null guard; config_entry_attr raises on
+        the None that config_entry_id returns for an entity that has left the registry.
+        continue_on_timeout is false: better the yard stays as it is than a call fired at an
+        integration that is not there.
+        The node is on Z-Wave LONG RANGE (node id 257, protocol 1, isRouting false), which was
+        not the plan - classic mesh was chosen so the plug would repeat for the deadbolts. The
+        owner decided 2026-09-23 to keep it rather than pay a re-inclusion: it performs
+        identically as a device, it simply contributes nothing to the mesh.'
+      mode: single
+      max_exceeded: silent
+      triggers:
+        - trigger: sun
+          event: sunset
+          offset: "00:30:00"
+        - trigger: time
+          at: "21:00:00"
+        - trigger: sun
+          event: sunset
+          offset: "01:30:00"
+        - trigger: homeassistant
+          event: start
+      variables:
+        sunset_today: >-
+          {%- set nxt = state_attr('sun.sun','next_setting') | as_datetime | as_local -%}
+          {{- nxt if nxt.date() == now().date() else nxt - timedelta(days=1) -}}
+        on_at: >-
+          {{- (sunset_today | as_datetime) + timedelta(minutes=30) -}}
+        off_at: >-
+          {{- [ today_at('21:00'), (sunset_today | as_datetime) + timedelta(minutes=90) ] | max -}}
+        should_be_on: >-
+          {{- (on_at | as_datetime) <= now() < (off_at | as_datetime) -}}
+        level: 40
+      actions:
+        - wait_template: '{{ now().timestamp() > 0 and
+            has_value(''light.backyard_string_lights'') and
+            config_entry_attr(config_entry_id(''light.backyard_string_lights'')
+            or ''none'', ''state'') == ''loaded'' }}'
+          timeout: '00:02:00'
+          continue_on_timeout: false
+        - choose:
+            - conditions:
+                - condition: template
+                  value_template: "{{ should_be_on }}"
+              sequence:
+                - action: light.turn_on
+                  target:
+                    entity_id: light.backyard_string_lights
+                  data:
+                    brightness_pct: "{{ level }}"
+          default:
+            - action: light.turn_off
+              target:
+                entity_id: light.backyard_string_lights
 
   scripts.yaml: |
     master_bedroom_strip_power_up:
