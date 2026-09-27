@@ -657,9 +657,10 @@ data:
     # Frigate detection watchdog. Guards against the failure that actually shipped:
     # detect.enabled silently false (0.17 default) — pod healthy, ffmpeg healthy,
     # recordings accumulating, and NOTHING ever detected, with no log line to find.
-    # Also catches a dead camera stream (camera_fps pinned at 0 — hung ffmpeg or a
-    # DHCP'd camera IP moving out from under the Secret), which is otherwise equally
-    # silent. Deliberately NOT detection_fps-based: detection only runs where there
+    # Also catches a camera that has gone OFFLINE — unreachable, not merely quiet —
+    # which is otherwise equally silent. That check used to key off camera_fps and was
+    # dead code, because the integration ships those sensors disabled; it now keys off
+    # the camera entity going unavailable past the grace window. Deliberately NOT detection_fps-based: detection only runs where there
     # is motion, so 0.0 overnight in an empty house is normal, not a failure.
     # Entity-ID-free like the push automations above (`switch.<cam>_detect` and
     # `sensor.<cam>_camera_fps` are frigate-hass-integration names). Checks hourly;
@@ -678,11 +679,25 @@ data:
              | selectattr('state', 'eq', 'off')
              | selectattr('last_changed', 'lt', now() - timedelta(minutes=15))
              | map(attribute='entity_id') | list }}
-        dead_stream: >-
-          {{ states.sensor
-             | selectattr('entity_id', 'search', '_camera_fps$')
-             | rejectattr('state', 'in', ['unavailable', 'unknown'])
-             | selectattr('state', 'in', ['0', '0.0'])
+        # A camera that has fallen off the network entirely — no route, no RTSP, gone from
+        # ARP. This REPLACES a `dead_stream` check on `sensor.<cam>_camera_fps`, which read
+        # well and could never fire: the frigate-hass-integration ships all 12 of those
+        # sensors `disabled_by: integration`, so the selectattr matched nothing. `_detect`
+        # does not cover it either — an unreachable camera's switch reads `unavailable`,
+        # not `off`. first_floor_stairway proved it on 2026-09-27: off the LAN at 09:37,
+        # still gone four hours later, no alert, and a 40-minute outage the evening before
+        # equally silent.
+        #
+        # Safe against the parked battery cameras: a Home Hub camera that is asleep does NOT
+        # read unavailable (measured over 3 days — camera.front totalled 0.1 h down, all of
+        # it sub-minute), so this cannot page anyone for a camera that is merely parked.
+        #
+        # Frozen-but-connected streams are NOT covered any more, and that is deliberate
+        # rather than forgotten: it would mean enabling those 12 fps sensors and excluding
+        # them from the recorder. False coverage is worse than a named gap.
+        dead_camera: >-
+          {{ states.camera
+             | selectattr('state', 'in', ['unavailable', 'unknown'])
              | selectattr('last_changed', 'lt', now() - timedelta(minutes=15))
              | map(attribute='entity_id') | list }}
         # Anything other than 'ready' means event descriptions and semantic-search
@@ -694,7 +709,7 @@ data:
       condition:
         - condition: template
           value_template: >-
-            {{ (dead_detect | count) > 0 or (dead_stream | count) > 0 or genai_bad }}
+            {{ (dead_detect | count) > 0 or (dead_camera | count) > 0 or genai_bad }}
       action:
         - service: rest_command.ntfy_publish
           data:
@@ -704,15 +719,15 @@ data:
               {%- if dead_detect | count > 0 -%}
               Detection is OFF: {{ dead_detect | join(', ') }}.
               {%- endif -%}
-              {%- if dead_stream | count > 0 %}
-              Camera stream dead (0 fps): {{ dead_stream | join(', ') }}.
+              {%- if dead_camera | count > 0 %}
+              Camera OFFLINE (no route to it): {{ dead_camera | join(', ') }}.
               {%- endif %}
               {%- if genai_bad %}
               AI event descriptions are down ({{ genai_state }}) — LM Studio is not
               serving a loaded vision model, so every event description and search
               enrichment is failing silently.
               {%- endif %}
-              {%- if dead_detect | count > 0 or dead_stream | count > 0 %}
+              {%- if dead_detect | count > 0 or dead_camera | count > 0 %}
               Frigate is recording blind — check /api/stats and the camera IPs.
               {%- endif %}
             tags: "warning"
