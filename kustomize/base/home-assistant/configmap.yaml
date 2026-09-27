@@ -952,9 +952,13 @@ data:
         # configuration.yaml: it already exists on the live system, and defining it in YAML
         # too would collide and get renamed `_2`. On a rebuild, recreate it with
         # C:\Code\ha-live-view-helpers.py before enabling these automations.
-        - condition: state
-          entity_id: input_boolean.hawksnest_live_view_backyard_patio
-          state: "off"
+        # Fails OPEN: `states()` is 'unknown' for an entity that does not exist, so a missing
+        # or renamed helper parks the camera rather than silently pinning it enabled. Matching
+        # the asymmetric-failure house rule set by hawksnest_push_camera_object — and here the
+        # unsafe direction is not a missed alert but a battery camera that records until it
+        # dies, because the 30-minute backstop keys off this same helper and would not fire.
+        - condition: template
+          value_template: "{{ states('input_boolean.hawksnest_live_view_backyard_patio') != 'on' }}"
         - delay: "00:02:00"
         - service: mqtt.publish
           continue_on_error: true
@@ -1001,9 +1005,13 @@ data:
         # configuration.yaml: it already exists on the live system, and defining it in YAML
         # too would collide and get renamed `_2`. On a rebuild, recreate it with
         # C:\Code\ha-live-view-helpers.py before enabling these automations.
-        - condition: state
-          entity_id: input_boolean.hawksnest_live_view_front
-          state: "off"
+        # Fails OPEN: `states()` is 'unknown' for an entity that does not exist, so a missing
+        # or renamed helper parks the camera rather than silently pinning it enabled. Matching
+        # the asymmetric-failure house rule set by hawksnest_push_camera_object — and here the
+        # unsafe direction is not a missed alert but a battery camera that records until it
+        # dies, because the 30-minute backstop keys off this same helper and would not fire.
+        - condition: template
+          value_template: "{{ states('input_boolean.hawksnest_live_view_front') != 'on' }}"
         - delay: "00:02:00"
         - service: mqtt.publish
           continue_on_error: true
