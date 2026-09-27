@@ -938,6 +938,23 @@ data:
                and is_state('binary_sensor.backyard_patio_animal', 'off') }}
           timeout: "00:02:30"
           continue_on_timeout: true
+        # Someone is watching this camera right now: Hawksnest opened a live view and is
+        # recording it as a Frigate manual event. Parking the camera here would stop that
+        # recording halfway through — and this is the LIKELY case, not the edge case,
+        # because the reason someone opens the front camera is usually that it just saw
+        # something, which is the same PIR hit that started this run.
+        #
+        # A `condition` inside an action sequence stops the sequence, so the camera simply
+        # stays enabled; the client publishes OFF itself when the view ends.
+        # `hawksnest_live_view_guard_release` below is the backstop if it never does.
+        #
+        # The helper is a STORAGE-backed (UI) helper, deliberately not defined in
+        # configuration.yaml: it already exists on the live system, and defining it in YAML
+        # too would collide and get renamed `_2`. On a rebuild, recreate it with
+        # C:\Code\ha-live-view-helpers.py before enabling these automations.
+        - condition: state
+          entity_id: input_boolean.hawksnest_live_view_backyard_patio
+          state: "off"
         - delay: "00:02:00"
         - service: mqtt.publish
           continue_on_error: true
@@ -970,11 +987,60 @@ data:
                and is_state('binary_sensor.front_vehicle', 'off') }}
           timeout: "00:02:30"
           continue_on_timeout: true
+        # Someone is watching this camera right now: Hawksnest opened a live view and is
+        # recording it as a Frigate manual event. Parking the camera here would stop that
+        # recording halfway through — and this is the LIKELY case, not the edge case,
+        # because the reason someone opens the front camera is usually that it just saw
+        # something, which is the same PIR hit that started this run.
+        #
+        # A `condition` inside an action sequence stops the sequence, so the camera simply
+        # stays enabled; the client publishes OFF itself when the view ends.
+        # `hawksnest_live_view_guard_release` below is the backstop if it never does.
+        #
+        # The helper is a STORAGE-backed (UI) helper, deliberately not defined in
+        # configuration.yaml: it already exists on the live system, and defining it in YAML
+        # too would collide and get renamed `_2`. On a rebuild, recreate it with
+        # C:\Code\ha-live-view-helpers.py before enabling these automations.
+        - condition: state
+          entity_id: input_boolean.hawksnest_live_view_front
+          state: "off"
         - delay: "00:02:00"
         - service: mqtt.publish
           continue_on_error: true
           data:
             topic: frigate/front/enabled/set
+            payload: "OFF"
+
+    - id: hawksnest_live_view_guard_release
+      alias: "Hawksnest: release a stuck live-view guard"
+      description: >-
+        Backstop for the live-view guard the two Home Hub battery cameras use. The Hawksnest
+        client sets input_boolean.hawksnest_live_view_<cam> while it is recording a live view,
+        which stops 'Frigate on demand' parking the camera mid-recording, and clears it when the
+        view ends. If the client dies first, nothing clears it and that camera would stay enabled
+        in Frigate forever - which on a battery camera is the expensive failure. So: after 30
+        minutes on, release it and park the camera. Thirty minutes is deliberately longer than any
+        plausible continuous live view; the cost of firing early is that the picture stops and the
+        owner reopens it, while the cost of not firing at all is a flat battery.
+      mode: parallel
+      max: 4
+      trigger:
+        - platform: state
+          entity_id:
+            - input_boolean.hawksnest_live_view_front
+            - input_boolean.hawksnest_live_view_backyard_patio
+          to: "on"
+          for: "00:30:00"
+      action:
+        - variables:
+            cam: "{{ trigger.entity_id | replace('input_boolean.hawksnest_live_view_', '') }}"
+        - service: input_boolean.turn_off
+          target:
+            entity_id: "{{ trigger.entity_id }}"
+        - service: mqtt.publish
+          continue_on_error: true
+          data:
+            topic: "frigate/{{ cam }}/enabled/set"
             payload: "OFF"
 
     - id: hawksnest_argus_park
