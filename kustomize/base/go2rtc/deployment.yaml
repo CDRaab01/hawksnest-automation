@@ -135,6 +135,63 @@ spec:
               # AAC 16 kHz mono -> Opus is a cheap encode (well under 2% of a core, no
               # video work), so CPU is untouched; memory is the only real cost.
               memory: 512Mi
+        # Holds every always-on camera's SUB stream open in go2rtc, so a phone that opens
+        # a camera joins a stream that is already flowing instead of waiting for the camera.
+        #
+        # Measured 2026-10-14 (Kitchen): a Reolink takes ~2 s to answer ANY new RTSP viewer
+        # (2.0-2.2 s first packet, 24 cold connects), which was most of Hawksnest's live-view
+        # delay against the vendor app (it keeps a standing connection to every camera). A
+        # viewer joining a go2rtc stream that is already open got its first packet in
+        # 0.1-0.2 s; go2rtc keeps no cached keyframe, so the first DECODABLE frame then comes
+        # at the camera's next keyframe — which is why the sub streams' I-frame interval is set
+        # to 1x on the cameras (Reolink app; the `frigate` account is guest-level and cannot
+        # change encoder settings). Both halves are needed: warm without 1x waits up to 4 s.
+        #
+        # Sub only, by design: ~0.1-0.25 Mbps each. Holding the 3-4 Mbps MAIN streams open
+        # would put ~35 Mbps on the cameras' Wi-Fi around the clock. Capacity checked: Kitchen
+        # served Frigate's sub + 2 more subs + 3 mains concurrently, all delivering video.
+        # Frigate still reads the cameras directly, so recordings never depend on this pod.
+        #
+        # NEVER list a Home Hub camera (front, backyard_patio): any RTSP request wakes a
+        # battery camera, so warming one would hold it awake until its battery died.
+        # tests/validate_manifests.py enforces that against the go2rtc ConfigMap.
+        - name: warm-sub
+          # Same pinned image as go2rtc: it already ships ffmpeg, so this adds no pull.
+          image: alexxit/go2rtc:1.9.14
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -u
+              # go2rtc's RTSP server listens on 127.0.0.1:8554; this container shares the
+              # pod's network namespace. Stream copy into the null muxer: no decode, no disk.
+              # `-loglevel fatal` because the sub streams log a harmless "Overread VUI"
+              # line on connect. Reconnects forever: a camera reboot or a go2rtc restart
+              # just ends the copy, and the next pass picks the stream back up.
+              keep() {
+                while true; do
+                  ffmpeg -nostdin -loglevel fatal -rtsp_transport tcp \
+                    -i "rtsp://127.0.0.1:8554/$1" -map 0:v:0 -c copy -f null - || true
+                  echo "$(date -Iseconds) warm-sub: $1 ended; reconnecting in 5 s"
+                  sleep 5
+                done
+              }
+              for s in $WARM_STREAMS; do keep "$s" & done
+              wait
+          env:
+            # go2rtc stream names (configmap.yaml). Add a new camera's `<name>_sub` here
+            # (docs/adding-a-camera.md) — unless it sleeps on a Home Hub (see above).
+            - name: WARM_STREAMS
+              value: >-
+                big_room_sub first_floor_stairway_sub kitchen_sub nursery_sub
+                nursery_high_sub basement_sub bedroom_sub garage_sub
+                front_door_reolink_sub
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              # Nine stream-copy ffmpeg processes, ~10-15 MB each.
+              memory: 256Mi
       volumes:
         - name: config
           persistentVolumeClaim:
