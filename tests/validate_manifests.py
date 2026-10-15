@@ -263,6 +263,30 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
             image = main.get("image", "")
             check(not image.endswith((":stable", ":latest")) and ":" in image,
                   f"go2rtc image must be pinned to an exact version, got '{image}'")
+        # The warm-sub sidecar holds streams open around the clock. Any RTSP request wakes a
+        # battery camera on the Reolink Home Hub, so a hub stream on its list would hold that
+        # camera awake until its battery died — and nothing at deploy time would show it.
+        warm = next((c for c in pod_spec(g2)["containers"] if c["name"] == "warm-sub"), None)
+        if warm:
+            env = {e["name"]: e.get("value", "") for e in warm.get("env", [])}
+            names = env.get("WARM_STREAMS", "").split()
+            check(bool(names), "go2rtc warm-sub sidecar has an empty WARM_STREAMS")
+            seed = next((d for d in by_kind(docs, "ConfigMap") if name(d) == "go2rtc-seed"), None)
+            check(seed is not None, "go2rtc-seed ConfigMap is missing (warm-sub cannot be checked)")
+            streams = {}
+            if seed:
+                parsed = yaml.safe_load(seed.get("data", {}).get("go2rtc.yaml", "")) or {}
+                streams = parsed.get("streams", {}) or {}
+            for s in names:
+                check(s.endswith("_sub"),
+                      f"go2rtc warm-sub '{s}' is not a sub stream (holding a 3-4 Mbps main "
+                      f"stream open loads the camera's Wi-Fi around the clock)")
+                check(s in streams, f"go2rtc warm-sub '{s}' is not a stream in go2rtc-seed")
+                src = streams.get(s, "")
+                src = " ".join(src) if isinstance(src, list) else str(src)
+                check("HOME_HUB" not in src,
+                      f"go2rtc warm-sub '{s}' is a Home Hub battery camera — warming it would "
+                      f"keep it awake until its battery died")
 
     # 5c. Frigate: three invariants that each guard a failure we can't see at deploy
     #     time — a leaked snapshot, a wedged pod, and an evicted neighbour.

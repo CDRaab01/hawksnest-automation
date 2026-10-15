@@ -52,10 +52,10 @@ A camera touches **six places**, in two repos plus the Windows host:
 
 | # | Where | What |
 |---|---|---|
-| 1 | Camera itself | static IP, RTSP creds, stream geometry |
+| 1 | Camera itself | static IP, RTSP creds, stream geometry, **sub-stream I-frame interval 1x** (Reolink app) |
 | 2 | `overlays/prod/secrets/go2rtc.env` | `REOLINK_IP_<NAME>` |
 | 3 | `overlays/prod/secrets/frigate.env` | `FRIGATE_REOLINK_IP_<NAME>` — **a second copy of the same IP** |
-| 4 | `base/go2rtc/configmap.yaml` | `<name>` + `<name>_sub` streams |
+| 4 | `base/go2rtc/configmap.yaml` | `<name>` + `<name>_sub` streams — and add `<name>_sub` to `WARM_STREAMS` in `base/go2rtc/deployment.yaml` (never for a Home Hub battery camera) |
 | 5 | `base/frigate/configmap.yaml` | the camera block — **and a dual-write to the live config** |
 | 6 | Windows host | Tailscale `/32` route |
 
