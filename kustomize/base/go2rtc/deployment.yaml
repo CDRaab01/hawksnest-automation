@@ -169,8 +169,13 @@ spec:
               # just ends the copy, and the next pass picks the stream back up.
               keep() {
                 while true; do
+                  # VIDEO ONLY, twice over (`?video` asks go2rtc for no audio track;
+                  # -allowed_media_types stops ffmpeg SETUPing one): each `_sub` also
+                  # lists an on-demand Opus transcode (configmap.yaml), and a consumer
+                  # that took audio would keep nine ffmpegs running around the clock.
                   ffmpeg -nostdin -loglevel fatal -rtsp_transport tcp \
-                    -i "rtsp://127.0.0.1:8554/$1" -map 0:v:0 -c copy -f null - || true
+                    -allowed_media_types video \
+                    -i "rtsp://127.0.0.1:8554/$1?video" -map 0:v:0 -c copy -f null - || true
                   echo "$(date -Iseconds) warm-sub: $1 ended; reconnecting in 5 s"
                   sleep 5
                 done

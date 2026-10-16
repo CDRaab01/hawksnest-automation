@@ -394,13 +394,20 @@ a rebuild from scratch knows they exist.
 In `base/go2rtc/configmap.yaml` under `streams:`, add **two** entries per camera:
 
 ```yaml
-      <name>:     "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_<NAME>}:554/h264Preview_01_sub"
-      <name>_sub: "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_<NAME>}:554/h264Preview_01_sub"
+      <name>:
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_<NAME>}:554/h264Preview_01_main"
+        - "ffmpeg:rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_<NAME>}:554/h264Preview_01_main#audio=opus"
+      <name>_sub:
+        - "rtsp://${REOLINK_USER}:${REOLINK_PASS}@${REOLINK_IP_<NAME>}:554/h264Preview_01_sub"
+        - "ffmpeg:<name>_sub#audio=opus"
 ```
 
 Main for live view, sub for the Low quality toggle. The `_sub` suffix is load-bearing —
 Hawksnest's quality toggle asks go2rtc for `<name>_sub` by name and hides the control when go2rtc
-does not list it.
+does not list it. **Both need their `#audio=opus` line**, or that stream is silent live (WebRTC
+cannot carry the camera's AAC). The `_sub` one uses go2rtc's self-reference form, which transcodes
+from go2rtc's own copy and costs no extra camera session; Low was silent until 2026-10-15, and
+once the app began opening every away-from-home view on Low, that meant no live audio at all.
 
 ### 3. Frigate camera blocks
 
