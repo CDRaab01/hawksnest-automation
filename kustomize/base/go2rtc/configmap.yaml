@@ -311,9 +311,19 @@ data:
       # sub is h264 1536x432 @25 + AAC 16k mono. If the app ever offers h264 on the
       # Clear stream, switch `<name>` to _main. No `<name>_sub` entry: with live already
       # on sub a Low toggle would be a no-op, and Hawksnest hides it when go2rtc doesn't
-      # list it (fails closed). The audio producer stays: the hub carried three
-      # concurrent sessions on one channel without complaint (Frigate's one plus these
-      # two is exactly the budget).
+      # list it (fails closed).
+      #
+      # THE AUDIO PRODUCER READS GO2RTC'S OWN COPY, NOT THE HUB (2026-10-25) — the same
+      # self-reference form the `_sub` entries above use. It used to be a second full
+      # hub URL, which is a second RTSP session to the hub per viewer, opened right
+      # after the first one finishes waking the camera. go2rtc dials producers in
+      # order and answers the WebRTC offer only once BOTH are up, so that second hub
+      # session sat on the critical path of every cold open — and while a camera is
+      # mid-wake the hub answers SETUP with `454 Session Not Found` (see the Frigate
+      # seed), which the second session could hit too. Reading
+      # rtsp://127.0.0.1:8554/<name>?audio instead costs no hub session at all: the AAC
+      # is already arriving on the bare producer. Hub budget per viewer drops from two
+      # sessions to one (Frigate's one plus this one).
       #
       # go2rtc opens a source only when a viewer asks, and the hub WAKES the camera
       # for it (7-15 s measured) and drops the session after 5 minutes. That is the
@@ -321,10 +331,10 @@ data:
       # pulls these only on demand (see the HA automations) — it never holds them.
       backyard_patio:
         - "rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_01_sub"
-        - "ffmpeg:rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_01_sub#audio=opus"
+        - "ffmpeg:backyard_patio#audio=opus"
       front:
         - "rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_02_sub"
-        - "ffmpeg:rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_02_sub#audio=opus"
+        - "ffmpeg:front#audio=opus"
 
       # --- Ring (cloud) ---------------------------------------------------------
       # ONE entry per Ring camera you want to talk through. The stream NAME MUST

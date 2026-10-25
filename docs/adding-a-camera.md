@@ -1016,12 +1016,22 @@ ffprobed per channel from the go2rtc container (the recipe in §2, with the hub 
 | main | **hevc** | 5120×1440 | 25 | AAC 16 kHz mono |
 
 HEVC on WebRTC crashes the Android app (CLAUDE.md), so go2rtc's `<name>` points at **sub**, with
-the `ffmpeg:…#audio=opus` producer as usual, and there is **no `<name>_sub` entry** (a Low
+the audio producer in the **self-reference** form `ffmpeg:<name>#audio=opus` (not a second hub URL —
+see below), and there is **no `<name>_sub` entry** (a Low
 toggle would be a no-op; Hawksnest hides it when go2rtc doesn't list it). If the app ever offers
 h264 on the Clear stream, move `<name>` to main. Frigate's single input is sub, `[detect,
 record]`, `detect: 1536x432 @5`, `-c copy` verified by the mux gate (5 s → a playable 557 KB
 mp4 with h264 + aac). **Three concurrent sessions on one channel worked** (Frigate's one + go2rtc's
 two per viewer) — the budget the checklist asks for.
+
+**The audio producer must not open its own hub session** (2026-10-25). go2rtc dials a stream's
+producers in order and answers a WebRTC offer only once every needed one is up, so a second hub URL
+for audio put a second RTSP session to the hub on the critical path of every cold open, right after
+the first had woken the camera — and mid-wake the hub answers SETUP with `454 Session Not Found`.
+`ffmpeg:<name>#audio=opus` reads `rtsp://127.0.0.1:8554/<name>?audio` instead: the AAC the bare
+producer is already receiving, zero extra hub sessions (go2rtc's budget per viewer is now one).
+The Hawksnest players also re-offer every second on go2rtc's `{"type":"error"}` while a battery
+camera wakes, instead of waiting out a 30 s watchdog (Hawksnest `lib/go2rtcWake.ts`).
 
 The FLV escape hatch, if the hub's RTSP ever proves flaky: `ffmpeg:http://<hub-ip>/flv?port=1935&app=bcs&stream=channel<N-1>_main.bcs&user=…&password=…` — 0-based channel, and it needs
 `rtmpEnable` on. Documented, not deployed.
