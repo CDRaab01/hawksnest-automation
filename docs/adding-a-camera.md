@@ -973,7 +973,8 @@ breaks that in five places, and each one was measured, not assumed.
 ### The hub wakes the camera on every RTSP request, and force-sleeps it after 5 minutes
 
 Reolink's own documentation, confirmed by ffprobe: a battery camera is asleep until an RTSP
-request arrives, takes **7–15 s** to deliver a first frame (`-rw_timeout 30000000` on the
+request arrives, takes **7–15 s** to deliver a first frame — when it delivers at all: the session
+that woke it usually never does, see "go2rtc wakes the camera FIRST" below (`-rw_timeout 30000000` on the
 *ffprobe*; the container's ffmpeg does not accept that flag — omit it there), streams for at most
 **5 minutes**, then the hub disconnects the session and the camera sleeps. Frigate's normal
 `[detect, record]` input would reconnect every `retry_interval` — a wake→sleep→wake loop, 24/7,
@@ -1032,6 +1033,54 @@ the first had woken the camera — and mid-wake the hub answers SETUP with `454 
 producer is already receiving, zero extra hub sessions (go2rtc's budget per viewer is now one).
 The Hawksnest players also re-offer every second on go2rtc's `{"type":"error"}` while a battery
 camera wakes, instead of waiting out a 30 s watchdog (Hawksnest `lib/go2rtcWake.ts`).
+
+### go2rtc wakes the camera FIRST, then opens the stream it serves (2026-10-26)
+
+**A hub RTSP session opened while the camera sleeps never receives media.** Measured from inside
+the go2rtc pod, HA's `binary_sensor.<cam>_sleep_status` and the hub's own `GetChannelstatus` as
+ground truth, cameras asleep ≥ 4 min:
+
+| how the stream was opened | video | notes |
+|---|---|---|
+| one session (what a bare `rtsp://` source does) | **0 of 4** | SDP at +3 s, then 52-byte keepalives and no video for 60-75 s; the camera falls back asleep with the session open |
+| wake session **killed**, fresh session after the hub reports awake | ~50 % | the hub keeps a killed session until its `timeout=30` and often feeds no one else until then — wedges cleared at +42-47 s |
+| wake session ended with a **TEARDOWN**, fresh session after awake | **5 of 6**, **5.9-8.6 s** | `front` 3/3, `backyard_patio` 2/3 |
+
+The camera itself wakes in ~3-5 s whichever way it is asked (the hub holds the first DESCRIBE
+while it does), as fast as the Reolink app — the old 36 s+ cold open on `front` was entirely the
+dead first session. So the hub cameras' go2rtc video producer is **`exec:python3
+/hubwake/hubwake.py <0-based channel> sub {output}#starttimeout=50`**: the script wakes the camera
+with its own minimal RTSP session, polls `GetChannelstatus` until `sleep: 0`, TEARDOWNs, opens a
+fresh session and waits for real video on it (retrying inside a 45 s budget), and only then
+announces the hub's SDP to go2rtc and **relays that same session's RTP byte for byte** — starting
+with what it buffered, so go2rtc gets the opening keyframe at once. No ffmpeg on this path: an
+ffmpeg publisher cost a second hub session and its own probe (~6 s more to first frame), and a
+stalled one already connected to `{output}` made go2rtc launch a second copy of the script. The
+script ships as a generated ConfigMap (`go2rtc-hubwake`, name-hashed so an edit rolls the pod);
+`tests/validate_manifests.py` rejects a bare hub `rtsp://` source and `tests/test_hubwake.py`
+runs the shipped relay parser against a stream cut at every byte offset.
+
+**The relay's two bugs, both found against the live hub (2026-10-26), both now pinned by tests or
+comments:** (1) a frame header split across two TCP reads was dropped as junk, misaligning every
+later frame; the garbage reached go2rtc's decoders and **OOMKilled the go2rtc container — which
+also carries Ring talk**. The parser now waits for the rest, raises on anything it cannot frame,
+and caps its buffer. (2) The publish socket kept its 15 s connect timeout; go2rtc never writes to a
+publisher, so every live view was cut at exactly 15 s. **Any experiment run inside the go2rtc
+container shares its 512Mi limit** — run a memory watchdog alongside (kill test processes when
+`/sys/fs/cgroup/memory.current` passes ~200 MB).
+
+- **Adding a hub camera** = one more `exec:` line with its 0-based channel. Nothing else.
+- **The leftover failure is the hub's**: about 1 in 6 cold opens, `backyard_patio` reports awake
+  and still feeds no fresh session for ~40 s. The script keeps retrying inside its budget; the
+  FLV path below is the untested next lever.
+- **Testing a change**: go2rtc refuses `exec:` sources over its API (`streams: source from
+  insecure producer`), so run a private go2rtc inside the pod on loopback ports
+  (`go2rtc -config /tmp/test.yaml` with `api`/`rtsp` on 127.0.0.1:11984/18554 and `webrtc`
+  disabled) and time an ffmpeg consumer against it. Kill every test process afterwards; an
+  orphaned session holds the camera awake.
+- **Two things that do NOT work**: the hub snapshot (`cmd=Snap`) as the wake (1 of 2; it returns
+  before the camera will stream), and a fixed delay instead of polling (Patio takes 3-8 s, so any
+  constant is either slow or too early).
 
 The FLV escape hatch, if the hub's RTSP ever proves flaky: `ffmpeg:http://<hub-ip>/flv?port=1935&app=bcs&stream=channel<N-1>_main.bcs&user=…&password=…` — 0-based channel, and it needs
 `rtmpEnable` on. Documented, not deployed.

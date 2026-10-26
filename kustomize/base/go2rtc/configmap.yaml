@@ -326,14 +326,31 @@ data:
       # sessions to one (Frigate's one plus this one).
       #
       # go2rtc opens a source only when a viewer asks, and the hub WAKES the camera
-      # for it (7-15 s measured) and drops the session after 5 minutes. That is the
-      # intended cost of watching live; nothing here holds a session open. Frigate
-      # pulls these only on demand (see the HA automations) — it never holds them.
+      # for it and drops the session after 5 minutes. That is the intended cost of
+      # watching live; nothing here holds a session open. Frigate pulls these only on
+      # demand (see the HA automations) — it never holds them.
+      #
+      # THE VIDEO PRODUCER IS A WAKE WRAPPER, NOT A BARE HUB URL (2026-10-26). A hub
+      # RTSP session opened while the camera sleeps wakes it and then never receives a
+      # media packet — measured 0 of 4 after a real sleep, 60-75 s of silence — which
+      # was the whole of Hawksnest's 36 s+ cold open on `front`. hubwake.py wakes the
+      # camera with a throwaway session, waits for the hub's own GetChannelstatus to
+      # report it awake, closes the throwaway, and only then opens the session go2rtc
+      # gets (the hub's RTP relayed byte for byte into go2rtc's loopback RTSP — no ffmpeg,
+      # no transcode). Its docstring and
+      # docs/adding-a-camera.md carry the measurements. The ARGUMENT IS THE HUB'S
+      # 0-BASED CHANNEL (backyard_patio = 0, front = 1) — not the 1-based RTSP path.
+      # `starttimeout` sits above the script's own 45 s budget so go2rtc sees the
+      # script's verdict rather than cutting it off.
+      #
+      # go2rtc refuses `exec:` sources created through its API ("insecure producer"),
+      # so these can only come from this file — test a change with a private go2rtc
+      # inside the pod (docs/adding-a-camera.md), not with PUT /api/streams.
       backyard_patio:
-        - "rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_01_sub"
+        - "exec:python3 /hubwake/hubwake.py 0 sub {output}#starttimeout=50"
         - "ffmpeg:backyard_patio#audio=opus"
       front:
-        - "rtsp://${REOLINK_HUB_USER}:${REOLINK_HUB_PASS}@${REOLINK_IP_HOME_HUB}:554/h264Preview_02_sub"
+        - "exec:python3 /hubwake/hubwake.py 1 sub {output}#starttimeout=50"
         - "ffmpeg:front#audio=opus"
 
       # --- Ring (cloud) ---------------------------------------------------------

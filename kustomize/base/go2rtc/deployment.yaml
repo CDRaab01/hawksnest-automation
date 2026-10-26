@@ -79,6 +79,12 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /config
+            # The Home Hub wake wrapper (hubwake.py, configMapGenerator in the base
+            # kustomization). The hub cameras' streams are `exec:python3 /hubwake/hubwake.py`,
+            # so without this mount `front` and `backyard_patio` cannot open at all.
+            - name: hubwake
+              mountPath: /hubwake
+              readOnly: true
           ports:
             - name: api
               containerPort: 1984
@@ -207,3 +213,6 @@ spec:
         - name: replies
           configMap:
             name: go2rtc-replies
+        - name: hubwake
+          configMap:
+            name: go2rtc-hubwake

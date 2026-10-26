@@ -69,6 +69,12 @@ jobs:
         # which is the exact failure it was added to prevent.
         run: python3 tests/test_frigate_health.py /tmp/prod.yaml
 
+      - name: Home Hub wake wrapper (RTP relay parser, publish SDP)
+        # hubwake.py relays the hub's interleaved RTP into go2rtc with its own parser. Its first
+        # version misaligned on a header split across two TCP reads and fed go2rtc garbage until
+        # the container (which also carries Ring talk) was OOMKilled. Runs the shipped script.
+        run: python3 tests/test_hubwake.py /tmp/prod.yaml
+
       - name: Validate against Kubernetes schemas (both overlays)
         run: |
           kubeconform -strict -summary -ignore-missing-schemas /tmp/prod.yaml
