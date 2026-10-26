@@ -41,3 +41,13 @@ resources:
   - ntfy/configmap.yaml
   - ntfy/deployment.yaml
   - ntfy/service.yaml
+
+# The go2rtc wake wrapper for the Home Hub battery cameras ships as a real .py file (so it is
+# linted, diffed and readable) rather than a block scalar inside the go2rtc ConfigMap. The name
+# hash kustomize appends is deliberate: editing the script changes the ConfigMap's name, which
+# changes the go2rtc pod template, which rolls the pod. go2rtc reads its exec sources only at
+# start, so a script change that did NOT roll the pod would silently never run.
+configMapGenerator:
+  - name: go2rtc-hubwake
+    files:
+      - go2rtc/hubwake.py

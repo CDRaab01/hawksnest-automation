@@ -284,9 +284,34 @@ def validate(overlay: str, docs: list[dict], expected: dict) -> list[str]:
                 check(s in streams, f"go2rtc warm-sub '{s}' is not a stream in go2rtc-seed")
                 src = streams.get(s, "")
                 src = " ".join(src) if isinstance(src, list) else str(src)
-                check("HOME_HUB" not in src,
+                # A hub camera's video producer is the hubwake.py wrapper, whose source names
+                # no HOME_HUB variable at all — match either form.
+                check("HOME_HUB" not in src and "hubwake.py" not in src,
                       f"go2rtc warm-sub '{s}' is a Home Hub battery camera — warming it would "
                       f"keep it awake until its battery died")
+        # A bare hub RTSP source as a VIDEO producer is the 36 s cold open (a session opened
+        # while the camera sleeps never gets media); hub cameras go through hubwake.py, which
+        # needs its ConfigMap mounted where the exec source looks for it.
+        seed = next((d for d in by_kind(docs, "ConfigMap") if name(d) == "go2rtc-seed"), None)
+        all_streams = (yaml.safe_load(seed.get("data", {}).get("go2rtc.yaml", "")) or {}).get(
+            "streams", {}) if seed else {}
+        uses_hubwake = False
+        for s, srcs in (all_streams or {}).items():
+            for src in (srcs if isinstance(srcs, list) else [srcs]):
+                src = str(src)
+                check(not (src.startswith("rtsp://") and "HOME_HUB" in src),
+                      f"go2rtc stream '{s}' reads the Home Hub with a bare rtsp:// source — "
+                      f"use exec:python3 /hubwake/hubwake.py (a cold session never gets media)")
+                uses_hubwake |= "hubwake.py" in src
+        if uses_hubwake and main:
+            mounts = {(m["name"], m["mountPath"]) for m in main.get("volumeMounts", [])}
+            check(("hubwake", "/hubwake") in mounts,
+                  "go2rtc streams exec hubwake.py but the main container does not mount the "
+                  "'hubwake' volume at /hubwake")
+            hw = next((d for d in by_kind(docs, "ConfigMap")
+                       if name(d).startswith("go2rtc-hubwake")), None)
+            check(hw is not None and "hubwake.py" in (hw.get("data") or {}),
+                  "go2rtc-hubwake ConfigMap (with hubwake.py) is missing")
 
     # 5c. Frigate: three invariants that each guard a failure we can't see at deploy
     #     time — a leaked snapshot, a wedged pod, and an evicted neighbour.
