@@ -330,27 +330,27 @@ data:
       # watching live; nothing here holds a session open. Frigate pulls these only on
       # demand (see the HA automations) — it never holds them.
       #
-      # THE VIDEO PRODUCER IS A WAKE WRAPPER, NOT A BARE HUB URL (2026-10-26). A hub
-      # RTSP session opened while the camera sleeps wakes it and then never receives a
-      # media packet — measured 0 of 4 after a real sleep, 60-75 s of silence — which
-      # was the whole of Hawksnest's 36 s+ cold open on `front`. hubwake.py wakes the
-      # camera with a throwaway session, waits for the hub's own GetChannelstatus to
-      # report it awake, closes the throwaway, and only then opens the session go2rtc
-      # gets (the hub's RTP relayed byte for byte into go2rtc's loopback RTSP — no ffmpeg,
-      # no transcode). Its docstring and
-      # docs/adding-a-camera.md carry the measurements. The ARGUMENT IS THE HUB'S
-      # 0-BASED CHANNEL (backyard_patio = 0, front = 1) — not the 1-based RTSP path.
-      # `starttimeout` sits above the script's own 45 s budget so go2rtc sees the
-      # script's verdict rather than cutting it off.
+      # THE VIDEO PRODUCER IS THE HUB'S HTTP-FLV, NOT ITS RTSP (2026-10-26). A hub RTSP
+      # session opened while the camera sleeps wakes it and then never receives a media
+      # packet (0 of 4 after a real sleep, 60-75 s of silence) — the whole of Hawksnest's
+      # 36 s+ cold open on `front`. A wake-first RTSP wrapper (hubwake.py, #88/#89) got that
+      # to ~10 s but still hit a hub-side stall on ~1 in 3 opens. The FLV endpoint has
+      # neither problem: ONE request wakes the camera and delivers its first keyframe in
+      # 3.3-4.7 s (8 of 8 cold opens, cameras asleep >= 2 min) — the Reolink app's own
+      # 3.8 s. go2rtc reads HTTP-FLV natively; same sub stream (h264 1536x432 + AAC 16k),
+      # same single hub session per viewer, no transcode, no helper process.
       #
-      # go2rtc refuses `exec:` sources created through its API ("insecure producer"),
-      # so these can only come from this file — test a change with a private go2rtc
-      # inside the pod (docs/adding-a-camera.md), not with PUT /api/streams.
+      # IT NEEDS RTMP ENABLED ON THE HUB (`rtmpEnable: 1` in GetNetPort; the FLV path is
+      # served by the RTMP service even over HTTP). Switched on over the API 2026-10-26.
+      # If live on these two cameras ever dies with an HTTP error, check that first — a hub
+      # reset or firmware update may turn it back off. docs/adding-a-camera.md has the
+      # one-line SetNetPort call. The CHANNEL IS 0-BASED here (backyard_patio = 0,
+      # front = 1) — not the 1-based RTSP path.
       backyard_patio:
-        - "exec:python3 /hubwake/hubwake.py 0 sub {output}#starttimeout=50"
+        - "http://${REOLINK_IP_HOME_HUB}/flv?port=1935&app=bcs&stream=channel0_sub.bcs&user=${REOLINK_HUB_USER}&password=${REOLINK_HUB_PASS}"
         - "ffmpeg:backyard_patio#audio=opus"
       front:
-        - "exec:python3 /hubwake/hubwake.py 1 sub {output}#starttimeout=50"
+        - "http://${REOLINK_IP_HOME_HUB}/flv?port=1935&app=bcs&stream=channel1_sub.bcs&user=${REOLINK_HUB_USER}&password=${REOLINK_HUB_PASS}"
         - "ffmpeg:front#audio=opus"
 
       # --- Ring (cloud) ---------------------------------------------------------
