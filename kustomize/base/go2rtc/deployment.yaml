@@ -152,7 +152,7 @@ spec:
         # served Frigate's sub + 2 more subs + 3 mains concurrently, all delivering video.
         # Frigate still reads the cameras directly, so recordings never depend on this pod.
         #
-        # NEVER list a Home Hub camera (front, backyard_patio): any RTSP request wakes a
+        # NEVER list a Home Hub camera (front, backyard_patio, back_2): any RTSP request wakes a
         # battery camera, so warming one would hold it awake until its battery died.
         # tests/validate_manifests.py enforces that against the go2rtc ConfigMap.
         - name: warm-sub

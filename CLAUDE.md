@@ -62,8 +62,10 @@ ask rather than guessing — this controls physical door locks, so correctness m
   [E1 Zoom], kitchen + nursery + basement + bedroom + garage [E1 Pro], nursery_high
   [E1 Outdoor Pro, added 2026-08-29], front_door_reolink [D340W doorbell, 2026-08-30] — feed
   **Frigate** (sub-stream detect **and** 24/7 record) and **go2rtc** (main-stream live).
-  **Plus, since 2026-09-12, two battery cameras behind a Reolink Home Hub** — backyard_patio +
-  front [Argus 4 Pro; `front` replaced the Ring "Front Driveway" camera, deleted the same day] —
+  **Plus, since 2026-09-12, battery cameras behind a Reolink Home Hub** — backyard_patio +
+  front [Argus 4 Pro; `front` replaced the Ring "Front Driveway" camera, deleted the same day],
+  and `back_2` = Back Sideyard [Argus 4 Pro, hub channel 2, in Frigate/go2rtc since 2026-10-26;
+  the slug is the base HA's Reolink integration gave it, see docs/adding-a-camera.md] —
   which Frigate pulls **ON DEMAND only** (parked OFF until the hub's on-camera AI reports a
   person/vehicle/animal; the hub wakes a battery camera on any RTSP request and force-sleeps it after 5 min),
   live from the SUB stream (main is HEVC), admin credentials in their own `*_HUB_*` secret vars

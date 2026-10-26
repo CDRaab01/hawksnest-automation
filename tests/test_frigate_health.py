@@ -40,7 +40,7 @@ CAMS = [
     "big_room", "kitchen", "nursery", "nursery_high", "bedroom",
     "basement", "garage", "front_door_reolink", "first_floor_stairway",
     # On-demand (Home Hub battery) cameras — in ON_DEMAND in the script under test.
-    "backyard_patio", "front",
+    "backyard_patio", "front", "back_2",
 ]
 CACHE_TOTAL_MB = 2048.0
 REAL_URLOPEN = urllib.request.urlopen
