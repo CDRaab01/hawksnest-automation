@@ -128,12 +128,31 @@ def main() -> int:
     check(not any(l.startswith(("a=control:track1", "a=range", "a=tool", "a=recvonly")) for l in lines),
           f"publish SDP kept hub-only lines:\n{sdp}")
 
+    # 7. SPS/PPS are lifted from the opening frames and declared on the video track. Without them
+    #    viewers sat ~28 s on "non-existing PPS 0 referenced" in production (2026-10-26); the hub's
+    #    SDP declares none. Real values from backyard_patio's sub stream.
+    import base64
+    sps = base64.b64decode("Z2QAM6wVFKBgDehAAAE9gAAlNQE=")
+    pps = base64.b64decode("aO48sA==")
+    rtp_header = bytes([0x80, 96, 0, 1]) + bytes(8)
+    single = frame(2, rtp_header + b"\x00" * 20) + frame(0, rtp_header + sps) + frame(0, rtp_header + pps)
+    stap = frame(0, rtp_header + bytes([24]) + len(sps).to_bytes(2, "big") + sps
+                 + len(pps).to_bytes(2, "big") + pps)
+    for data, name in ((single, "single-NAL packets"), (stap, "a STAP-A packet")):
+        check(hw["h264_parameter_sets"](data) == (sps, pps), f"SPS/PPS not found in {name}")
+    check(hw["h264_parameter_sets"](frame(0, rtp_header + b"\x41" + bytes(30))) is None,
+          "parameter sets invented from a frame that carries none")
+    sdp = hw["publish_sdp"](hub_sdp, (sps, pps))
+    check("a=fmtp:96 packetization-mode=1;profile-level-id=640033;"
+          "sprop-parameter-sets=Z2QAM6wVFKBgDehAAAE9gAAlNQE=,aO48sA==" in sdp.split("\r\n"),
+          f"publish SDP does not declare the parameter sets on the video track:\n{sdp}")
+
     if failures:
         print(f"FAIL — {len(failures)} hubwake check(s) failed:\n")
         for f in failures:
             print(f"  ✗ {f}")
         return 1
-    print("OK — hubwake relay parser and publish SDP behave (6 checks).")
+    print("OK — hubwake relay parser and publish SDP behave (7 checks).")
     return 0
 
 

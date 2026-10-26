@@ -1065,7 +1065,12 @@ comments:** (1) a frame header split across two TCP reads was dropped as junk, m
 later frame; the garbage reached go2rtc's decoders and **OOMKilled the go2rtc container — which
 also carries Ring talk**. The parser now waits for the rest, raises on anything it cannot frame,
 and caps its buffer. (2) The publish socket kept its 15 s connect timeout; go2rtc never writes to a
-publisher, so every live view was cut at exactly 15 s. **Any experiment run inside the go2rtc
+publisher, so every live view was cut at exactly 15 s. (3) Found only in production after the
+first deploy: the hub's SDP declares **no `sprop-parameter-sets`**. A bare `rtsp://` source let
+go2rtc catch SPS/PPS from the very first packet; announced without them, viewers sat on
+`non-existing PPS 0 referenced` for ~25-28 s (or never decoded) although the camera repeats
+SPS+PPS+IDR in-band every 2.0 s. The relay now lifts them from its buffered opening frames and
+declares them (`h264_parameter_sets`; first frame 8.7-9.5 s after the fix). **Any experiment run inside the go2rtc
 container shares its 512Mi limit** — run a memory watchdog alongside (kill test processes when
 `/sys/fs/cgroup/memory.current` passes ~200 MB).
 
