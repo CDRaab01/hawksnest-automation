@@ -1131,3 +1131,51 @@ data:
             # filter once one exists.
             - car
           genai: *person_genai
+
+      back_2:
+        # Home Hub channel 2 ("Back Sideyard") -> RTSP h264Preview_03. Added 2026-10-26.
+        # Slug `back_2` because that is the base HA's Reolink integration already gave this
+        # camera's sensors (`sensor.back_2_battery`, `binary_sensor.back_2_person`, ...) and
+        # Hawksnest binds a camera to its battery/motion sensors by base name — a different
+        # slug would make the app treat it as always-on and live-preview it from the home
+        # screen (which is exactly what it did before this block existed). Same wake-tolerant
+        # input args + quick retry as backyard_patio — see there.
+        enabled: true
+        ffmpeg:
+          retry_interval: 3
+          input_args:
+            - -avoid_negative_ts
+            - make_zero
+            - -fflags
+            - +genpts+discardcorrupt
+            - -rtsp_transport
+            - tcp
+            - -timeout
+            - "30000000"
+            - -use_wallclock_as_timestamps
+            - "1"
+            - -analyzeduration
+            - "10000000"
+            - -probesize
+            - "10000000"
+          inputs:
+            - path: "rtsp://{FRIGATE_REOLINK_HUB_USER}:{FRIGATE_REOLINK_HUB_PASSWORD}@{FRIGATE_REOLINK_IP_HOME_HUB}:554/h264Preview_03_sub"
+              roles:
+                - detect
+                - record
+        detect:
+          enabled: true
+          # GetEnc ch 2, 2026-10-26: sub h264 1536x432 @15, identical to front.
+          width: 1536
+          height: 432
+          fps: 5
+        record:
+          continuous:
+            days: 1
+        objects:
+          # Person and pets, like backyard_patio: a side yard, no road or driveway in view.
+          track:
+            - person
+            - dog
+            - cat
+          genai: *person_genai

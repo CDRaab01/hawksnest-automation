@@ -345,13 +345,20 @@ data:
       # If live on these two cameras ever dies with an HTTP error, check that first — a hub
       # reset or firmware update may turn it back off. docs/adding-a-camera.md has the
       # one-line SetNetPort call. The CHANNEL IS 0-BASED here (backyard_patio = 0,
-      # front = 1) — not the 1-based RTSP path.
+      # front = 1, back_2 = 2) — not the 1-based RTSP path.
       backyard_patio:
         - "http://${REOLINK_IP_HOME_HUB}/flv?port=1935&app=bcs&stream=channel0_sub.bcs&user=${REOLINK_HUB_USER}&password=${REOLINK_HUB_PASS}"
         - "ffmpeg:backyard_patio#audio=opus"
       front:
         - "http://${REOLINK_IP_HOME_HUB}/flv?port=1935&app=bcs&stream=channel1_sub.bcs&user=${REOLINK_HUB_USER}&password=${REOLINK_HUB_PASS}"
         - "ffmpeg:front#audio=opus"
+      # Back Sideyard, hub channel 2 (2026-10-26). Named `back_2`, NOT a nicer slug: the app
+      # pairs this stream with HA's `camera.back_2` (Frigate) and binds the Reolink
+      # integration's `sensor.back_2_battery` / `binary_sensor.back_2_*` by the same base —
+      # that binding is what makes Hawksnest treat it as a sleeping camera at all.
+      back_2:
+        - "http://${REOLINK_IP_HOME_HUB}/flv?port=1935&app=bcs&stream=channel2_sub.bcs&user=${REOLINK_HUB_USER}&password=${REOLINK_HUB_PASS}"
+        - "ffmpeg:back_2#audio=opus"
 
       # --- Ring (cloud) ---------------------------------------------------------
       # ONE entry per Ring camera you want to talk through. The stream NAME MUST

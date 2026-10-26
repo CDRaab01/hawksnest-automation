@@ -1069,7 +1069,24 @@ which go2rtc reads natively (`format_name: flv`, H264 + AAC 16 kHz), with the au
 the usual self-reference form `ffmpeg:<name>#audio=opus`. One hub session per viewer, as before.
 `tests/validate_manifests.py` rejects a bare hub `rtsp://` source and a malformed FLV URL.
 
-- **Adding a hub camera** = one more FLV line with its 0-based channel. Nothing else.
+- **Adding a hub camera** = one more FLV line with its 0-based channel on the go2rtc side —
+  but the camera as a whole needs the full set, or Hawksnest gets it wrong (see the next bullet).
+  Back Sideyard (`back_2`, channel 2, 2026-10-26) is the worked example; every place it was
+  added: go2rtc stream, Frigate camera block, `ON_DEMAND` in the health CronJob (+ its test),
+  HA `hawksnest_argus_on_demand_<cam>`, the `for_each` of `hawksnest_argus_park`, the trigger
+  list of `hawksnest_live_view_guard_release`, the `outdoor` list of
+  `hawksnest_push_camera_object`, the live-view guard helper (`C:\Code\ha-live-view-helpers.py`,
+  host-local), and in HA's entity registry the Reolink `camera.<cam>_fluent` disabled (by user)
+  so only Frigate's `camera.<cam>` shows a tile.
+- **The slug MUST be the base HA's Reolink integration gave the camera** (`sensor.<slug>_battery`,
+  `binary_sensor.<slug>_person`, `_sleep_status`) — check the entity registry, do not pick a
+  nicer name. Hawksnest binds a camera to its battery sensor by base name, and only a Frigate
+  camera WITH a battery sensor is treated as one that sleeps: "Asleep" tile from Frigate's last
+  frame, the go2rtc wake path, the Frigate wake for live-view recording. Back Sideyard spent six
+  weeks as only the Reolink integration's `camera.back_2_fluent` — base `back_2_fluent`, no
+  `sensor.back_2_fluent_battery` — so the app treated it as always-on: its home-screen tile
+  live-previewed it on every app open (waking it every few minutes, all day) and its live view
+  never reached go2rtc. The HA name is "Back Sideyard"; the slug is `back_2` regardless.
 - **It depends on `rtmpEnable: 1`** (the `SetNetPort` call above). A hub reset or firmware update
   may turn it off; then these streams fail with an HTTP error at once instead of sitting on
   "Connecting…". Check `GetNetPort` first.

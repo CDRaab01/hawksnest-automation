@@ -535,6 +535,7 @@ data:
         outdoor:
           - backyard_patio
           - front
+          - back_2
       condition:
         # Cheapest checks first — this runs on every Frigate review update.
         - condition: template
@@ -889,7 +890,7 @@ data:
                   - switch.bedroom_snapshots
 
     # ── Battery cameras behind the Reolink Home Hub: Frigate ON DEMAND ──────────
-    # The Argus cameras (backyard_patio, front) have no RTSP of their own; the
+    # The Argus cameras (backyard_patio, front, back_2) have no RTSP of their own; the
     # hub serves them as channels — and it WAKES a battery camera on any RTSP request
     # (7-15 s measured 2026-09-12), holds the session at most 5 minutes, then
     # force-sleeps it. A continuous Frigate puller is therefore a wake→sleep→wake loop
@@ -1034,6 +1035,39 @@ data:
             topic: frigate/front/enabled/set
             payload: "OFF"
 
+    - id: hawksnest_argus_on_demand_back_2
+      alias: "Hawksnest: Frigate on demand — back_2 (Home Hub battery)"
+      mode: single
+      max_exceeded: silent
+      # Back Sideyard (added 2026-10-26). Person or animal, like backyard_patio — a side
+      # yard, no road in view. The live-view guard below is the same as the other two.
+      trigger:
+        - platform: state
+          entity_id: binary_sensor.back_2_person
+          to: "on"
+        - platform: state
+          entity_id: binary_sensor.back_2_animal
+          to: "on"
+      action:
+        - service: mqtt.publish
+          continue_on_error: true
+          data:
+            topic: frigate/back_2/enabled/set
+            payload: "ON"
+        - wait_template: >-
+            {{ is_state('binary_sensor.back_2_person', 'off')
+               and is_state('binary_sensor.back_2_animal', 'off') }}
+          timeout: "00:02:30"
+          continue_on_timeout: true
+        - condition: template
+          value_template: "{{ states('input_boolean.hawksnest_live_view_back_2') != 'on' }}"
+        - delay: "00:02:00"
+        - service: mqtt.publish
+          continue_on_error: true
+          data:
+            topic: frigate/back_2/enabled/set
+            payload: "OFF"
+
     - id: hawksnest_live_view_guard_release
       alias: "Hawksnest: release a stuck live-view guard"
       description: >-
@@ -1052,6 +1086,7 @@ data:
           entity_id:
             - input_boolean.hawksnest_live_view_front
             - input_boolean.hawksnest_live_view_backyard_patio
+            - input_boolean.hawksnest_live_view_back_2
           to: "on"
           for: "00:30:00"
       action:
@@ -1084,6 +1119,7 @@ data:
             for_each:
               - backyard_patio
               - front
+              - back_2
             sequence:
               # A camera with a person/vehicle/animal on it right now is mid-event:
               # leave it to its on_demand automation, which parks it when the event ends.
