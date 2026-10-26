@@ -33,6 +33,7 @@ One process, no children: when go2rtc kills it (last viewer gone), the kernel cl
 socket, so nothing can be left holding the camera awake (the orphaned-ffmpeg battery drain, #175).
 Credentials come from the pod env (REOLINK_HUB_*, the go2rtc-credentials secret).
 """
+import base64
 import hashlib
 import json
 import os
@@ -205,16 +206,61 @@ def wake():
     time.sleep(SETTLE_S)
 
 
-def publish_sdp(hub_sdp):
-    """The hub's SDP, minus the session-level lines that only describe the hub's own server."""
-    keep = []
+def h264_parameter_sets(data):
+    """(SPS, PPS) NAL units from the first video frames in `data` (interleaved channel 0), or None.
+
+    The camera repeats SPS+PPS+IDR in-band every 2 s, but the hub's SDP declares NO
+    sprop-parameter-sets. A bare rtsp:// source let go2rtc catch them itself from the first
+    packet; announced without them, viewers sat on `non-existing PPS 0 referenced` for ~28 s
+    (production, 2026-10-26). So they are lifted from the buffered opening and declared.
+    """
+    sps = pps = None
+    try:
+        frames, _, _ = split_frames(data, 2)
+    except ConnectionError:
+        return None
+    i = 0
+    while i + 4 <= len(frames) and not (sps and pps):
+        ch, n = frames[i + 1], int.from_bytes(frames[i + 2:i + 4], "big")
+        rtp = frames[i + 4:i + 4 + n]
+        i += 4 + n
+        if ch != 0 or len(rtp) < 13:
+            continue
+        payload = rtp[12 + 4 * (rtp[0] & 0x0F):]          # skip the RTP header + CSRCs
+        nals = [payload]
+        if payload and payload[0] & 0x1F == 24:             # STAP-A: several NALs in one packet
+            nals, j = [], 1
+            while j + 2 <= len(payload):
+                size = int.from_bytes(payload[j:j + 2], "big")
+                nals.append(payload[j + 2:j + 2 + size])
+                j += 2 + size
+        for nal in nals:
+            kind = nal[0] & 0x1F if nal else 0
+            sps = nal if kind == 7 and not sps else sps
+            pps = nal if kind == 8 and not pps else pps
+    return (sps, pps) if sps and pps else None
+
+
+def publish_sdp(hub_sdp, params=None):
+    """The hub's SDP, minus the session-level lines that only describe the hub's own server, with
+    the H.264 parameter sets declared on the video track when we have them."""
+    keep, video_pt = [], None
     for line in hub_sdp.replace("\r\n", "\n").split("\n"):
         if line.startswith(("a=control:", "a=range:", "a=recvonly", "a=type:", "a=x-qt", "a=tool:")):
             continue
+        if params and video_pt and line.startswith(f"a=fmtp:{video_pt} "):
+            continue                                       # replaced by ours below
         if line:
             keep.append(line)
         if line.startswith("m="):
             keep.append(f"a=control:trackID={sum(1 for k in keep if k.startswith('m=')) - 1}")
+        m = re.match(r"a=rtpmap:(\d+) H264/", line)
+        if m and params:
+            video_pt = m.group(1)
+            sps, pps = params
+            keep.append(f"a=fmtp:{video_pt} packetization-mode=1;profile-level-id={sps[1:4].hex()};"
+                        f"sprop-parameter-sets={base64.b64encode(sps).decode()},"
+                        f"{base64.b64encode(pps).decode()}")
     return "\r\n".join(keep) + "\r\n"
 
 
@@ -261,7 +307,9 @@ def relay(hub, tracks):
     out = urllib.parse.urlsplit(OUT)
     pub = Rtsp(out.hostname, out.port or 554)
     pub.uri = OUT
-    pub.request("ANNOUNCE", OUT, "Content-Type: application/sdp\r\n", publish_sdp(hub.sdp))
+    params = h264_parameter_sets(hub.buf)
+    log("SPS/PPS found in the opening frames" if params else "no SPS/PPS in the opening frames")
+    pub.request("ANNOUNCE", OUT, "Content-Type: application/sdp\r\n", publish_sdp(hub.sdp, params))
     for n in range(tracks):
         pub.request("SETUP", f"{OUT}/trackID={n}",
                     f"Transport: RTP/AVP/TCP;unicast;interleaved={2 * n}-{2 * n + 1};mode=record\r\n")
