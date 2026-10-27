@@ -1,5 +1,5 @@
 """
-everyday — picks ~1.5 s of each day from Frigate for a "one second every day" family video.
+everyday — picks ~2.5 s of each day from Frigate for a "one second every day" family video.
 
 Nightly it reads the day's Frigate events, scores them (picker.py), asks the local model
 (LM Studio, the same endpoint Frigate's GenAI uses) to rate a shortlist, cuts the top
@@ -15,9 +15,11 @@ scanned within ~24 h or its footage is gone. Startup backfills any unscanned rec
 
 Storage (/data, the everyday-media PVC on the NAS):
   days/YYYY-MM-DD.json             state: candidates + pick
-  candidates/YYYY-MM-DD/<id>.mp4   normalised 1.5 s clip per candidate (+ .jpg thumb)
+  candidates/YYYY-MM-DD/<id>.mp4   normalised clip per candidate (+ .jpg thumb)
+  anchors/YYYY-MM-DD.mp4           the daily same-camera anchor (kept forever)
   picks/YYYY-MM-DD.mp4             the chosen clip (kept forever)
   reel/everyday-YYYY.mp4           every pick of the year, concatenated in date order
+  reel/everyday-YYYY-edit.mp4      the watchable cut: monthly anchor run + moments, crossfaded
 
 Exposure: ClusterIP only, reached through the Hawksnest nginx `/everyday/` (tailnet only),
 same posture as ring-timeline. It serves interior-camera footage, so never a NodePort.
@@ -54,7 +56,18 @@ PORT = int(ENV.get("PORT", "8080"))
 DATA = Path(ENV.get("DATA_DIR", "/data"))
 FRIGATE = ENV.get("FRIGATE_URL", "http://frigate:5000").rstrip("/")
 TZ = ZoneInfo(ENV.get("TZ", "America/Indiana/Indianapolis"))
-CLIP_SECONDS = float(ENV.get("CLIP_SECONDS", "1.5"))
+CLIP_SECONDS = float(ENV.get("CLIP_SECONDS", "2.5"))
+# crop = fill 16:9 around the subject (default); pad = whole frame with black bars.
+FRAMING = ENV.get("FRAMING", "crop")
+# The daily anchor: same camera, same time window, every day (empty ANCHOR_CAMERA disables it).
+ANCHOR_CAMERA = ENV.get("ANCHOR_CAMERA", "big_room")
+ANCHOR_WINDOW = ENV.get("ANCHOR_WINDOW", "17:00-19:30")
+ANCHOR_SECONDS = float(ENV.get("ANCHOR_SECONDS", "2.0"))
+# The edited reel: how much of each clip it uses, and the crossfade on a camera change.
+REEL_ANCHOR_SECONDS = float(ENV.get("REEL_ANCHOR_SECONDS", "1.0"))
+REEL_MOMENT_SECONDS = float(ENV.get("REEL_MOMENT_SECONDS", str(CLIP_SECONDS)))
+REEL_FADE = float(ENV.get("REEL_FADE", "0.3"))
+EDIT_CHUNK = int(ENV.get("EDIT_CHUNK", "10"))  # ~550 MB peak at 1080p, measured
 CANDIDATES = int(ENV.get("CANDIDATES", "5"))
 AI_SHORTLIST = int(ENV.get("AI_SHORTLIST", "12"))
 # The bedroom is excluded by default — nobody wants that camera choosing the day.
@@ -144,40 +157,33 @@ def frigate_events(t0: float, t1: float) -> list[dict]:
     return uniq
 
 
-def cut_clip(c: picker.Candidate, dest: Path) -> bool:
-    """Pull a window around the event's peak from Frigate's continuous recordings and
-    normalise it: CLIP_SECONDS, no audio, OUTPUT_SIZE letterboxed (panoramas and 4:3
-    cameras keep their framing), 30 fps h264 — identical params on every clip so the
-    yearly reel can be concatenated with -c copy."""
-    peak = c.peak_time()
-    a, b = int(peak - CLIP_SECONDS), int(peak + CLIP_SECONDS) + 2
-    url = f"{FRIGATE}/api/{urllib.parse.quote(c.camera)}/start/{a}/end/{b}/clip.mp4"
+def cut_window(camera: str, center: float, seconds: float, box, dest: Path, tag: str) -> bool:
+    """Pull a window around `center` from Frigate's continuous recordings and normalise it:
+    `seconds` long, no audio, OUTPUT_SIZE (subject-cropped or padded, see picker.video_filter),
+    30 fps h264 — identical params on every clip so reels can be stitched without surprises."""
+    a, b = int(center - seconds), int(center + seconds) + 2
+    url = f"{FRIGATE}/api/{urllib.parse.quote(camera)}/start/{a}/end/{b}/clip.mp4"
     with tempfile.TemporaryDirectory() as td:
         raw = Path(td) / "raw.mp4"
         try:
             raw.write_bytes(http_get(url, timeout=120))
         except (urllib.error.URLError, TimeoutError) as e:
-            log(f"clip fetch failed {c.event_id} ({c.camera}): {e}")
+            log(f"clip fetch failed {tag} ({camera}): {e}")
             return False
         if raw.stat().st_size < 1024:
-            log(f"no recording for {c.event_id} ({c.camera}) — retention or sleeping camera")
+            log(f"no recording for {tag} ({camera}) — retention or sleeping camera")
             return False
-        offset = max(0.0, peak - a - CLIP_SECONDS / 2)
-        vf = (
-            f"scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=decrease,"
-            f"pad={OUT_W}:{OUT_H}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p,setsar=1"
-        )
+        offset = max(0.0, center - a - seconds / 2)
+        vf = picker.video_filter(box, FRAMING, OUT_W, OUT_H)
         tmp_out = Path(td) / "out.mp4"
-        cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-ss", f"{offset:.2f}", "-i", str(raw), "-t", f"{CLIP_SECONDS:.2f}",
-            "-an", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-profile:v", "high", "-video_track_timescale", "30000",
-            "-movflags", "+faststart", str(tmp_out),
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+             "-ss", f"{offset:.2f}", "-i", str(raw), "-t", f"{seconds:.2f}",
+             "-an", "-vf", vf, *ENCODE, "-movflags", "+faststart", str(tmp_out)],
+            capture_output=True, text=True,
+        )
         if r.returncode != 0 or not tmp_out.exists() or tmp_out.stat().st_size < 1024:
-            log(f"ffmpeg failed {c.event_id}: {r.stderr.strip()[:300]}")
+            log(f"ffmpeg failed {tag}: {r.stderr.strip()[:300]}")
             return False
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(tmp_out), dest)
@@ -189,6 +195,14 @@ def cut_clip(c: picker.Candidate, dest: Path) -> bool:
             capture_output=True,
         )
     return True
+
+
+def cut_clip(c: picker.Candidate, dest: Path) -> bool:
+    return cut_window(c.camera, c.peak_time(), CLIP_SECONDS, c.box, dest, c.event_id)
+
+
+ENCODE = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-profile:v", "high",
+          "-pix_fmt", "yuv420p", "-video_track_timescale", "30000"]
 
 
 # ── GenAI ────────────────────────────────────────────────────────────────────
@@ -281,6 +295,8 @@ def scan_day(date: str, *, final: bool) -> dict:
             if old:
                 kept.append(old)
 
+        anchor = _make_anchor(date, events, t0) if ANCHOR_CAMERA else None
+
         state = {
             "date": date,
             "status": "final" if final else "provisional",
@@ -290,6 +306,7 @@ def scan_day(date: str, *, final: bool) -> dict:
             "candidates": kept,
             "pick": pick,
             "manual": manual,
+            "anchor": anchor,
         }
         save_day(date, state)
         if pick:
@@ -298,6 +315,32 @@ def scan_day(date: str, *, final: bool) -> dict:
     if final:
         build_reel(int(date[:4]))
     return state
+
+
+def _make_anchor(date: str, events: list[dict], day_start: float) -> dict | None:
+    """Cut the day's anchor once its window has passed. Re-cut on every scan until then is
+    pointless; once cut, keep it (the footage behind it expires)."""
+    (ha, ma), (hb, mb) = picker.parse_window(ANCHOR_WINDOW)
+    base = datetime.fromtimestamp(day_start, TZ)
+    w0 = base.replace(hour=ha, minute=ma).timestamp()
+    w1 = base.replace(hour=hb, minute=mb).timestamp()
+    if time.time() < w1:
+        return None
+    dest = DATA / "anchors" / f"{date}.mp4"
+    prev = (load_day(date) or {}).get("anchor")
+    if dest.exists() and prev:
+        return prev
+    a = picker.choose_anchor(events, ANCHOR_CAMERA, w0, w1)
+    if not cut_window(ANCHOR_CAMERA, a.time, ANCHOR_SECONDS, a.box, dest, f"anchor {date}"):
+        return None
+    return {
+        "camera": ANCHOR_CAMERA,
+        "time": a.time,
+        "people": a.people,
+        "reason": a.reason,
+        "clip": media_url(dest.relative_to(DATA)),
+        "thumb": media_url(dest.with_suffix(".jpg").relative_to(DATA)),
+    }
 
 
 def _install_pick(date: str, event_id: str) -> None:
@@ -347,6 +390,99 @@ def build_reel(year: int) -> Path | None:
             return None
         tmp.replace(out)
         log(f"reel {year}: {len(picks)} days")
+    build_edit(year)
+    return out
+
+
+def _probe_seconds(p: Path) -> float:
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(p)],
+        capture_output=True, text=True,
+    )
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
+def _render_month(shots: list, out: Path) -> bool:
+    """One month as one encode: trim each shot, then fold left — `xfade` where the plan says
+    fade (camera change), `concat` for a hard cut. Re-encodes, so it's done per month (≤ ~62
+    inputs) rather than over the whole year in one graph."""
+    shots = [s for s in shots if Path(s.path).exists()]
+    if not shots:
+        return False
+    args: list[str] = []
+    parts: list[str] = []
+    durs: list[float] = []
+    for i, s in enumerate(shots):
+        d = min(s.seconds, _probe_seconds(Path(s.path)) or s.seconds)
+        durs.append(d)
+        args += ["-threads", "1", "-i", s.path]  # per-decoder threads are most of the RAM
+        parts.append(f"[{i}:v]trim=duration={d:.3f},setpts=PTS-STARTPTS,fps=30,format=yuv420p,settb=AVTB[v{i}]")
+    acc, total = "v0", durs[0]
+    for i in range(1, len(shots)):
+        nxt = f"a{i}"
+        fade = shots[i].fade_in and REEL_FADE > 0 and durs[i] > REEL_FADE and total > REEL_FADE
+        if fade:
+            parts.append(f"[{acc}][v{i}]xfade=transition=fade:duration={REEL_FADE}:offset={total - REEL_FADE:.3f}[{nxt}]")
+            total += durs[i] - REEL_FADE
+        else:
+            parts.append(f"[{acc}][v{i}]concat=n=2:v=1:a=0[{nxt}]")
+            total += durs[i]
+        acc = nxt
+    r = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args,
+         "-filter_complex", ";".join(parts), "-map", f"[{acc}]", "-an", *ENCODE, str(out)],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        log(f"edit month failed: {r.stderr.strip()[:300]}")
+        return False
+    return True
+
+
+def build_edit(year: int) -> Path | None:
+    """The watchable version: months in order, each an anchor run (the time-lapse) followed by
+    that month's moments with crossfades on camera changes. See picker.edit_plan."""
+    with JOB_LOCK:
+        moments, anchors = [], []
+        for p in sorted((DATA / "picks").glob(f"{year}-*.mp4")):
+            st = load_day(p.stem) or {}
+            cam = next((c["camera"] for c in st.get("candidates", []) if c["eventId"] == st.get("pick")), "?")
+            moments.append((p.stem, cam, str(p)))
+        for p in sorted((DATA / "anchors").glob(f"{year}-*.mp4")):
+            anchors.append((p.stem, ANCHOR_CAMERA, str(p)))
+        plan = picker.edit_plan(
+            moments, anchors, anchor_seconds=REEL_ANCHOR_SECONDS, moment_seconds=REEL_MOMENT_SECONDS,
+        )
+        if not plan:
+            return None
+        out = DATA / "reel" / f"everyday-{year}-edit.mp4"
+        with tempfile.TemporaryDirectory() as td:
+            segs = []
+            for i, month in enumerate(plan):
+                # Chunked so one ffmpeg never holds more than EDIT_CHUNK decoders open (memory
+                # limit); a chunk boundary is a hard cut, which inside a month is barely visible.
+                for j in range(0, len(month), EDIT_CHUNK):
+                    seg = Path(td) / f"m{i:02d}-{j:03d}.mp4"
+                    if _render_month(month[j:j + EDIT_CHUNK], seg):
+                        segs.append(seg)
+            if not segs:
+                return None
+            lst = Path(td) / "list.txt"
+            lst.write_text("".join(f"file '{p.as_posix()}'\n" for p in segs))
+            tmp = out.with_suffix(".tmp.mp4")
+            r = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0",
+                 "-i", str(lst), "-c", "copy", "-movflags", "+faststart", str(tmp)],
+                capture_output=True, text=True,
+            )
+            if r.returncode != 0:
+                log(f"edit {year} failed: {r.stderr.strip()[:300]}")
+                return None
+            tmp.replace(out)
+        log(f"edit {year}: {len(plan)} months, {len(moments)} moments, {len(anchors)} anchors")
         return out
 
 
@@ -454,13 +590,19 @@ class Handler(BaseHTTPRequestHandler):
             reels = sorted((DATA / "reel").glob("everyday-*.mp4"))
             out = []
             for r in reels:
-                year = r.stem.split("-")[1]
+                parts = r.stem.split("-")  # everyday-YYYY or everyday-YYYY-edit
+                if len(parts) < 2 or not parts[1].isdigit() or r.name.endswith(".tmp.mp4"):
+                    continue
+                year, edit = parts[1], parts[-1] == "edit"
                 out.append({
                     "year": int(year),
+                    "kind": "edit" if edit else "raw",
+                    "label": "Edited" if edit else "Every pick",
                     "days": len(list((DATA / "picks").glob(f"{year}-*.mp4"))),
                     "url": media_url(r.relative_to(DATA)),
                     "updatedAt": r.stat().st_mtime,
                 })
+            out.sort(key=lambda x: (-x["year"], x["kind"] != "edit"))
             return self._json(200, {"reels": out})
         if path.startswith("/media/"):
             return self._media(path[len("/media/"):])

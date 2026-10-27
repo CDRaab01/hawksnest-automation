@@ -133,6 +133,54 @@ class PickerTests(unittest.TestCase):
         self.assertEqual(picker.parse_weights("garage=0.4, front=x,bad,kitchen=2"), {"garage": 0.4, "kitchen": 2.0})
         self.assertEqual(picker.parse_list(" bedroom, ,garage"), {"bedroom", "garage"})
 
+    def test_parse_box(self):
+        self.assertEqual(picker.parse_box([0.1, 0.2, 0.3, 0.4]), (0.1, 0.2, 0.3, 0.4))
+        self.assertIsNone(picker.parse_box([100, 200, 50, 80]))  # pixels, not normalised
+        self.assertIsNone(picker.parse_box(None))
+        self.assertIsNone(picker.parse_box([0.1, 0.2]))
+
+    def test_video_filter_modes(self):
+        crop = picker.video_filter((0.7, 0.2, 0.1, 0.5), "crop", 1920, 1080)
+        self.assertTrue(crop.startswith("crop="))
+        self.assertIn("0.7500*iw", crop)          # centred on the box
+        self.assertIn("scale=1920:1080", crop)
+        self.assertIn("0.5000*iw", picker.video_filter(None, "crop", 1920, 1080))
+        self.assertIn("pad=1920:1080", picker.video_filter(None, "pad", 1920, 1080))
+
+    def test_choose_anchor_prefers_most_people_then_middle(self):
+        w0, w1 = ts(17), ts(19, 30)
+        events = [
+            ev("solo", "big_room", "person", ts(17, 10), 60),
+            ev("g1", "big_room", "person", ts(18, 30), 120),
+            ev("g2", "big_room", "person", ts(18, 30) + 2, 100),
+            ev("other", "kitchen", "person", ts(18, 30), 300),
+            ev("dog", "big_room", "dog", ts(18, 0), 300),
+            ev("late", "big_room", "person", ts(21), 60),
+        ]
+        a = picker.choose_anchor(events, "big_room", w0, w1)
+        self.assertEqual(a.people, 2)
+        self.assertTrue(ts(18, 30) <= a.time <= ts(18, 33))
+        empty = picker.choose_anchor([], "big_room", w0, w1)
+        self.assertEqual((empty.time, empty.people), ((w0 + w1) / 2, 0))
+
+    def test_parse_window(self):
+        self.assertEqual(picker.parse_window("17:00-19:30"), ((17, 0), (19, 30)))
+
+    def test_edit_plan_groups_months_and_fades_on_camera_change(self):
+        moments = [
+            ("2026-10-02", "kitchen", "m2"), ("2026-10-01", "kitchen", "m1"),
+            ("2026-10-03", "big_room", "m3"), ("2026-11-01", "kitchen", "n1"),
+        ]
+        anchors = [("2026-10-01", "big_room", "a1"), ("2026-10-02", "big_room", "a2")]
+        plan = picker.edit_plan(moments, anchors, anchor_seconds=1.0, moment_seconds=2.5)
+        self.assertEqual(len(plan), 2)
+        oct_ = plan[0]
+        self.assertEqual([s.path for s in oct_], ["a1", "a2", "m1", "m2", "m3"])
+        self.assertEqual([s.fade_in for s in oct_], [False, False, True, False, True])
+        self.assertEqual(oct_[0].seconds, 1.0)
+        self.assertEqual(oct_[2].seconds, 2.5)
+        self.assertEqual([(s.path, s.fade_in) for s in plan[1]], [("n1", False)])
+
     def test_day_bounds_is_local_midnight(self):
         t0, t1 = picker.day_bounds("2026-10-26", TZ)
         self.assertEqual(datetime.fromtimestamp(t0, TZ).hour, 0)
@@ -163,7 +211,10 @@ class EndToEndTests(unittest.TestCase):
             ev("e5", "garage", "person", ts(18, date=date), 30),
             ev("e6", "bedroom", "person", ts(22, date=date), 300),
             ev("gone", "nursery", "person", ts(11, date=date), 30, score=1.0, sub="Cedric"),
+            ev("din1", "big_room", "person", ts(18, 10, date=date), 90),
+            ev("din2", "big_room", "person", ts(18, 10, date=date) + 1, 80),
         ]
+        cls.events[-1]["data"]["box"] = [0.6, 0.2, 0.1, 0.5]
         cls.genai_calls = []
         rec_bytes = cls.rec.read_bytes()
         events = cls.events
@@ -260,7 +311,13 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(kinds, ["video"])
         v = probe["streams"][0]
         self.assertEqual((v["width"], v["height"]), (1920, 1080))
-        self.assertAlmostEqual(float(probe["format"]["duration"]), 1.5, delta=0.15)
+        self.assertAlmostEqual(float(probe["format"]["duration"]), 2.5, delta=0.15)
+
+    def test_anchor_cut_from_the_window(self):
+        a = self.state["anchor"]
+        self.assertIsNotNone(a)
+        self.assertEqual((a["camera"], a["people"]), ("big_room", 2))
+        self.assertTrue((self.server.DATA / "anchors" / f"{self.date}.mp4").exists())
 
     def test_api_days_and_manual_pick_survives_rescan(self):
         code, _, body = self.get("/api/days")
@@ -285,14 +342,35 @@ class EndToEndTests(unittest.TestCase):
         dur = float(subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(reel)],
             capture_output=True, text=True, check=True).stdout)
-        self.assertAlmostEqual(dur, 3.0, delta=0.2)  # two stream-copied 1.5 s clips
+        self.assertAlmostEqual(dur, 5.0, delta=0.2)  # two stream-copied 2.5 s clips
+        # Edited reel: anchor 1.0 + two moments 2.5 each, crossfaded 0.3 into each.
+        edit = self.server.DATA / "reel" / "everyday-2026-edit.mp4"
+        self.assertTrue(edit.exists())
+        dur = float(subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(edit)],
+            capture_output=True, text=True, check=True).stdout)
+        self.assertAlmostEqual(dur, 1.0 + 2.2 + 2.2, delta=0.25)
         code, _, body = self.get("/api/reel")
         reels = json.loads(body)["reels"]
-        self.assertEqual(reels[0]["year"], 2026)
+        self.assertEqual([(r["year"], r["kind"]) for r in reels], [(2026, "edit"), (2026, "raw")])
         code, headers, chunk = self.get("/" + reels[0]["url"], {"Range": "bytes=0-99"})
         self.assertEqual(code, 206)
         self.assertEqual(len(chunk), 100)
         self.assertTrue(headers["Content-Range"].startswith("bytes 0-99/"))
+
+    def test_fade_after_a_hard_cut_renders(self):
+        # Regression: concat changes the stream timebase; an xfade after it failed with
+        # "First input link main timebase ... do not match" until settb ran after fps.
+        clip = str(self.server.DATA / "picks" / f"{self.date}.mp4")
+        Shot = self.server.picker.Shot
+        shots = [Shot("d", "a", clip, "moment", 1.0, False), Shot("d", "a", clip, "moment", 1.0, False),
+                 Shot("d", "b", clip, "moment", 1.0, True), Shot("d", "b", clip, "moment", 1.0, False)]
+        out = self.server.DATA / "fade-test.mp4"
+        self.assertTrue(self.server._render_month(shots, out))
+        dur = float(subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out)],
+            capture_output=True, text=True, check=True).stdout)
+        self.assertAlmostEqual(dur, 4.0 - 0.3, delta=0.15)
 
     def test_media_rejects_traversal(self):
         with self.assertRaises(urllib.error.HTTPError) as cm:

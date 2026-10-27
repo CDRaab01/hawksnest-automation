@@ -55,7 +55,15 @@ spec:
             - name: CAMERA_WEIGHTS
               value: "garage=0.4,front=0.6"
             - name: CLIP_SECONDS
-              value: "1.5"
+              value: "2.5"
+            # crop = fill 16:9 around the subject (panoramas lose their sides); pad = letterbox.
+            - name: FRAMING
+              value: "crop"
+            # The daily anchor: same camera + window every day -> the time-lapse thread.
+            - name: ANCHOR_CAMERA
+              value: "big_room"
+            - name: ANCHOR_WINDOW
+              value: "17:00-19:30"
             - name: PROVISIONAL_AT
               value: "21:00"
             - name: FINAL_AT
@@ -72,8 +80,9 @@ spec:
               cpu: 25m
               memory: 64Mi
             limits:
-              # ffmpeg decodes a 4K nursery_high recording for a few seconds per candidate.
-              memory: 1Gi
+              # ffmpeg decodes a 4K nursery_high recording per candidate, and the edited reel
+              # renders EDIT_CHUNK (10) 1080p clips in one graph: measured ~820 MB at 16.
+              memory: 1536Mi
           volumeMounts:
             - name: data
               mountPath: /data

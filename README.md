@@ -22,7 +22,7 @@ start there if you're picking this up fresh.
 > **Adding a camera?** [docs/adding-a-camera.md](docs/adding-a-camera.md) — the six places a
 > Reolink touches, the two that fail silently, and measured capacity numbers.
 | `ring-timeline`  | Recorded-footage timeline for Hawksnest from Ring's own `video_search` API — real event times + directly playable URLs, which ring-mqtt cannot provide. The one image we build ourselves. See [ring-timeline/README.md](ring-timeline/README.md). | `ring-timeline-data` (local-path) |
-| `everyday`       | Picks ~1.5 s of each day from Frigate (heuristics + local GenAI rating) for a "one second every day" family video; Hawksnest reviews/swaps the pick. Second self-built image. See [everyday/README.md](everyday/README.md). | `everyday-media` (NFS) ⭐ |
+| `everyday`       | Picks ~2.5 s of each day from Frigate (heuristics + local GenAI rating), plus a same-camera daily anchor, and builds an edited yearly reel; Hawksnest reviews/swaps the pick. Second self-built image. See [everyday/README.md](everyday/README.md). | `everyday-media` (NFS) ⭐ |
 
 ⭐ = **must be backed up** (see [Backups](#backups)).
 
