@@ -38,6 +38,8 @@ resources:
   - frigate/health-cronjob.yaml
   - ring-timeline/deployment.yaml
   - ring-timeline/service.yaml
+  - everyday/deployment.yaml
+  - everyday/service.yaml
   - ntfy/configmap.yaml
   - ntfy/deployment.yaml
   - ntfy/service.yaml

@@ -70,7 +70,7 @@ minted ONCE"; it is the single most expensive mistake available when adding a de
 | **NFS** | PVs use **v3**. The DS925+ *does* support NFSv4.1 (unlike the DS214, which this row used to describe) — v3 is now a deliberate choice, not a limitation: it is what every working PV uses against this box, and Synology's NFSv4 pseudo-filesystem root changes export-path semantics |
 | NFS exports | **`/volume3/home-automation`** (HA/Z-Wave/Ring/mosquitto) and **`/volume4/frigate`** (Frigate recordings, added 2026-08-04) |
 | NFS export rule | allow **`192.168.4.0/24`**, Read/Write, **Map all users to admin**, async, non-privileged ports allowed |
-| NFS subfolders (must exist) | `ha-config`, `zwavejs-config`, `mosquitto-data`, `ring-mqtt-data` under `/volume3/home-automation` |
+| NFS subfolders (must exist) | `ha-config`, `zwavejs-config`, `mosquitto-data`, `ring-mqtt-data`, `everyday` under `/volume3/home-automation` |
 | Repo location | **`C:\Code\hawksnest-automation` on the Windows host**, reached from WSL as `/mnt/c/Code/hawksnest-automation`. ⚠️ A stale clone also exists at `~/hawksnest-automation` on Dragonfly — it is pinned at PR #4, does not even contain `frigate/`, and **does not deploy anything**. Editing it is a silent no-op |
 | Active branch | see `git branch --show-current` — this row goes stale fast (it said `claude/happy-babbage-07raqh` long after main had moved on) |
 | Secrets | `kustomize/overlays/prod/secrets/{mariadb.env,mosquitto.passwd,ring-mqtt.env}` (gitignored; **inside** the kustomize root on purpose — see §6) |

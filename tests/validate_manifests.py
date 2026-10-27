@@ -78,7 +78,7 @@ OVERLAYS = {
 # The NFS-backed PVCs in prod (mariadb-data is always local-path, so excluded).
 # frigate-media-nas joined 2026-08-04 when recordings moved to the DS925+.
 NFS_PVCS = ("ha-config", "zwavejs-config", "mosquitto-data", "ring-mqtt-data",
-            "frigate-media-nas")
+            "frigate-media-nas", "everyday-media")
 
 
 def by_kind(docs: list[dict], kind: str) -> list[dict]:

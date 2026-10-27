@@ -69,6 +69,11 @@ jobs:
         # which is the exact failure it was added to prevent.
         run: python3 tests/test_frigate_health.py /tmp/prod.yaml
 
+      - name: everyday picker (scoring + end-to-end scan against a fake Frigate)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
+          python3 -m unittest discover -s everyday/tests -v
+
       - name: Validate against Kubernetes schemas (both overlays)
         run: |
           kubeconform -strict -summary -ignore-missing-schemas /tmp/prod.yaml
