@@ -141,3 +141,25 @@ spec:
   nfs:
     server: 192.168.4.21        # Synology DS925+ (see NOTE above re: dual NIC / DHCP)
     path: /volume4/frigate
+---
+# everyday (daily family-video picks). The directory must exist on the NAS before the
+# first deploy — create /volume3/home-automation/everyday in DSM File Station (it sits
+# under the same export as ha-config, so no new NFS rule is needed).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: everyday-media
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-manual
+  mountOptions:
+    - nfsvers=3
+    - hard
+    - noatime
+  nfs:
+    server: 192.168.4.21        # Synology DS925+ (see NOTE above re: dual NIC / DHCP)
+    path: /volume3/home-automation/everyday

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: everyday
+  labels:
+    app: everyday
+spec:
+  # ClusterIP on purpose — NEVER a NodePort. It serves interior-camera footage of the
+  # family; the only way in is the Hawksnest nginx pod's /everyday/ location, which is
+  # itself tailnet-only. Same posture as ring-timeline and go2rtc's API.
+  type: ClusterIP
+  selector:
+    app: everyday
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

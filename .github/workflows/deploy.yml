@@ -30,6 +30,7 @@ on:
     paths:
       - "kustomize/**"
       - "ring-timeline/**"
+      - "everyday/**"
       - "scripts/deploy.sh"
       - ".github/workflows/deploy.yml"
 
@@ -57,6 +58,13 @@ jobs:
 
       - name: Import ring-timeline into K3s containerd
         run: docker save ring-timeline:local | sudo k3s ctr -n k8s.io images import -
+
+      # everyday (daily family-video picker) is the second self-built image; same no-registry path.
+      - name: Build everyday image
+        run: docker build -t everyday:local everyday
+
+      - name: Import everyday into K3s containerd
+        run: docker save everyday:local | sudo k3s ctr -n k8s.io images import -
 
       - name: Deploy
         env:
@@ -86,3 +94,16 @@ jobs:
           [ "${OVERLAY}" = "staging" ] && ns=home-automation-staging
           sudo k3s kubectl -n "$ns" rollout restart deployment/ring-timeline
           sudo k3s kubectl -n "$ns" rollout status deployment/ring-timeline --timeout=120s
+
+      # Best-effort, like ring-timeline's restart above but non-fatal: a family-video picker
+      # must never fail the deploy of the lock cluster. The usual cause of a stuck roll is
+      # the NAS folder /volume3/home-automation/everyday not existing yet (PV mount fails).
+      - name: Roll everyday to the new image
+        continue-on-error: true
+        env:
+          OVERLAY: ${{ github.event.inputs.overlay || 'prod' }}
+        run: |
+          ns=home-automation
+          [ "${OVERLAY}" = "staging" ] && ns=home-automation-staging
+          sudo k3s kubectl -n "$ns" rollout restart deployment/everyday
+          sudo k3s kubectl -n "$ns" rollout status deployment/everyday --timeout=120s

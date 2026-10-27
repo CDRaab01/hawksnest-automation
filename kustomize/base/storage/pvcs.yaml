@@ -191,3 +191,20 @@ spec:
   resources:
     requests:
       storage: 2900Gi
+---
+# everyday's picks, candidate clips and yearly reel — the "one second a day" family video.
+# On the NAS (NFS), not local-path: the picks are the irreplaceable part (the Frigate
+# footage they were cut from is gone within 1-3 days), and they're tiny (~1 MB/day).
+# No SQLite or flock() here — plain files written atomically by rename.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: everyday-media
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs-manual
+  volumeName: everyday-media
+  resources:
+    requests:
+      storage: 20Gi
