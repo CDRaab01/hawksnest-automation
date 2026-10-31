@@ -2,3 +2,5 @@
 # Each overlay (overlays/prod, overlays/staging) has its own secrets/ dir.
 kustomize/overlays/*/secrets/*
 !kustomize/overlays/*/secrets/*.example
+
+__pycache__/
