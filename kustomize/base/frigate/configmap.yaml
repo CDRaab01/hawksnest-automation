@@ -129,6 +129,11 @@ data:
         # WHAT IT COSTS:
         #  - Coarser seeking and coarser retention granularity (60s is the smallest
         #    unit Frigate can keep or delete).
+        #    SEEKING IS RECOVERED, 2026-10-30: stock 0.17.2 declares each file one
+        #    indivisible keyframe run, so this made every HLS segment 60 s / 1.3-2.2 MB.
+        #    The VOD keyframe backport (deployment.yaml `command`, frigate/vod-keyframes/)
+        #    hands nginx-vod the files' real 4 s keyframes, so playback gets ~8-12 s
+        #    segments again while the FILES stay 60 s. Retention granularity is unchanged.
         #  - This block is now PINNED. It will not pick up upstream changes to the
         #    segmenter on a Frigate upgrade the way the preset would. **On any version
         #    bump, re-read `PRESETS_RECORD_OUTPUT` and re-sync everything here except

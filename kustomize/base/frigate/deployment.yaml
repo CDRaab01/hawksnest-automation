@@ -65,6 +65,25 @@ spec:
           # Re-read the release notes AND re-verify configmap.yaml before bumping.
           # OpenVINO ships in this base image; -tensorrt / -rocm are separate tags.
           image: ghcr.io/blakeblackshear/frigate:0.17.2
+          # VOD KEYFRAME BACKPORT (2026-10-30). Before s6's /init, patch the image's own
+          # frigate/api/media.py so VOD manifests carry each recording's real keyframe gaps
+          # instead of declaring the whole 60 s file one indivisible keyframe run. nginx-vod
+          # then serves ~8-12 s HLS segments instead of one 60 s / 1.3-2.2 MB segment per
+          # file, so a seek into unloaded footage fetches ~6x less. Recording files stay 60 s
+          # (the AAC-seam decision in configmap.yaml is untouched).
+          #
+          # Backport of blakeblackshear/frigate#24011 (dev, unreleased as of 0.18.2), which
+          # does this from a record-time index. FAILS SAFE: the script never exits non-zero
+          # and leaves media.py stock unless its anchors match exactly — so a version bump
+          # degrades to stock VOD, it cannot wedge the NVR. `exec` keeps /init as PID 1,
+          # which s6-overlay requires. Verify after a restart:
+          #   kubectl -n home-automation logs deploy/frigate -c frigate | grep hawksnest-vod-keyframes
+          # DELETE this command, the volume and the vod-keyframes/ dir once Frigate ships #24011.
+          # Details + measurements: vod-keyframes/hawksnest_vod_keyframes.py.
+          command:
+            - /bin/sh
+            - -c
+            - python3 /hawksnest/vod-keyframes/patch_media.py; exec /init
           ports:
             - name: api
               containerPort: 5000
@@ -108,6 +127,9 @@ spec:
             # which is too small once detect frames are in flight.
             - name: dshm
               mountPath: /dev/shm
+            - name: vod-keyframes
+              mountPath: /hawksnest/vod-keyframes
+              readOnly: true
             # --- OpenVINO GPU path (commented until the probe passes) -----------
             # Uncomment TOGETHER with flipping `device: CPU` -> `GPU` in the
             # frigate-seed ConfigMap. WSL2 exposes /dev/dxg rather than a normal
@@ -202,6 +224,11 @@ spec:
         - name: seed
           configMap:
             name: frigate-seed
+        # The VOD keyframe backport (see the container `command`). Generated in
+        # kustomization.yaml WITH a content hash, so editing either file rolls the pod.
+        - name: vod-keyframes
+          configMap:
+            name: frigate-vod-keyframes
         - name: cache
           emptyDir:
             medium: Memory

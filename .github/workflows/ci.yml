@@ -74,6 +74,11 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg >/dev/null
           python3 -m unittest discover -s everyday/tests -v
 
+      - name: Frigate VOD keyframe backport (parser vs ffprobe, upstream math, fail-safe patcher, wiring)
+        # Runs after the step above, which installs ffmpeg. The patch only executes at Frigate
+        # pod start and staging runs Frigate at replicas:0, so this is its only pre-merge check.
+        run: python3 tests/test_vod_keyframes.py /tmp/prod.yaml
+
       - name: Validate against Kubernetes schemas (both overlays)
         run: |
           kubeconform -strict -summary -ignore-missing-schemas /tmp/prod.yaml
