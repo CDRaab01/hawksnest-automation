@@ -43,3 +43,14 @@ resources:
   - ntfy/configmap.yaml
   - ntfy/deployment.yaml
   - ntfy/service.yaml
+
+# The Frigate VOD keyframe backport (frigate/deployment.yaml `command`). Generated rather than
+# hand-inlined so the Python stays a real, testable file (tests/test_vod_keyframes.py). The name
+# hash is deliberately LEFT ON here (the overlays disable it only for their own secret
+# generators): a change to either file must roll the Frigate pod, or the running NVR keeps the
+# old patch until something else restarts it.
+configMapGenerator:
+  - name: frigate-vod-keyframes
+    files:
+      - frigate/vod-keyframes/patch_media.py
+      - frigate/vod-keyframes/hawksnest_vod_keyframes.py
