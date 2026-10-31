@@ -144,6 +144,47 @@ class FailsSafeToStock(unittest.TestCase):
             kf.cached_keyframes_ms = orig
 
 
+class ColdHourIsIndexedInParallel(unittest.TestCase):
+    """A cold page used to read its 120 files' moov boxes one after another off NFS (~3 s live).
+    The first miss in a camera/hour directory must index the whole directory concurrently."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.files = []
+        for i in range(48):
+            f = self.tmp / f"{i:02d}.00.mp4"
+            f.write_bytes(b"x")
+            self.files.append(str(f))
+        self.orig = kf.video_keyframes_ms
+        self.calls = 0
+
+        def slow(path):
+            import time
+            self.calls += 1
+            time.sleep(0.05)  # an NFS round trip or three
+            return [0, 4000, 8000]
+
+        kf.video_keyframes_ms = slow
+
+    def tearDown(self):
+        kf.video_keyframes_ms = self.orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_first_miss_indexes_the_directory_concurrently_then_everything_hits(self):
+        import time
+        t = time.perf_counter()
+        self.assertEqual(kf.cached_keyframes_ms(self.files[0]), [0, 4000, 8000])
+        first = time.perf_counter() - t
+        # 48 x 50 ms serially would be 2.4 s; 16 workers make it ~0.15 s.
+        self.assertLess(first, 1.0)
+        self.assertEqual(self.calls, 48)
+        t = time.perf_counter()
+        for f in self.files:
+            kf.cached_keyframes_ms(f)
+        self.assertLess(time.perf_counter() - t, 0.5)
+        self.assertEqual(self.calls, 48, "every sibling was already indexed")
+
+
 # The two anchors exactly as they appear in Frigate 0.17.2 frigate/api/media.py.
 FIXTURE = (
     "import json\n"
