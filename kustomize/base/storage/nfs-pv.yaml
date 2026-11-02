@@ -144,7 +144,9 @@ spec:
 ---
 # everyday (daily family-video picks). The directory must exist on the NAS before the
 # first deploy — create /volume3/home-automation/everyday in DSM File Station (it sits
-# under the same export as ha-config, so no new NFS rule is needed).
+# under the same export as ha-config, so no new NFS rule is needed). Missing, the mount
+# fails "No such file or directory" and the pod sits in Init:0/1. Created 2026-11-01.
+# The export squashes root, so the Deployment's chown init container is non-fatal.
 apiVersion: v1
 kind: PersistentVolume
 metadata:

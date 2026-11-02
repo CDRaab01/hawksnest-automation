@@ -97,7 +97,9 @@ jobs:
 
       # Best-effort, like ring-timeline's restart above but non-fatal: a family-video picker
       # must never fail the deploy of the lock cluster. The usual cause of a stuck roll is
-      # the NAS folder /volume3/home-automation/everyday not existing yet (PV mount fails).
+      # the NAS folder /volume3/home-automation/everyday not existing (PV mount fails, pod in
+      # Init:0/1). Because this step is continue-on-error, a green deploy proves nothing about
+      # everyday: check `kubectl -n home-automation get pods -l app=everyday` afterwards.
       - name: Roll everyday to the new image
         continue-on-error: true
         env:
