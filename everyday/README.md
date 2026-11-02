@@ -53,7 +53,10 @@ scanned within ~24 h. On startup the service backfills the last `BACKFILL_DAYS` 
 
 ## Storage — `everyday-media` (NFS, `/volume3/home-automation/everyday`) ⭐
 
-**Create that folder in DSM before the first deploy**, or the pod sits in ContainerCreating.
+**Create that folder in DSM before the first deploy**, or the PV mount fails ("No such file or
+directory") and the pod sits in `Init:0/1`. The export squashes root, so the `chown-data` init
+container's chown is refused and is deliberately non-fatal; the share's 0777 perms let uid 1000
+write.
 `picks/` and `reel/` are the irreplaceable part, because the source footage is gone within
 days. Candidate clips are pruned after 14 days. Expect about 1 MB per day.
 

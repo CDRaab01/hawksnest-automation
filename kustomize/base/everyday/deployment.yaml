@@ -19,9 +19,13 @@ spec:
         app: everyday
     spec:
       initContainers:
+        # Best-effort only. /data is NFS on the Synology, which squashes root, so chown is
+        # refused ("Operation not permitted"); a fatal chown wedged the pod in Init:Error on
+        # first bring-up (2026-11-01). The share's folders are 0777, so uid 1000 writes
+        # without it; the chown only matters if this volume ever moves off NFS.
         - name: chown-data
           image: busybox:1.36
-          command: ["sh", "-c", "chown 1000:1000 /data"]
+          command: ["sh", "-c", "chown 1000:1000 /data || echo 'chown refused (NFS root squash); relying on share perms'"]
           volumeMounts:
             - name: data
               mountPath: /data
